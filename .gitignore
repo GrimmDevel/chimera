@@ -1,0 +1,31 @@
+# Build
+build/
+
+# QEMU / debug logs
+*.log
+serial.log
+test_serial.log
+qemu_debug.log
+
+# Dumps
+*_dump.txt
+
+# Reference sources (not project code)
+
+xnu/
+
+# Agent config
+.agents/*
+
+# macOS
+.DS_Store
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Limine tarball
+limine-*.tar.gz
