@@ -64,3 +64,5 @@ see [`docs/`](docs/README.md) for subsystem documentation:
 - [`docs/networking.md`](docs/networking.md)
 - [`docs/xiukit.md`](docs/xiukit.md)
 - [`docs/userspace.md`](docs/userspace.md)
+
+  yep parts of it is vibecoded cuz im too bored and too lazy
