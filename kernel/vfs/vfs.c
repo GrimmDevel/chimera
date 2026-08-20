@@ -2,6 +2,10 @@
 #include <kernel/spinlock.h>
 #include <kernel/vfs_node.h>
 #include <kernel/proc.h>
+#include <kernel/uio.h>
+
+extern xiu_error_t vfs_lookup(const char *path, vnode_t **vp_out);
+extern xiu_error_t vfs_register(const char *path, vnode_t *vp);
 
 vnode_t *vfs_root_vnode = nullptr;
 
@@ -201,12 +205,65 @@ void vfs_normalize_path(const char *in, char *out, usize cap) {
   out[cap - 1] = '\0';
 }
 
+static vnode_ops_t s_root_ops;
+
+#define ROOTFS_MAX_VNODES 512
+static vnode_t s_rootfs_vnodes[ROOTFS_MAX_VNODES];
+static u32 s_rootfs_vnode_count = 0;
+
+static vnode_t *vfs_create_dir_vnode(const char *name) {
+  if (s_rootfs_vnode_count >= ROOTFS_MAX_VNODES)
+    return nullptr;
+  vnode_t *vp = &s_rootfs_vnodes[s_rootfs_vnode_count++];
+  __builtin_memset(vp, 0, sizeof(vnode_t));
+  vp->v_signature = XIU_VNODE_MAGIC;
+  vp->v_type = VDIR;
+  vp->v_flags = VN_SYSTEM;
+  vp->v_op = &s_root_ops;
+  __builtin_strncpy(vp->v_name, name, sizeof(vp->v_name) - 1);
+  return vp;
+}
+
+static void vfs_ensure_parent_dirs(const char *path) {
+  if (!path || path[0] != '/')
+    return;
+
+  char buf[256];
+  usize len = __builtin_strlen(path);
+  if (len >= sizeof(buf))
+    return;
+
+  for (usize i = 1; i < len; i++) {
+    if (path[i] == '/') {
+      __builtin_memcpy(buf, path, i);
+      buf[i] = '\0';
+
+      vnode_t *existing = nullptr;
+      if (vfs_lookup(buf, &existing) != XIU_SUCCESS || !existing) {
+        const char *name = buf;
+        for (usize j = 0; j < i; j++) {
+          if (buf[j] == '/')
+            name = buf + j + 1;
+        }
+        vnode_t *dvp = vfs_create_dir_vnode(name);
+        if (dvp) {
+          vfs_register(buf, dvp);
+        }
+      }
+    }
+  }
+}
+
 xiu_error_t vfs_register(const char *path, vnode_t *vp) {
   XIU_ASSERT(path != nullptr);
   XIU_ASSERT(vp != nullptr);
 
   char norm[256];
   vfs_normalize_path(path, norm, sizeof(norm));
+
+  if (__builtin_strcmp(norm, "/") != 0) {
+    vfs_ensure_parent_dirs(norm);
+  }
 
   irq_flags_t irq = spinlock_lock_irqsave(&s_registry_lock);
 
@@ -450,22 +507,54 @@ xiu_error_t vfs_readdir_flat(vnode_t *dvp, u32 index, char *name_out,
   return XIU_ERR_NOTFOUND;
 }
 
-#define BOOT_MODULE_MAX 64
-static vnode_t s_boot_module_vnodes[BOOT_MODULE_MAX];
-static u32 s_boot_module_count = 0;
-static vnode_ops_t s_root_ops = {.vop_name = "rootfs"};
 static vnode_t s_root_vnode_obj;
+
+static xiu_error_t rootfs_vop_read(vnode_t *vp, struct uio *uio, int ioflags, vfs_context_t *ctx) {
+  (void)ioflags; (void)ctx;
+  if (!vp || !uio)
+    return XIU_ERR_INVALID;
+  if (vp->v_type == VDIR)
+    return XIU_ERR_INVALID;
+  if (!vp->v_data || uio->uio_offset >= vp->v_attr.va_size)
+    return XIU_SUCCESS;
+
+  usize avail = vp->v_attr.va_size - uio->uio_offset;
+  usize to_copy = uio->uio_resid < avail ? uio->uio_resid : avail;
+
+  extern xiu_error_t copyout(const void *kaddr, void *uaddr, usize len);
+  xiu_error_t err = copyout((const u8 *)vp->v_data + uio->uio_offset, uio->uio_buf, to_copy);
+  if (err == XIU_SUCCESS) {
+    uio->uio_buf = (void *)((uptr)uio->uio_buf + to_copy);
+    uio->uio_resid -= to_copy;
+    uio->uio_offset += to_copy;
+  }
+  return err;
+}
+
+static xiu_error_t rootfs_vop_getattr(vnode_t *vp, vattr_t *vap, vfs_context_t *ctx) {
+  (void)ctx;
+  if (!vp || !vap)
+    return XIU_ERR_INVALID;
+  *vap = vp->v_attr;
+  return XIU_SUCCESS;
+}
+
+static vnode_ops_t s_root_ops = {
+  .vop_name = "rootfs",
+  .vop_read = rootfs_vop_read,
+  .vop_getattr = rootfs_vop_getattr
+};
 
 extern void devfs_init(void);
 
 xiu_error_t vfs_register_module(const char *path, void *addr, usize size) {
-  if (s_boot_module_count >= BOOT_MODULE_MAX)
+  if (s_rootfs_vnode_count >= ROOTFS_MAX_VNODES)
     return XIU_ERR_OVERFLOW;
 
   char norm_path[256];
   vfs_normalize_path(path, norm_path, sizeof(norm_path));
 
-  vnode_t *vp = &s_boot_module_vnodes[s_boot_module_count++];
+  vnode_t *vp = &s_rootfs_vnodes[s_rootfs_vnode_count++];
   __builtin_memset(vp, 0, sizeof(vnode_t));
   vp->v_signature = XIU_VNODE_MAGIC;
   vp->v_type = VREG;
@@ -495,6 +584,40 @@ xiu_error_t vfs_init(void) {
   __builtin_strncpy(vfs_root_vnode->v_name, "/", 2);
 
   vfs_register("/", vfs_root_vnode);
+
+  static const char *s_default_dirs[] = {
+    "/bin",
+    "/sbin",
+    "/usr",
+    "/usr/bin",
+    "/usr/sbin",
+    "/usr/lib",
+    "/private",
+    "/private/etc",
+    "/private/var",
+    "/private/tmp",
+    "/Applications",
+    "/Users",
+    "/System",
+    "/Library"
+  };
+
+  for (usize i = 0; i < sizeof(s_default_dirs) / sizeof(s_default_dirs[0]); i++) {
+    const char *dpath = s_default_dirs[i];
+    vnode_t *existing = nullptr;
+    if (vfs_lookup(dpath, &existing) != XIU_SUCCESS || !existing) {
+      const char *name = dpath;
+      for (const char *s = dpath; *s; s++) {
+        if (*s == '/')
+          name = s + 1;
+      }
+      vnode_t *dvp = vfs_create_dir_vnode(name);
+      if (dvp) {
+        vfs_register(dpath, dvp);
+      }
+    }
+  }
+
   devfs_init();
   return XIU_SUCCESS;
 }

@@ -21,24 +21,16 @@ rm -rf "$ISO_ROOT"
 mkdir -p "$ISO_ROOT"
 
 cp "$KERNEL" "$ISO_ROOT/kernel.elf"
-cp limine.conf "$ISO_ROOT/"
-cp limine.cfg "$ISO_ROOT/" 2>/dev/null || true
-
-mkdir -p "$ISO_ROOT/boot/limine"
-cp limine.conf "$ISO_ROOT/boot/limine/"
-cp limine.cfg "$ISO_ROOT/boot/limine/" 2>/dev/null || true
-
-mkdir -p "$ISO_ROOT/EFI/BOOT"
-cp limine.conf "$ISO_ROOT/EFI/BOOT/"
-cp limine.cfg "$ISO_ROOT/EFI/BOOT/" 2>/dev/null || true
-
 # Copy core userspace binaries into ISO according to Darwin hierarchy
 mkdir -p "$ISO_ROOT/bin" "$ISO_ROOT/sbin" "$ISO_ROOT/usr/bin" "$ISO_ROOT/usr/sbin"
+mkdir -p "$ISO_ROOT/private/etc" "$ISO_ROOT/private/var" "$ISO_ROOT/private/tmp"
+mkdir -p "$ISO_ROOT/Applications" "$ISO_ROOT/Users" "$ISO_ROOT/Library" "$ISO_ROOT/System"
+
 for bin_path in build/${ARCH}/usr/*; do
     if [ -f "$bin_path" ]; then
         name="$(basename "$bin_path")"
         case "$name" in
-            *.a|*.o|*.obj|*.txt|*.cmake|*.ninja|*.json) ;;
+            *.a|*.o|*.obj|*.txt|*.cmake|*.ninja|*.json|Makefile|CMakeFiles|cmake_install.cmake|elf) ;;
             sh|dash|ls|cat|cp|mv|rm|mkdir|pwd|date|sleep|kill|chmod|df|echo|clear|true|false)
                 cp "$bin_path" "$ISO_ROOT/bin/"
                 ;;
@@ -54,6 +46,36 @@ for bin_path in build/${ARCH}/usr/*; do
         esac
     fi
 done
+
+printf "Welcome to XIU Operating System!\nApple Darwin / Mach-BSD Hybrid Architecture.\n" > "$ISO_ROOT/private/etc/motd"
+printf "XIU OS v0.1.0 (Darwin 24.0.0 %s)\n" "$ARCH" > "$ISO_ROOT/private/etc/version"
+printf "127.0.0.1\tlocalhost\n10.0.2.15\txiu-mac\n" > "$ISO_ROOT/private/etc/hosts"
+
+# Generate complete limine.conf with all kernel modules
+cat << 'EOF' > "$ISO_ROOT/limine.conf"
+# =============================================================================
+# XIU Operating System — Limine Configuration (v8.x Format)
+# limine.conf
+# =============================================================================
+
+timeout: 0
+
+/XIU Operating System
+    protocol: limine
+    kernel_path: boot():/kernel.elf
+EOF
+
+for f in $(find "$ISO_ROOT/bin" "$ISO_ROOT/sbin" "$ISO_ROOT/usr/bin" "$ISO_ROOT/usr/sbin" "$ISO_ROOT/private/etc" -type f 2>/dev/null | sort); do
+    rel_path="${f#$ISO_ROOT}"
+    echo "    module_path: boot():$rel_path" >> "$ISO_ROOT/limine.conf"
+done
+
+mkdir -p "$ISO_ROOT/boot/limine" "$ISO_ROOT/EFI/BOOT"
+cp "$ISO_ROOT/limine.conf" "$ISO_ROOT/limine.cfg"
+cp "$ISO_ROOT/limine.conf" "$ISO_ROOT/boot/limine/"
+cp "$ISO_ROOT/limine.conf" "$ISO_ROOT/boot/limine/limine.cfg"
+cp "$ISO_ROOT/limine.conf" "$ISO_ROOT/EFI/BOOT/"
+cp "$ISO_ROOT/limine.conf" "$ISO_ROOT/EFI/BOOT/limine.cfg"
 
 LIMINE_DIR="build/limine"
 if [ ! -d "$LIMINE_DIR" ]; then
