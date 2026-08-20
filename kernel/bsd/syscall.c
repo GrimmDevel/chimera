@@ -997,20 +997,9 @@ static i64 sys_execve(u64 path_ptr, u64 argv_ptr, u64 envp_ptr, u64 a4, u64 a5,
   kenvp[envc] = nullptr;
 
   vnode_t *elf_vp = nullptr;
-  if (vfs_lookup(normalize_path(path), &elf_vp) != XIU_SUCCESS || !elf_vp) {
-    if (path[0] != '/') {
-      char bin_path[128];
-      bin_path[0] = '/'; bin_path[1] = 'b'; bin_path[2] = 'i'; bin_path[3] = 'n'; bin_path[4] = '/';
-      usize plen = __builtin_strlen(path);
-      if (plen > 120) plen = 120;
-      for (usize i = 0; i < plen; i++) bin_path[5 + i] = path[i];
-      bin_path[5 + plen] = '\0';
-      vfs_lookup(bin_path, &elf_vp);
-    }
-  }
-  if (!elf_vp) {
-    kprintf("[sys_execve] ERROR: vfs_lookup failed for %s\n", path);
-    return -1;
+  const char *npath = normalize_path(path);
+  if (vfs_lookup(npath, &elf_vp) != XIU_SUCCESS || !elf_vp) {
+    return -2; // -ENOENT
   }
 
   void *elf_ptr = elf_vp->v_data;
@@ -1582,13 +1571,18 @@ static i64 sys_stat(u64 path, u64 statbuf, u64 a3, u64 a4, u64 a5, u64 a6) {
   (void)a4;
   (void)a5;
   (void)a6;
-  char kpath[128];
+  char kpath[256];
   if (copyin((const void *)path, kpath, sizeof(kpath)) != XIU_SUCCESS)
     return -1;
   kpath[sizeof(kpath) - 1] = '\0';
 
+  xiu_task_t *task = current_task();
+  xiu_proc_t *proc = task ? task->ta_proc : nullptr;
+  char norm_path[256];
+  resolve_relative_path(proc, kpath, norm_path, sizeof(norm_path));
+
   vnode_t *vp = nullptr;
-  if (vfs_lookup(normalize_path(kpath), &vp) != XIU_SUCCESS || !vp)
+  if (vfs_lookup(norm_path, &vp) != XIU_SUCCESS || !vp)
     return -1;
 
   xiu_user_stat_t st;
@@ -1613,39 +1607,24 @@ static i64 sys_getcwd(u64 buf, u64 size, u64 a3, u64 a4, u64 a5, u64 a6) {
   xiu_task_t *task = current_task();
   xiu_proc_t *proc = task ? task->ta_proc : nullptr;
   if (!proc || !proc->p_cwd) {
-    // fallback to root
     const char cwd[] = "/";
     return (copyout(cwd, (void *)buf, sizeof(cwd)) == XIU_SUCCESS) ? 0 : -1;
   }
 
-  /* For now, we don't have full path tracking in vnodes.
-   * We'd need to walk up v_parent chain to reconstruct the full path.
-   * As a temporary solution, just return the vnode name or "/" */
-  vnode_t *vp = proc->p_cwd;
-  const char *path = "/";
-
-  if (vp && vp->v_op && __builtin_strcmp(vp->v_op->vop_name, "fat32_dir") == 0) {
-    typedef struct {
-      u32 start_cluster;
-      u32 file_size;
-      bool is_dir;
-      char path[256];
-    } fat32_path_info_t;
-    fat32_path_info_t *nd = (fat32_path_info_t *)vp->v_data;
-    if (nd && nd->path[0]) {
-      path = nd->path;
+  extern const char *vfs_path_for_vnode(vnode_t *vp);
+  const char *path = vfs_path_for_vnode(proc->p_cwd);
+  if (!path || path[0] == '\0') {
+    if (proc->p_cwd->v_name[0] != '\0') {
+      path = proc->p_cwd->v_name;
+    } else {
+      path = "/";
     }
-  } else if (vp && vp->v_name[0] != '\0') {
-    path = vp->v_name;
   }
 
   usize len = __builtin_strlen(path) + 1;
   if (len > size)
     return -34; // erange
   return (copyout(path, (void *)buf, len) == XIU_SUCCESS) ? 0 : -1;
-
-  // root directory
-  return (copyout(path, (void *)buf, 2) == XIU_SUCCESS) ? 0 : -1;
 }
 
 static i64 sys_mkdir(u64 path_ptr, u64 mode, u64 a3, u64 a4, u64 a5, u64 a6) {
@@ -1799,6 +1778,41 @@ static i64 sys_yield(u64 a1, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
   return 0;
 }
 
+struct xiu_timespec {
+  i64 tv_sec;
+  i64 tv_nsec;
+};
+
+static i64 sys_nanosleep(u64 req_ptr, u64 rem_ptr, u64 a3, u64 a4, u64 a5, u64 a6) {
+  (void)rem_ptr; (void)a3; (void)a4; (void)a5; (void)a6;
+  if (!req_ptr) return -14; // EFAULT
+
+  struct xiu_timespec ts;
+  extern xiu_error_t copyin(const void *uaddr, void *kaddr, usize len);
+  if (copyin((const void *)req_ptr, &ts, sizeof(ts)) != XIU_SUCCESS) {
+    return -14;
+  }
+
+  if (ts.tv_sec < 0 || ts.tv_nsec < 0 || ts.tv_nsec >= 1000000000ULL) {
+    return -22; // EINVAL
+  }
+
+  extern volatile u64 g_system_ticks;
+  extern void scheduler_yield(void);
+
+  u64 target_ticks = (u64)ts.tv_sec * 100 + (u64)ts.tv_nsec / 10000000ULL;
+  if (target_ticks == 0 && (ts.tv_sec > 0 || ts.tv_nsec > 0)) {
+    target_ticks = 1;
+  }
+
+  u64 start_ticks = g_system_ticks;
+  while ((g_system_ticks - start_ticks) < target_ticks) {
+    __asm__ volatile("sti; hlt");
+  }
+
+  return 0;
+}
+
 // sys_sysinfo
 typedef struct {
   u64 total_memory;
@@ -1836,8 +1850,9 @@ static i64 sys_sysinfo(u64 buf_ptr, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
   extern u32 smp_get_active_cpus(void);
   info.cpu_count = smp_get_active_cpus();
 
-  // uptime - TODO: implement real uptime tracking
-  info.uptime_seconds = 0;
+  // real uptime from PIT/LAPIC timer ticks
+  extern u64 timer_get_uptime_seconds(void);
+  info.uptime_seconds = (u32)timer_get_uptime_seconds();
 
   // os information
   const char *os_name = "XIU Operating System";
@@ -2219,12 +2234,82 @@ static i64 sys_shutdown(u64 fd_u, u64 how, u64 a3, u64 a4, u64 a5, u64 a6) {
 }
 
 static i64 sys_setsockopt(u64 fd_u, u64 level, u64 optname, u64 optval, u64 optlen, u64 a6) {
-  (void)fd_u; (void)level; (void)optname; (void)optval; (void)optlen; (void)a6;
-  return 0;
+  (void)a6;
+  xiu_task_t *task = current_task();
+  xiu_proc_t *proc = task ? task->ta_proc : nullptr;
+  if (!proc) return -1;
+
+  xiu_fileproc_t *fp = proc_fd_lookup(proc, (int)fd_u);
+  if (!fp) return -9; // EBADF
+  if (fp->fp_type != DTYPE_SOCKET || !fp->fp_socket) {
+    fp_release(fp);
+    return -88; // ENOTSOCK
+  }
+
+  if (!optval || optlen == 0 || optlen > 256) {
+    fp_release(fp);
+    return -22; // EINVAL
+  }
+
+  u8 koptbuf[256];
+  if (copyin((const void *)optval, koptbuf, (usize)optlen) != XIU_SUCCESS) {
+    fp_release(fp);
+    return -14; // EFAULT
+  }
+
+  extern xiu_error_t sosetopt(socket_t *so, int level, int optname, const void *optval, usize optlen);
+  xiu_error_t err = sosetopt(fp->fp_socket, (int)level, (int)optname, koptbuf, (usize)optlen);
+  fp_release(fp);
+
+  if (err == XIU_SUCCESS) return 0;
+  if (err == XIU_ERR_NOTSUP) return -92; // ENOPROTOOPT
+  return -22; // EINVAL
 }
 
 static i64 sys_getsockopt(u64 fd_u, u64 level, u64 optname, u64 optval, u64 optlen_ptr, u64 a6) {
-  (void)fd_u; (void)level; (void)optname; (void)optval; (void)optlen_ptr; (void)a6;
+  (void)a6;
+  xiu_task_t *task = current_task();
+  xiu_proc_t *proc = task ? task->ta_proc : nullptr;
+  if (!proc) return -1;
+
+  xiu_fileproc_t *fp = proc_fd_lookup(proc, (int)fd_u);
+  if (!fp) return -9; // EBADF
+  if (fp->fp_type != DTYPE_SOCKET || !fp->fp_socket) {
+    fp_release(fp);
+    return -88; // ENOTSOCK
+  }
+
+  if (!optval || !optlen_ptr) {
+    fp_release(fp);
+    return -22; // EINVAL
+  }
+
+  u32 ulen = 0;
+  if (copyin((const void *)optlen_ptr, &ulen, sizeof(u32)) != XIU_SUCCESS) {
+    fp_release(fp);
+    return -14; // EFAULT
+  }
+
+  if (ulen == 0 || ulen > 256) {
+    fp_release(fp);
+    return -22; // EINVAL
+  }
+
+  u8 koptbuf[256];
+  usize optlen = (usize)ulen;
+  extern xiu_error_t sogetopt(socket_t *so, int level, int optname, void *optval, usize *optlen);
+  xiu_error_t err = sogetopt(fp->fp_socket, (int)level, (int)optname, koptbuf, &optlen);
+  fp_release(fp);
+
+  if (err != XIU_SUCCESS) {
+    if (err == XIU_ERR_NOTSUP) return -92; // ENOPROTOOPT
+    return -22; // EINVAL
+  }
+
+  if (copyout(koptbuf, (void *)optval, optlen) != XIU_SUCCESS) return -14;
+  u32 final_len = (u32)optlen;
+  if (copyout(&final_len, (void *)optlen_ptr, sizeof(u32)) != XIU_SUCCESS) return -14;
+
   return 0;
 }
 
@@ -2232,47 +2317,78 @@ static i64 sys_getsockopt(u64 fd_u, u64 level, u64 optname, u64 optval, u64 optl
 
 const syscall_fn_t g_syscall_table[256] = {
     [SYSCALL_LOG] = sys_log,
+    [253] = sys_log,
     [SYS_chdir] = sys_chdir,
+    [12] = sys_chdir,
     [SYS_fork] = sys_fork,
+    [2] = sys_fork,
     [SYS_read] = sys_read,
+    [3] = sys_read,
     [SYS_write] = sys_write,
+    [4] = sys_write,
     [SYS_open] = sys_open,
+    [5] = sys_open,
+    [8] = sys_open,
     [SYS_pipe] = sys_pipe,
+    [42] = sys_pipe,
     [SYS_close] = sys_close,
+    [6] = sys_close,
     [SYS_wait4] = sys_wait4,
+    [7] = sys_wait4,
     [SYS_ioctl] = sys_ioctl,
+    [16] = sys_ioctl,
+    [54] = sys_ioctl,
     [18] = sys_stat,
+    [188] = sys_stat,
     [SYS_stat] = sys_stat,
     [SYS_getpid] = sys_getpid,
+    [20] = sys_getpid,
 
     [SYS_kill] = sys_kill,
+    [37] = sys_kill,
     [62] = sys_kill,
 
     [SYS_sigaction] = sys_sigaction,
+    [46] = sys_sigaction,
     [13] = sys_sigaction,
 
     [48] = sys_sigprocmask,
     [14] = sys_sigprocmask,
 
     [SYS_fcntl] = sys_fcntl,
+    [92] = sys_fcntl,
+    [55] = sys_fcntl,
     [90] = sys_dup2,
     [33] = sys_dup2,
     [SYS_execve] = sys_execve,
+    [59] = sys_execve,
     [SYS_yield] = sys_yield,
+    [138] = sys_yield,
+    [248] = sys_yield,
     [SYS_exit] = sys_exit,
+    [1] = sys_exit,
     [60] = sys_exit,
 
     [SYS_getcwd] = sys_getcwd,
+    [79] = sys_getcwd,
     [SYS_mkdir] = sys_mkdir,
+    [83] = sys_mkdir,
+    [136] = sys_mkdir,
     [SYS_rmdir] = sys_rmdir,
+    [84] = sys_rmdir,
+    [137] = sys_rmdir,
     [10] = sys_unlink,
     [87] = sys_unlink,
-    [8] = sys_open,
+    [SYS_lseek] = sys_lseek,
     [199] = sys_lseek,
     [SYS_mmap] = sys_mmap,
+    [197] = sys_mmap,
+    [9] = sys_mmap,
+    [SYS_munmap] = sys_munmap,
     [73] = sys_munmap,
     [11] = sys_munmap,
     [SYS_mach_msg] = sys_mach_msg,
+    [200] = sys_mach_msg,
     [201] = sys_mach_port_allocate,
     [202] = sys_mach_msg_pid,
     [203] = sys_mach_register_service,
@@ -2281,22 +2397,39 @@ const syscall_fn_t g_syscall_table[256] = {
     [206] = sys_mach_port_type,
     [208] = sys_task_self,
     [SYS_getdents] = sys_getdents,
+    [217] = sys_getdents,
+    [176] = sys_getdents,
 
     // bsd Darwin Sockets
     [SYS_socket] = sys_socket,
+    [97] = sys_socket,
     [SYS_bind] = sys_bind,
+    [104] = sys_bind,
     [SYS_connect] = sys_connect,
+    [98] = sys_connect,
     [SYS_listen] = sys_listen,
+    [106] = sys_listen,
     [SYS_accept] = sys_accept,
+    [30] = sys_accept,
     [SYS_sendto] = sys_sendto,
+    [133] = sys_sendto,
     [SYS_recvfrom] = sys_recvfrom,
+    [29] = sys_recvfrom,
     [SYS_shutdown] = sys_shutdown,
+    [134] = sys_shutdown,
     [SYS_setsockopt] = sys_setsockopt,
+    [105] = sys_setsockopt,
     [SYS_getsockopt] = sys_getsockopt,
+    [118] = sys_getsockopt,
 
     [SYS_spawn] = sys_spawn,
+    [250] = sys_spawn,
     [SYS_sysinfo] = sys_sysinfo,
+    [251] = sys_sysinfo,
     [SYS_proclist] = sys_proclist,
+    [252] = sys_proclist,
+    [240] = sys_nanosleep,
+    [35]  = sys_nanosleep,
 };
 
 const u32 g_syscall_count = 256;

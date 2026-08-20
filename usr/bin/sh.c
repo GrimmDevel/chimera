@@ -10,36 +10,38 @@ extern i64 xiu_chdir(const char *path);
 extern pid_t waitpid(pid_t pid, int *status, int options);
 extern i64 open(const char *path, int flags, int mode);
 
-#define PROMPT "sh# "
+static void print_prompt(void) {
+  char cwd[256];
+  const char *user = getenv("USER");
+  if (!user || user[0] == '\0') {
+    user = (getuid() == 0) ? "root" : "user";
+  }
+
+  if (getcwd(cwd, sizeof(cwd)) && cwd[0] != '\0') {
+    printf("%s@xiu:%s# ", user, cwd);
+  } else {
+    printf("%s@xiu:/# ", user);
+  }
+}
 
 static void sigint_handler(int sig) {
   (void)sig;
-  printf("\n%s", PROMPT);
+  printf("\n");
+  print_prompt();
 }
 
 static void print_help(void) {
   printf("\nXIU OS Console Shell (xsh)\n");
   printf("Built-in commands:\n");
-  printf("  help       Show this help message\n");
-  printf("  clear      Clear the screen\n");
-  printf("  cd <dir>   Change directory\n");
-  printf("  pwd        Print working directory\n");
-  printf("  echo <msg> Print text (supports '> file' redirection)\n");
-  printf("  exit       Exit the shell\n\n");
-  printf("Available system utilities:\n");
-  printf("  neofetch   System information and logo\n");
-  printf("  ls         List directory contents\n");
-  printf("  cat <file> View file contents\n");
-  printf("  touch <f>  Create empty file\n");
-  printf("  mkdir <d>  Create directory\n");
-  printf("  rm <file>  Remove file or directory\n");
-  printf("  kilo       Full-screen text editor\n");
-  printf("  proclist   List running processes\n");
-  printf("  machdemo   Mach IPC and OOL Memory demo\n");
-  printf("  smpdemo    Multi-core SMP Parallel execution test\n");
-  printf("  wserver    Userspace WindowServer Compositor daemon\n");
-  printf("  guiapp     Activity Monitor GUI application\n");
-  printf("  calc       macOS-style GUI Calculator\n\n");
+  printf("  help            Show this help message\n");
+  printf("  clear           Clear the screen\n");
+  printf("  cd <dir>        Change directory\n");
+  printf("  pwd             Print working directory\n");
+  printf("  echo <msg>      Print text (supports '> file' redirection)\n");
+  printf("  export <K=V>    Set environment variable (e.g. export PATH=...)\n");
+  printf("  exit            Exit the shell\n\n");
+  printf("Executables are resolved dynamically from $PATH (%s).\n\n",
+         getenv("PATH") ? getenv("PATH") : "/bin:/usr/bin");
 }
 
 static void execute_single_command(char *cmd) {
@@ -128,7 +130,6 @@ static void execute_single_command(char *cmd) {
     } else {
       printf("/\n");
     }
-    return;
   } else if (strcmp(argv[0], "cd") == 0) {
     if (argc > 1) {
       if (xiu_chdir(argv[1]) < 0) {
@@ -136,6 +137,25 @@ static void execute_single_command(char *cmd) {
       }
     } else {
       xiu_chdir("/");
+    }
+    return;
+  } else if (strcmp(argv[0], "export") == 0) {
+    if (argc > 1) {
+      char *eq = strchr(argv[1], '=');
+      if (eq) {
+        *eq = '\0';
+        setenv(argv[1], eq + 1, 1);
+      } else {
+        const char *val = getenv(argv[1]);
+        if (val) setenv(argv[1], val, 1);
+      }
+    } else {
+      extern char **environ;
+      if (environ) {
+        for (char **e = environ; *e; e++) {
+          printf("%s\n", *e);
+        }
+      }
     }
     return;
   }
@@ -152,15 +172,7 @@ static void execute_single_command(char *cmd) {
       }
     }
 
-    if (argv[0][0] == '/' || (argv[0][0] == '.' && argv[0][1] == '/')) {
-      execve(argv[0], argv, NULL);
-    } else {
-      char path[256];
-      strncpy(path, "/bin/", sizeof(path) - 1);
-      strncat(path, argv[0], sizeof(path) - strlen(path) - 1);
-      execve(path, argv, NULL);
-      execve(argv[0], argv, NULL);
-    }
+    execvp(argv[0], argv);
 
     printf("xsh: command not found: %s\n", argv[0]);
     exit(1);
@@ -213,7 +225,7 @@ int main(int argc, char **argv) {
   printf("Type 'help' for built-in commands.\n\n");
 
   while (1) {
-    printf("%s", PROMPT);
+    print_prompt();
 
     i64 n = read(0, buf, sizeof(buf) - 1);
     if (n > 0) {

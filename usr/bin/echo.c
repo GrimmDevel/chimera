@@ -1,23 +1,48 @@
-/* =============================================================================
- * XIU Operating System — echo Utility
- * usr/bin/echo.c
- * ============================================================================= */
-
+// echo - print arguments
 #include <kernel/xiu_types.h>
-
-extern i64 write(int fd, const void *buf, usize len);
-
-void print(const char *s) {
-    usize len = 0;
-    while(s[len]) len++;
-    write(1, s, len);
-}
+#include <stdio.h>
+#include <string.h>
+#include <unistd.h>
 
 int main(int argc, char *argv[]) {
-    for (int i = 1; i < argc; i++) {
-        print(argv[i]);
-        if (i < argc - 1) print(" ");
+    bool newline = true;
+    bool escapes = false;
+    int start = 1;
+
+    while (start < argc && argv[start][0] == '-') {
+        if (strcmp(argv[start], "-n") == 0) {
+            newline = false;
+            start++;
+        } else if (strcmp(argv[start], "-e") == 0) {
+            escapes = true;
+            start++;
+        } else {
+            break;
+        }
     }
-    print("\n");
+
+    for (int i = start; i < argc; i++) {
+        const char *s = argv[i];
+        if (escapes) {
+            while (*s) {
+                if (*s == '\\' && *(s + 1)) {
+                    s++;
+                    if (*s == 'n') putchar('\n');
+                    else if (*s == 't') putchar('\t');
+                    else if (*s == 'r') putchar('\r');
+                    else if (*s == 'e') putchar('\033');
+                    else if (*s == '\\') putchar('\\');
+                    else { putchar('\\'); putchar(*s); }
+                } else {
+                    putchar(*s);
+                }
+                s++;
+            }
+        } else {
+            printf("%s", s);
+        }
+        if (i < argc - 1) putchar(' ');
+    }
+    if (newline) putchar('\n');
     return 0;
 }

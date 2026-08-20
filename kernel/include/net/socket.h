@@ -121,6 +121,9 @@ typedef struct socket {
     struct sockbuf      so_rcv;
 
     i32                 so_error;
+    u32                 so_options;
+    u32                 so_rcvtimeo;
+    u32                 so_sndtimeo;
     _Atomic(u32)        so_refcount;
     spinlock_t          so_lock;
 } socket_t;
@@ -140,6 +143,8 @@ xiu_error_t sosend(socket_t *so, struct sockaddr *addr, const void *buf, usize l
 xiu_error_t soreceive(socket_t *so, struct sockaddr **addr, void *buf, usize len, usize *out_len, int flags);
 xiu_error_t soshutdown(socket_t *so, int how);
 xiu_error_t soclose(socket_t *so);
+xiu_error_t sosetopt(socket_t *so, int level, int optname, const void *optval, usize optlen);
+xiu_error_t sogetopt(socket_t *so, int level, int optname, void *optval, usize *optlen);
 
 void        sbappend(struct sockbuf *sb, mbuf_t *m);
 void        sbflush(struct sockbuf *sb);

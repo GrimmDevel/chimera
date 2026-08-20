@@ -654,6 +654,20 @@ static void console_write_str(const char *s) {
 
 static int s_esc_state = 0;
 
+#define CONSOLE_HISTORY_MAX 32
+static char   s_history[CONSOLE_HISTORY_MAX][CONSOLE_IN_BUF_SIZE];
+static u32    s_history_count = 0;
+static i32    s_history_idx = -1;
+static char   s_saved_line[CONSOLE_IN_BUF_SIZE];
+static usize  s_saved_len = 0;
+
+static void console_erase_input(void) {
+    while (s_line_len > 0) {
+        s_line_len--;
+        console_putc('\b');
+    }
+}
+
 // feed character from PS/2 Keyboard IRQ or Serial RX
 void console_in_push(char c) {
     char to_echo = 0;
@@ -686,6 +700,57 @@ void console_in_push(char c) {
         return;
     } else if (s_esc_state == 2) {
         s_esc_state = 0;
+        if (c == 'A') { // UP arrow: history back
+            if (s_history_count > 0) {
+                if (s_history_idx == -1) {
+                    // save current input before browsing
+                    s_saved_len = s_line_len;
+                    for (usize i = 0; i < s_line_len; i++) {
+                        s_saved_line[i] = s_line_buf[i];
+                    }
+                    s_saved_line[s_line_len] = '\0';
+                    s_history_idx = (i32)s_history_count - 1;
+                } else if (s_history_idx > 0 && ((i32)s_history_count - s_history_idx) < (i32)CONSOLE_HISTORY_MAX) {
+                    s_history_idx--;
+                }
+
+                console_erase_input();
+                const char *hist = s_history[s_history_idx % CONSOLE_HISTORY_MAX];
+                usize hlen = __builtin_strlen(hist);
+                for (usize i = 0; i < hlen && i < CONSOLE_IN_BUF_SIZE - 2; i++) {
+                    s_line_buf[i] = hist[i];
+                    console_putc(hist[i]);
+                }
+                s_line_len = (hlen < CONSOLE_IN_BUF_SIZE - 2) ? hlen : (CONSOLE_IN_BUF_SIZE - 2);
+            }
+            spinlock_unlock_irqrestore(&s_in_lock, irq);
+            return;
+        } else if (c == 'B') { // DOWN arrow: history forward
+            if (s_history_count > 0 && s_history_idx != -1) {
+                if (s_history_idx < (i32)s_history_count - 1) {
+                    s_history_idx++;
+                    console_erase_input();
+                    const char *hist = s_history[s_history_idx % CONSOLE_HISTORY_MAX];
+                    usize hlen = __builtin_strlen(hist);
+                    for (usize i = 0; i < hlen && i < CONSOLE_IN_BUF_SIZE - 2; i++) {
+                        s_line_buf[i] = hist[i];
+                        console_putc(hist[i]);
+                    }
+                    s_line_len = (hlen < CONSOLE_IN_BUF_SIZE - 2) ? hlen : (CONSOLE_IN_BUF_SIZE - 2);
+                } else {
+                    // restore saved uncommitted input
+                    s_history_idx = -1;
+                    console_erase_input();
+                    for (usize i = 0; i < s_saved_len && i < CONSOLE_IN_BUF_SIZE - 2; i++) {
+                        s_line_buf[i] = s_saved_line[i];
+                        console_putc(s_saved_line[i]);
+                    }
+                    s_line_len = s_saved_len;
+                }
+            }
+            spinlock_unlock_irqrestore(&s_in_lock, irq);
+            return;
+        }
         spinlock_unlock_irqrestore(&s_in_lock, irq);
         return;
     } else {
@@ -697,6 +762,7 @@ void console_in_push(char c) {
         s_line_buf[0] = '\n';
         s_line_len = 1;
         s_line_ready = true;
+        s_history_idx = -1;
         spinlock_unlock_irqrestore(&s_in_lock, irq);
 
         console_write_str("^C\n");
@@ -714,10 +780,7 @@ void console_in_push(char c) {
         console_write_str("\033[2J\033[H");
         return;
     } else if (c == 0x15) { // ctrl+U
-        while (s_line_len > 0) {
-            s_line_len--;
-            console_putc('\b');
-        }
+        console_erase_input();
     } else if (c == 0x17) { // ctrl+W
         while (s_line_len > 0 && s_line_buf[s_line_len - 1] == ' ') {
             s_line_len--;
@@ -733,6 +796,27 @@ void console_in_push(char c) {
             to_echo = '\b';
         }
     } else if (c == '\n' || c == '\r') {
+        // save completed command into history
+        if (s_line_len > 0) {
+            bool dup = false;
+            if (s_history_count > 0) {
+                u32 last_slot = (s_history_count - 1) % CONSOLE_HISTORY_MAX;
+                if (__builtin_strlen(s_history[last_slot]) == s_line_len &&
+                    __builtin_strncmp(s_history[last_slot], (const char *)s_line_buf, s_line_len) == 0) {
+                    dup = true;
+                }
+            }
+            if (!dup) {
+                u32 slot = s_history_count % CONSOLE_HISTORY_MAX;
+                usize copy_l = s_line_len < (CONSOLE_IN_BUF_SIZE - 1) ? s_line_len : (CONSOLE_IN_BUF_SIZE - 1);
+                __builtin_memcpy(s_history[slot], (const char *)s_line_buf, copy_l);
+                s_history[slot][copy_l] = '\0';
+                s_history_count++;
+            }
+        }
+        s_history_idx = -1;
+        s_saved_len = 0;
+
         if (s_line_len < CONSOLE_IN_BUF_SIZE - 2) {
             s_line_buf[s_line_len++] = '\n';
         }

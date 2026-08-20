@@ -41,6 +41,16 @@ int strcmp(const char *s1, const char *s2) {
     return *(const unsigned char *)s1 - *(const unsigned char *)s2;
 }
 
+int strncmp(const char *s1, const char *s2, usize n) {
+    for (usize i = 0; i < n; i++) {
+        if (s1[i] != s2[i])
+            return (int)(unsigned char)s1[i] - (int)(unsigned char)s2[i];
+        if (s1[i] == '\0')
+            break;
+    }
+    return 0;
+}
+
 int memcmp(const void *s1, const void *s2, usize n) {
     const u8 *p1 = (const u8 *)s1;
     const u8 *p2 = (const u8 *)s2;
@@ -52,4 +62,3 @@ int memcmp(const void *s1, const void *s2, usize n) {
     }
     return 0;
 }
-

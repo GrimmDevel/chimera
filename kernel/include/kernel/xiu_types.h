@@ -105,7 +105,7 @@ typedef s64         xiu_reltime_t;
 #define XIU_FALSE   false
 
 #ifndef XIU_PAGE_SIZE
-#  error "XIU_PAGE_SIZE must be defined by the toolchain file"
+#  define XIU_PAGE_SIZE 4096
 #endif
 #define XIU_PAGE_MASK       ((xiu_size_t)(XIU_PAGE_SIZE - 1))
 #define XIU_PAGE_ALIGN(a)   (((xiu_vaddr_t)(a) + XIU_PAGE_MASK) & ~XIU_PAGE_MASK)

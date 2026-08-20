@@ -18,7 +18,8 @@
 
 static u8         s_pmm_bitmap[MAX_PAGES / 8];
 static u8         s_pmm_refcount[MAX_PAGES];
-static usize      s_total_pages = 0;
+static usize      s_max_phys_page = 0;
+static usize      s_total_ram_pages = 0;
 static usize      s_free_pages  = 0;
 static spinlock_t s_pmm_lock    = SPINLOCK_INIT;
 static usize      s_last_alloc_idx = 0;
@@ -33,9 +34,10 @@ static inline void pmm_set_free(usize page) {
  * Walk the Limine memory map.
  * ─────────────────────────────────────────────────────────────────────────── */
 void pmm_init(xiu_paddr_t memmap_base, usize memmap_count) {
-    s_total_pages = 0;
-    s_free_pages  = 0;
-    s_last_alloc_idx = 0;
+    s_max_phys_page   = 0;
+    s_total_ram_pages = 0;
+    s_free_pages      = 0;
+    s_last_alloc_idx  = 0;
 
     // step 1: Mark ALL pages used with refcount 1
     __builtin_memset(s_pmm_bitmap, 0xFF, sizeof(s_pmm_bitmap));
@@ -47,8 +49,9 @@ void pmm_init(xiu_paddr_t memmap_base, usize memmap_count) {
 
     if (!entries || memmap_count == 0) {
         kprintf("[pmm] WARNING: no Limine memmap — using conservative fallback\n");
-        s_total_pages = 1024 * 1024;
-        for (usize i = 256; i < s_total_pages; i++) {
+        s_total_ram_pages = 1024 * 1024;
+        s_max_phys_page   = 1024 * 1024;
+        for (usize i = 256; i < s_max_phys_page; i++) {
             pmm_set_free(i);
             s_free_pages++;
         }
@@ -56,12 +59,21 @@ void pmm_init(xiu_paddr_t memmap_base, usize memmap_count) {
     }
 
     u64 max_phys_addr = 0;
+    usize total_ram_bytes = 0;
+
     for (usize e = 0; e < memmap_count; e++) {
         struct limine_memmap_entry *entry = entries[e];
         if (!entry) continue;
 
         if (entry->base + entry->length > max_phys_addr) {
             max_phys_addr = entry->base + entry->length;
+        }
+
+        if (entry->type == LIMINE_MEMMAP_USABLE ||
+            entry->type == LIMINE_MEMMAP_BOOTLOADER_RECLAIMABLE ||
+            entry->type == LIMINE_MEMMAP_KERNEL_AND_MODULES ||
+            entry->type == LIMINE_MEMMAP_ACPI_RECLAIMABLE) {
+            total_ram_bytes += entry->length;
         }
 
         if (entry->type != LIMINE_MEMMAP_USABLE) continue;
@@ -89,22 +101,25 @@ void pmm_init(xiu_paddr_t memmap_base, usize memmap_count) {
         }
     }
 
-    s_total_pages = (usize)(max_phys_addr / XIU_PAGE_SIZE);
-    if (s_total_pages > MAX_PAGES) s_total_pages = MAX_PAGES;
+    s_max_phys_page = (usize)(max_phys_addr / XIU_PAGE_SIZE);
+    if (s_max_phys_page > MAX_PAGES) s_max_phys_page = MAX_PAGES;
 
-    kprintf("[pmm] Limine memmap: %zu free pages (%zu MiB) of %zu total (max phys %llu GiB)\n",
+    s_total_ram_pages = (usize)(total_ram_bytes / XIU_PAGE_SIZE);
+    if (s_total_ram_pages == 0) s_total_ram_pages = s_free_pages;
+
+    kprintf("[pmm] Limine memmap: %zu free pages (%zu MiB) of %zu total RAM (%zu MiB)\n",
             s_free_pages,
             (s_free_pages * XIU_PAGE_SIZE) / (1024 * 1024),
-            s_total_pages,
-            (unsigned long long)(max_phys_addr / (1024 * 1024 * 1024)));
+            s_total_ram_pages,
+            (s_total_ram_pages * XIU_PAGE_SIZE) / (1024 * 1024));
 }
 
-usize pmm_total_pages(void) { return s_total_pages; }
+usize pmm_total_pages(void) { return s_total_ram_pages; }
 usize pmm_free_pages(void) { return s_free_pages; }
 
 xiu_paddr_t pmm_alloc_page(void) {
     irq_flags_t irq = spinlock_lock_irqsave(&s_pmm_lock);
-    usize limit = s_total_pages > 0 ? s_total_pages : MAX_PAGES;
+    usize limit = s_max_phys_page > 0 ? s_max_phys_page : MAX_PAGES;
     if (limit > MAX_PAGES) limit = MAX_PAGES;
 
     usize start = s_last_alloc_idx < limit ? s_last_alloc_idx : 0;
@@ -137,7 +152,7 @@ xiu_paddr_t pmm_alloc_pages(usize count) {
     if (count == 1) return pmm_alloc_page();
 
     irq_flags_t irq = spinlock_lock_irqsave(&s_pmm_lock);
-    usize limit = s_total_pages > 0 ? s_total_pages : MAX_PAGES;
+    usize limit = s_max_phys_page > 0 ? s_max_phys_page : MAX_PAGES;
     if (limit > MAX_PAGES) limit = MAX_PAGES;
 
     usize run = 0;

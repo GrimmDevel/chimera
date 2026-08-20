@@ -238,3 +238,123 @@ xiu_error_t soclose(socket_t *so) {
     spinlock_unlock_irqrestore(&s_so_pool_lock, flags);
     return XIU_SUCCESS;
 }
+
+xiu_error_t sosetopt(socket_t *so, int level, int optname, const void *optval, usize optlen) {
+    if (!so || so->so_signature != XIU_SOCKET_MAGIC) return XIU_ERR_INVALID;
+    if (!optval || optlen == 0) return XIU_ERR_INVALID;
+
+    if (level == SOL_SOCKET) {
+        switch (optname) {
+        case SO_REUSEADDR:
+        case SO_KEEPALIVE:
+        case SO_DONTROUTE:
+        case SO_BROADCAST:
+        case SO_DEBUG: {
+            if (optlen < sizeof(int)) return XIU_ERR_INVALID;
+            int val = *(const int *)optval;
+            irq_flags_t flags = spinlock_lock_irqsave(&so->so_lock);
+            if (val) so->so_options |= (u32)optname;
+            else so->so_options &= ~(u32)optname;
+            spinlock_unlock_irqrestore(&so->so_lock, flags);
+            return XIU_SUCCESS;
+        }
+        case SO_RCVTIMEO: {
+            if (optlen < sizeof(u32)) return XIU_ERR_INVALID;
+            so->so_rcvtimeo = *(const u32 *)optval;
+            return XIU_SUCCESS;
+        }
+        case SO_SNDTIMEO: {
+            if (optlen < sizeof(u32)) return XIU_ERR_INVALID;
+            so->so_sndtimeo = *(const u32 *)optval;
+            return XIU_SUCCESS;
+        }
+        case SO_RCVBUF: {
+            if (optlen < sizeof(int)) return XIU_ERR_INVALID;
+            int sz = *(const int *)optval;
+            if (sz > 0 && sz <= SB_MAX) so->so_rcv.sb_hiwat = (u32)sz;
+            return XIU_SUCCESS;
+        }
+        case SO_SNDBUF: {
+            if (optlen < sizeof(int)) return XIU_ERR_INVALID;
+            int sz = *(const int *)optval;
+            if (sz > 0 && sz <= SB_MAX) so->so_snd.sb_hiwat = (u32)sz;
+            return XIU_SUCCESS;
+        }
+        default:
+            return XIU_ERR_NOTSUP;
+        }
+    } else if (level == IPPROTO_TCP) {
+        if (optname == 1) { // TCP_NODELAY
+            return XIU_SUCCESS;
+        }
+        return XIU_ERR_NOTSUP;
+    }
+    return XIU_ERR_NOTSUP;
+}
+
+xiu_error_t sogetopt(socket_t *so, int level, int optname, void *optval, usize *optlen) {
+    if (!so || so->so_signature != XIU_SOCKET_MAGIC) return XIU_ERR_INVALID;
+    if (!optval || !optlen || *optlen == 0) return XIU_ERR_INVALID;
+
+    if (level == SOL_SOCKET) {
+        switch (optname) {
+        case SO_REUSEADDR:
+        case SO_KEEPALIVE:
+        case SO_DONTROUTE:
+        case SO_BROADCAST:
+        case SO_DEBUG: {
+            int val = (so->so_options & (u32)optname) ? 1 : 0;
+            usize to_copy = *optlen < sizeof(int) ? *optlen : sizeof(int);
+            __builtin_memcpy(optval, &val, to_copy);
+            *optlen = to_copy;
+            return XIU_SUCCESS;
+        }
+        case SO_TYPE: {
+            int val = (int)so->so_type;
+            usize to_copy = *optlen < sizeof(int) ? *optlen : sizeof(int);
+            __builtin_memcpy(optval, &val, to_copy);
+            *optlen = to_copy;
+            return XIU_SUCCESS;
+        }
+        case SO_ERROR: {
+            int err = (int)so->so_error;
+            so->so_error = 0;
+            usize to_copy = *optlen < sizeof(int) ? *optlen : sizeof(int);
+            __builtin_memcpy(optval, &err, to_copy);
+            *optlen = to_copy;
+            return XIU_SUCCESS;
+        }
+        case SO_RCVTIMEO: {
+            u32 val = so->so_rcvtimeo;
+            usize to_copy = *optlen < sizeof(u32) ? *optlen : sizeof(u32);
+            __builtin_memcpy(optval, &val, to_copy);
+            *optlen = to_copy;
+            return XIU_SUCCESS;
+        }
+        case SO_SNDTIMEO: {
+            u32 val = so->so_sndtimeo;
+            usize to_copy = *optlen < sizeof(u32) ? *optlen : sizeof(u32);
+            __builtin_memcpy(optval, &val, to_copy);
+            *optlen = to_copy;
+            return XIU_SUCCESS;
+        }
+        case SO_RCVBUF: {
+            int val = (int)so->so_rcv.sb_hiwat;
+            usize to_copy = *optlen < sizeof(int) ? *optlen : sizeof(int);
+            __builtin_memcpy(optval, &val, to_copy);
+            *optlen = to_copy;
+            return XIU_SUCCESS;
+        }
+        case SO_SNDBUF: {
+            int val = (int)so->so_snd.sb_hiwat;
+            usize to_copy = *optlen < sizeof(int) ? *optlen : sizeof(int);
+            __builtin_memcpy(optval, &val, to_copy);
+            *optlen = to_copy;
+            return XIU_SUCCESS;
+        }
+        default:
+            return XIU_ERR_NOTSUP;
+        }
+    }
+    return XIU_ERR_NOTSUP;
+}

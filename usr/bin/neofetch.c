@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <unistd.h>
 #include <string.h>
+#include <stdlib.h>
 #include <sys/syscall.h>
 
 extern int sprintf(char *buf, const char *fmt, ...);
@@ -35,11 +36,34 @@ static const char *logo[] = {
     NULL
 };
 
+static void get_cpu_model(char *brand, size_t maxlen) {
+    unsigned int eax, ebx, ecx, edx;
+    __asm__ volatile("cpuid" : "=a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx) : "a"(0x80000000));
+    if (eax >= 0x80000004) {
+        unsigned int *p = (unsigned int *)brand;
+        for (unsigned int i = 0x80000002; i <= 0x80000004; i++) {
+            __asm__ volatile("cpuid" : "=a"(p[0]), "=b"(p[1]), "=c"(p[2]), "=d"(p[3]) : "a"(i));
+            p += 4;
+        }
+        brand[48] = '\0';
+        // trim leading whitespace
+        char *src = brand;
+        while (*src == ' ') src++;
+        if (src != brand) {
+            memmove(brand, src, strlen(src) + 1);
+        }
+    } else {
+        strncpy(brand, "x86_64 Processor", maxlen);
+    }
+}
+
 static void print_info(void) {
     char buf[512];
+    char cpu_brand[64];
     
     // get system info via syscall
     sysinfo_t info;
+    memset(&info, 0, sizeof(info));
     long ret = syscall(SYS_sysinfo, (long)&info);
     
     if (ret != 0) {
@@ -47,17 +71,33 @@ static void print_info(void) {
         return;
     }
     
+    get_cpu_model(cpu_brand, sizeof(cpu_brand));
+
+    const char *user = getenv("USER");
+    if (!user || user[0] == '\0') {
+        user = (getuid() == 0) ? "root" : "user";
+    }
+
+    const char *shell = getenv("SHELL");
+    if (!shell || shell[0] == '\0') {
+        shell = "xsh";
+    }
+
+    const char *term = getenv("TERM");
+    if (!term || term[0] == '\0') {
+        term = "fbcon (1280x800)";
+    }
+
     unsigned long total_mb = info.total_memory / (1024 * 1024);
     unsigned long free_mb = info.free_memory / (1024 * 1024);
-    unsigned long used_mb = total_mb - free_mb;
+    unsigned long used_mb = (total_mb >= free_mb) ? (total_mb - free_mb) : 0;
     
-    // print logo and system info side by side
     int line = 0;
     
     // line 0: Logo + User@Host
     if (logo[line]) {
-        sprintf(buf, "\033[1;36m%s\033[0m  \033[1;32muser\033[0m@\033[1;32m%s\033[0m\n", 
-                logo[line], info.hostname);
+        sprintf(buf, "\033[1;36m%s\033[0m  \033[1;32m%s\033[0m@\033[1;32m%s\033[0m\n", 
+                logo[line], user, info.hostname);
         write(1, buf, strlen(buf));
         line++;
     }
@@ -66,8 +106,7 @@ static void print_info(void) {
     if (logo[line]) {
         sprintf(buf, "\033[1;36m%s\033[0m  ", logo[line]);
         write(1, buf, strlen(buf));
-        // print separator matching username@hostname length
-        int sep_len = 5 + strlen(info.hostname); // "user@" + hostname
+        int sep_len = strlen(user) + 1 + strlen(info.hostname);
         for (int i = 0; i < sep_len; i++) {
             write(1, "-", 1);
         }
@@ -77,8 +116,8 @@ static void print_info(void) {
     
     // line 2: Logo + OS
     if (logo[line]) {
-        sprintf(buf, "\033[1;36m%s\033[0m  \033[1;37mOS:\033[0m %s\n", 
-                logo[line], info.os_name);
+        sprintf(buf, "\033[1;36m%s\033[0m  \033[1;37mOS:\033[0m %s %s\n", 
+                logo[line], info.os_name, info.architecture);
         write(1, buf, strlen(buf));
         line++;
     }
@@ -101,14 +140,22 @@ static void print_info(void) {
     
     // line 5: Logo + Uptime
     if (logo[line]) {
-        unsigned int hours = info.uptime_seconds / 3600;
+        unsigned int days = info.uptime_seconds / 86400;
+        unsigned int hours = (info.uptime_seconds % 86400) / 3600;
         unsigned int minutes = (info.uptime_seconds % 3600) / 60;
-        if (hours > 0) {
+        unsigned int secs = info.uptime_seconds % 60;
+        if (days > 0) {
+            sprintf(buf, "\033[1;36m%s\033[0m  \033[1;37mUptime:\033[0m %ud %uh %um\n", 
+                    logo[line], days, hours, minutes);
+        } else if (hours > 0) {
             sprintf(buf, "\033[1;36m%s\033[0m  \033[1;37mUptime:\033[0m %u hours, %u mins\n", 
                     logo[line], hours, minutes);
+        } else if (minutes > 0) {
+            sprintf(buf, "\033[1;36m%s\033[0m  \033[1;37mUptime:\033[0m %u mins, %u secs\n", 
+                    logo[line], minutes, secs);
         } else {
-            sprintf(buf, "\033[1;36m%s\033[0m  \033[1;37mUptime:\033[0m %u mins\n", 
-                    logo[line], minutes);
+            sprintf(buf, "\033[1;36m%s\033[0m  \033[1;37mUptime:\033[0m %u secs\n", 
+                    logo[line], secs);
         }
         write(1, buf, strlen(buf));
         line++;
@@ -116,14 +163,14 @@ static void print_info(void) {
     
     // line 6: Logo + Shell
     if (logo[line]) {
-        sprintf(buf, "\033[1;36m%s\033[0m  \033[1;37mShell:\033[0m xsh / dash\n", logo[line]);
+        sprintf(buf, "\033[1;36m%s\033[0m  \033[1;37mShell:\033[0m %s\n", logo[line], shell);
         write(1, buf, strlen(buf));
         line++;
     }
     
     // line 7: Logo + Terminal
     if (logo[line]) {
-        sprintf(buf, "\033[1;36m%s\033[0m  \033[1;37mTerminal:\033[0m Framebuffer Console (Direct)\n", logo[line]);
+        sprintf(buf, "\033[1;36m%s\033[0m  \033[1;37mTerminal:\033[0m %s\n", logo[line], term);
         write(1, buf, strlen(buf));
         line++;
     }
@@ -135,19 +182,18 @@ static void print_info(void) {
         line++;
     }
     
-    // print system info without logo
+    // CPU details with hardware CPUID string
     sprintf(buf, "                          \033[1;37mCPU:\033[0m %s (%u cores)\n", 
-            info.architecture, info.cpu_count);
+            cpu_brand, info.cpu_count);
     write(1, buf, strlen(buf));
     
-    sprintf(buf, "                          \033[1;37mMemory:\033[0m %lu MiB / %lu MiB\n", 
-            used_mb, total_mb);
+    // Memory details with calculation
+    unsigned int pct = (total_mb > 0) ? (unsigned int)((used_mb * 100) / total_mb) : 0;
+    sprintf(buf, "                          \033[1;37mMemory:\033[0m %lu MiB / %lu MiB (%u%%)\n", 
+            used_mb, total_mb, pct);
     write(1, buf, strlen(buf));
     
-    sprintf(buf, "                          \033[1;37mEnvironment:\033[0m Pure Console\n");
-    write(1, buf, strlen(buf));
-    
-    // print color palette
+    // Color palette
     write(1, "\n                          ", 27);
     for (int i = 0; i < 8; i++) {
         sprintf(buf, "\033[4%dm   \033[0m", i);

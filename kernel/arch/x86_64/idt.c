@@ -5,6 +5,12 @@
 
 extern void kprintf(const char *fmt, ...);
 
+volatile u64 g_system_ticks = 0;
+
+u64 timer_get_uptime_seconds(void) {
+    return g_system_ticks / 100;
+}
+
 static struct idt_entry idt[256];
 static struct idtr idtr;
 
@@ -102,6 +108,9 @@ void interrupt_handler(struct interrupt_frame *frame) {
     } else if (frame->int_no == 0xFF) { // vector_spurious
         return;
     } else if (frame->int_no == 32) { // irq 0: PIT timer / LAPIC timer
+        extern volatile u64 g_system_ticks;
+        g_system_ticks++;
+
         extern void xiukit_hid_poll(void);
         xiukit_hid_poll();
         outb(0x20, 0x20);

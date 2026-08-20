@@ -15,7 +15,8 @@ xiu_task_t *task_kernel = nullptr;
 
 #define PROC_POOL_SIZE 64
 xiu_proc_t s_proc_pool[PROC_POOL_SIZE];
-static _Atomic(u32) s_proc_next = 1;
+static spinlock_t s_proc_pool_lock = SPINLOCK_INIT;
+static _Atomic(u32) s_pid_seq = 1;
 
 xiu_proc_t s_kernel_proc_obj;
 static xiu_task_t s_kernel_task_obj;
@@ -43,20 +44,30 @@ void proc_init(void) {
 xiu_error_t proc_create(xiu_proc_t *parent, const char *name, xiu_proc_t **proc_out) {
     XIU_ASSERT(proc_out != nullptr);
     
-    u32 idx = atomic_fetch_add(&s_proc_next, 1);
-    if (idx >= PROC_POOL_SIZE) return XIU_ERR_NOMEM;
-    
-    xiu_proc_t *p = &s_proc_pool[idx];
+    irq_flags_t irq = spinlock_lock_irqsave(&s_proc_pool_lock);
+    xiu_proc_t *p = nullptr;
+    for (u32 i = 1; i < PROC_POOL_SIZE; i++) {
+        if (s_proc_pool[i].p_signature != XIU_PROC_MAGIC) {
+            p = &s_proc_pool[i];
+            break;
+        }
+    }
+    if (!p) {
+        spinlock_unlock_irqrestore(&s_proc_pool_lock, irq);
+        return XIU_ERR_NOMEM;
+    }
+
     __builtin_memset(p, 0, sizeof(xiu_proc_t));
-    
     p->p_signature = XIU_PROC_MAGIC;
-    p->p_pid  = idx;
+    p->p_pid  = atomic_fetch_add(&s_pid_seq, 1);
+    if (p->p_pid == 0) p->p_pid = atomic_fetch_add(&s_pid_seq, 1);
     p->p_ppid = parent ? parent->p_pid : 0;
     p->p_parent = parent;
     p->p_state = PROC_STATE_RUNNING;
     __builtin_strncpy(p->p_comm, name, XIU_PROC_NAME_MAX);
     spinlock_init(&p->p_lock);
     spinlock_init(&p->p_fdlock);
+    spinlock_unlock_irqrestore(&s_proc_pool_lock, irq);
 
     // create associated Mach task
     xiu_error_t err = task_create(parent ? parent->p_task : nullptr, &p->p_task);
@@ -147,13 +158,29 @@ void proc_mark_exited(xiu_proc_t *proc, u32 code) {
     }
     spinlock_unlock_irqrestore(&proc->p_fdlock, fd_irq);
 
-    // 2. Set state to EXITED
+    // 2. Release vnode references
+    proc->p_text_node = nullptr;
+    proc->p_cwd = nullptr;
+
+    // 3. Reparent orphan children to launchd (PID 1)
+    irq_flags_t pool_irq = spinlock_lock_irqsave(&s_proc_pool_lock);
+    for (u32 i = 1; i < PROC_POOL_SIZE; i++) {
+        xiu_proc_t *child = &s_proc_pool[i];
+        if (child->p_signature == XIU_PROC_MAGIC &&
+            (child->p_parent == proc || child->p_ppid == proc->p_pid)) {
+            child->p_parent = proc_launchd;
+            child->p_ppid = (proc_launchd ? proc_launchd->p_pid : 1);
+        }
+    }
+    spinlock_unlock_irqrestore(&s_proc_pool_lock, pool_irq);
+
+    // 4. Set state to EXITED
     irq_flags_t irq = spinlock_lock_irqsave(&proc->p_lock);
     proc->p_exit_code = code;
     proc->p_state = PROC_STATE_EXITED;
     spinlock_unlock_irqrestore(&proc->p_lock, irq);
 
-    // 3. Send SIGCHLD to parent if present
+    // 5. Send SIGCHLD to parent if present
     if (proc->p_parent) {
         proc_signal(proc->p_parent, 17);
     }
@@ -163,12 +190,36 @@ void proc_reap(xiu_proc_t *proc) {
     if (!proc || proc->p_state != PROC_STATE_EXITED) return;
     irq_flags_t irq = spinlock_lock_irqsave(&proc->p_lock);
 
+    // 1. Destroy user address space and return all physical pages to PMM
     if (proc->p_task && proc->p_task->ta_vm_map) {
         extern void pmap_destroy_user_space(u64 pml4_phys);
         pmap_destroy_user_space((u64)proc->p_task->ta_vm_map);
         proc->p_task->ta_vm_map = nullptr;
     }
 
+    // 2. Clean up task threads and IPC space
+    if (proc->p_task) {
+        xiu_thread_t *th = proc->p_task->ta_threads;
+        while (th) {
+            xiu_thread_t *next = th->th_task_next;
+            scheduler_remove_thread(th);
+            th->th_signature = 0;
+            th = next;
+        }
+        proc->p_task->ta_threads = nullptr;
+        proc->p_task->ta_thread_count = 0;
+
+        if (proc->p_task->ta_ipc_space) {
+            extern void ipc_space_destroy(ipc_space_t *space);
+            ipc_space_destroy(proc->p_task->ta_ipc_space);
+            proc->p_task->ta_ipc_space = nullptr;
+        }
+
+        proc->p_task->ta_signature = 0;
+        proc->p_task = nullptr;
+    }
+
+    // 3. Clear process slot for reuse
     proc->p_signature = 0;
     proc->p_state = 0;
     proc->p_pid = 0;
@@ -285,17 +336,28 @@ xiu_error_t task_create(xiu_task_t *parent, xiu_task_t **task_out) {
     (void)parent;
     
     static xiu_task_t s_task_pool[64];
-    static _Atomic(u32) s_task_next = 1;
+    static spinlock_t s_task_pool_lock = SPINLOCK_INIT;
     
-    u32 idx = atomic_fetch_add(&s_task_next, 1);
-    if (idx >= 64) return XIU_ERR_NOMEM;
+    irq_flags_t irq = spinlock_lock_irqsave(&s_task_pool_lock);
+    xiu_task_t *t = nullptr;
+    u32 idx = 0;
+    for (u32 i = 1; i < 64; i++) {
+        if (s_task_pool[i].ta_signature != XIU_TASK_MAGIC) {
+            t = &s_task_pool[i];
+            idx = i;
+            break;
+        }
+    }
+    if (!t) {
+        spinlock_unlock_irqrestore(&s_task_pool_lock, irq);
+        return XIU_ERR_NOMEM;
+    }
     
-    xiu_task_t *t = &s_task_pool[idx];
     __builtin_memset(t, 0, sizeof(xiu_task_t));
-    
     t->ta_signature = XIU_TASK_MAGIC;
     t->ta_id = idx;
     spinlock_init(&t->ta_lock);
+    spinlock_unlock_irqrestore(&s_task_pool_lock, irq);
     
     extern xiu_paddr_t pmm_alloc_page(void);
     

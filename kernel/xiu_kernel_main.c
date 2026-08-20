@@ -15,18 +15,6 @@
 // phase 0: Console
 extern void console_init(void);
 extern void serial_puts(const char *s);
-
-// simple Bump Allocator for Kernel
-static u8 s_kernel_heap[1024 * 1024]; // 1mb
-static usize s_heap_ptr = 0;
-
-void *kernel_alloc(usize size) {
-    if (s_heap_ptr + size > sizeof(s_kernel_heap)) return nullptr;
-    void *ptr = &s_kernel_heap[s_heap_ptr];
-    s_heap_ptr += (size + 15) & ~15; // 16-byte align
-    return ptr;
-}
-
 extern void kprintf(const char *fmt, ...);
 
 // phase 1: Physical Memory Manager
@@ -305,10 +293,7 @@ void xiu_kernel_main(void) {
     // phase 6: Virtual File System
     kprintf("[XIU] Phase 6: Virtual File System\n");
     xiu_error_t err = vfs_init();
-    init_log("VFS core", XIU_SUCCEEDED(err));
-
-    err = vfs_build_root_hierarchy();
-    init_log("Root directory hierarchy (/System /Library /Applications …)", XIU_SUCCEEDED(err));
+    init_log("VFS core & DevFS", XIU_SUCCEEDED(err));
 
     kprintf("        Root vnode   : %s  type=VDIR\n",
             vfs_root_vnode ? vfs_root_vnode->v_name : "(null)");
@@ -325,7 +310,6 @@ void xiu_kernel_main(void) {
     xiu_kit_init();
     xiu_kit_start_matching();
     init_log("XIU-Kit driver registry", true);
-    init_log("Driver matching pass", true);
     init_log("Driver matching pass", true);
 
     kprintf("[XIU] Phase 7.5: Persistent Storage & FAT32 Filesystem\n");

@@ -32,11 +32,26 @@ mkdir -p "$ISO_ROOT/EFI/BOOT"
 cp limine.conf "$ISO_ROOT/EFI/BOOT/"
 cp limine.cfg "$ISO_ROOT/EFI/BOOT/" 2>/dev/null || true
 
-# Copy core userspace binaries into ISO for module boot
-mkdir -p "$ISO_ROOT/bin"
-for bin in sh ls echo cat mkdir rm touch pwd neofetch proclist wserver guiapp calc kilo dash tcc nc ping ifconfig curl; do
-    if [ -f "build/${ARCH}/usr/${bin}" ]; then
-        cp "build/${ARCH}/usr/${bin}" "$ISO_ROOT/bin/"
+# Copy core userspace binaries into ISO according to Darwin hierarchy
+mkdir -p "$ISO_ROOT/bin" "$ISO_ROOT/sbin" "$ISO_ROOT/usr/bin" "$ISO_ROOT/usr/sbin"
+for bin_path in build/${ARCH}/usr/*; do
+    if [ -f "$bin_path" ]; then
+        name="$(basename "$bin_path")"
+        case "$name" in
+            *.a|*.o|*.obj|*.txt|*.cmake|*.ninja|*.json) ;;
+            sh|dash|ls|cat|cp|mv|rm|mkdir|pwd|date|sleep|kill|chmod|df|echo|clear|true|false)
+                cp "$bin_path" "$ISO_ROOT/bin/"
+                ;;
+            ifconfig|ping)
+                cp "$bin_path" "$ISO_ROOT/sbin/"
+                ;;
+            wserver)
+                cp "$bin_path" "$ISO_ROOT/usr/sbin/"
+                ;;
+            *)
+                cp "$bin_path" "$ISO_ROOT/usr/bin/"
+                ;;
+        esac
     fi
 done
 

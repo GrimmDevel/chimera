@@ -51,8 +51,23 @@ extern i64 xiu_spawn(const char *path, char *const argv[], char *const envp[],
 extern i64 xiu_mach_msg(void *msg, u32 opt, u32 ssz, u32 rsz, u32 rport,
                         u32 timeout);
 
-char **environ = NULL;
+static char *s_default_environ[] = {
+    "PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin",
+    "USER=root",
+    "HOME=/Users/root",
+    "SHELL=/bin/sh",
+    "TERM=fbcon",
+    NULL
+};
+
+char **environ = s_default_environ;
+static int s_environ_allocated = 0;
+static usize s_environ_capacity = 64;
 int errno = 0;
+
+char ***_NSGetEnviron(void) {
+    return &environ;
+}
 
 // high-level wrappers
 
@@ -704,16 +719,27 @@ int sched_yield(void) {
     return 0;
 }
 
+#include <sys/time.h>
+
+extern i64 xiu_nanosleep(const void *req, void *rem);
+
+int nanosleep(const struct timespec *req, struct timespec *rem) {
+    if (!req) return -1;
+    return (int)xiu_nanosleep(req, rem);
+}
+
 int usleep(unsigned int usec) {
-    (void)usec;
-    xiu_yield();
-    return 0;
+    struct timespec ts;
+    ts.tv_sec = usec / 1000000;
+    ts.tv_nsec = (long)(usec % 1000000) * 1000;
+    return nanosleep(&ts, NULL);
 }
 
 unsigned int sleep(unsigned int seconds) {
-    for (unsigned int i = 0; i < seconds * 50; i++) {
-        xiu_yield();
-    }
+    struct timespec ts;
+    ts.tv_sec = (long)seconds;
+    ts.tv_nsec = 0;
+    nanosleep(&ts, NULL);
     return 0;
 }
 
@@ -972,12 +998,71 @@ char *getenv(const char *name) {
 }
 
 int setenv(const char *name, const char *value, int overwrite) {
-  (void)name; (void)value; (void)overwrite;
+  if (!name || name[0] == '\0' || strchr(name, '=')) return -1;
+  if (!value) value = "";
+
+  usize name_len = strlen(name);
+  usize val_len = strlen(value);
+  usize entry_len = name_len + 1 + val_len + 1;
+
+  if (environ) {
+    for (usize i = 0; environ[i] != NULL; i++) {
+      if (strncmp(environ[i], name, name_len) == 0 && environ[i][name_len] == '=') {
+        if (!overwrite) return 0;
+        char *new_entry = (char *)malloc(entry_len);
+        if (!new_entry) return -1;
+        memcpy(new_entry, name, name_len);
+        new_entry[name_len] = '=';
+        strcpy(new_entry + name_len + 1, value);
+        environ[i] = new_entry;
+        return 0;
+      }
+    }
+  }
+
+  usize count = 0;
+  if (environ) {
+    while (environ[count] != NULL) count++;
+  }
+
+  if (!s_environ_allocated || count + 2 > s_environ_capacity) {
+    usize new_cap = (s_environ_capacity > 0) ? (s_environ_capacity * 2) : 64;
+    char **new_env = (char **)malloc(sizeof(char *) * new_cap);
+    if (!new_env) return -1;
+    if (environ) {
+      for (usize i = 0; i < count; i++) {
+        new_env[i] = environ[i];
+      }
+    }
+    environ = new_env;
+    s_environ_allocated = 1;
+    s_environ_capacity = new_cap;
+  }
+
+  char *new_entry = (char *)malloc(entry_len);
+  if (!new_entry) return -1;
+  memcpy(new_entry, name, name_len);
+  new_entry[name_len] = '=';
+  strcpy(new_entry + name_len + 1, value);
+
+  environ[count] = new_entry;
+  environ[count + 1] = NULL;
   return 0;
 }
 
 int unsetenv(const char *name) {
-  (void)name;
+  if (!name || name[0] == '\0' || strchr(name, '=') || !environ) return -1;
+  usize name_len = strlen(name);
+  for (usize i = 0; environ[i] != NULL; i++) {
+    if (strncmp(environ[i], name, name_len) == 0 && environ[i][name_len] == '=') {
+      usize j = i;
+      while (environ[j] != NULL) {
+        environ[j] = environ[j + 1];
+        j++;
+      }
+      i--;
+    }
+  }
   return 0;
 }
 
@@ -1204,7 +1289,38 @@ int remove(const char *pathname) {
 }
 
 int execvp(const char *file, char *const argv[]) {
-  return execve(file, argv, NULL);
+  if (!file || file[0] == '\0') return -1;
+
+  // 1. If path contains '/', execute directly
+  if (strchr(file, '/')) {
+    return execve(file, argv, NULL);
+  }
+
+  // 2. Search through PATH components
+  const char *path = getenv("PATH");
+  if (!path || path[0] == '\0') {
+    path = "/bin:/usr/bin:/sbin:/usr/sbin:/usr/local/bin";
+  }
+
+  char full_path[512];
+  const char *p = path;
+  while (*p) {
+    const char *sep = strchr(p, ':');
+    size_t dir_len = sep ? (size_t)(sep - p) : strlen(p);
+
+    if (dir_len > 0 && dir_len < sizeof(full_path) - 2 - strlen(file)) {
+      memcpy(full_path, p, dir_len);
+      full_path[dir_len] = '/';
+      strcpy(full_path + dir_len + 1, file);
+
+      execve(full_path, argv, NULL);
+    }
+
+    if (!sep) break;
+    p = sep + 1;
+  }
+
+  return -1;
 }
 
 int gettimeofday(struct timeval *tv, void *tz) {
@@ -1839,3 +1955,22 @@ struct hostent *gethostbyname(const char *name) {
 
     return NULL;
 }
+
+int rename(const char *oldpath, const char *newpath) {
+    (void)oldpath;
+    (void)newpath;
+    return -1;
+}
+
+int chmod(const char *path, mode_t mode) {
+    (void)path;
+    (void)mode;
+    return 0;
+}
+
+int getpagesize(void) {
+    return 4096;
+}
+
+
+

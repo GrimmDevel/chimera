@@ -1,34 +1,39 @@
-/* =============================================================================
- * XIU Operating System — cat Utility
- * usr/bin/cat.c
- * ============================================================================= */
-
+// cat - concatenate and print files
 #include <kernel/xiu_types.h>
+#include <fcntl.h>
+#include <stdio.h>
+#include <string.h>
+#include <unistd.h>
 
-extern i64 write(int fd, const void *buf, usize len);
-extern i64 read(int fd, void *buf, usize len);
-extern int open(const char *path, int flags, int mode);
-
-void print(const char *s) {
-    usize len = 0;
-    while(s[len]) len++;
-    write(1, s, len);
+static void cat_fd(int fd) {
+    char buf[4096];
+    i64 n;
+    while ((n = read(fd, buf, sizeof(buf))) > 0) {
+        write(1, buf, n);
+    }
 }
 
 int main(int argc, char *argv[]) {
-    if (argc < 2) return 0;
-    
-    int fd = open(argv[1], 0, 0);
-    if (fd < 0) {
-        print("cat: file not found\n");
-        return 1;
+    if (argc < 2) {
+        cat_fd(0);
+        return 0;
     }
-    
-    char buf[1024];
-    i64 bytes;
-    while ((bytes = read(fd, buf, 1024)) > 0) {
-        write(1, buf, bytes);
+
+    int ret = 0;
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "-") == 0) {
+            cat_fd(0);
+            continue;
+        }
+
+        int fd = open(argv[i], O_RDONLY, 0);
+        if (fd < 0) {
+            printf("cat: %s: No such file or directory\n", argv[i]);
+            ret = 1;
+            continue;
+        }
+        cat_fd(fd);
+        close(fd);
     }
-    
-    return 0;
+    return ret;
 }

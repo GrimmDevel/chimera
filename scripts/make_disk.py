@@ -3,7 +3,7 @@
 XIU Operating System — FAT32 Disk Image Generator & In-Place Binary Updater
 scripts/make_disk.py
 Generates a 64MB FAT32 disk image containing system directories,
-configurations, and userland ELF binaries.
+configurations, and userland ELF binaries matching macOS/Darwin hierarchy.
 """
 
 import os
@@ -21,6 +21,41 @@ ROOT_CLUSTER = 2
 TOTAL_SECTORS = DISK_SIZE // SECTOR_SIZE
 DATA_START_SECTOR = RESERVED_SECTORS + NUM_FATS * SECTORS_PER_FAT
 TOTAL_CLUSTERS = (TOTAL_SECTORS - DATA_START_SECTOR) // SECTORS_PER_CLUSTER
+
+
+def make_lfn_entries(long_name: str, name_83: bytes, ext_83: bytes) -> list:
+    short_11 = name_83 + ext_83
+    chk = 0
+    for b in short_11:
+        chk = (((chk & 1) << 7) + (chk >> 1) + b) & 0xFF
+
+    utf16_chars = [ord(c) for c in long_name] + [0]
+    while len(utf16_chars) % 13 != 0:
+        utf16_chars.append(0xFFFF)
+
+    num_entries = len(utf16_chars) // 13
+    entries = []
+    for i in range(num_entries):
+        seq = (num_entries - i)
+        if i == 0:
+            seq |= 0x40  # last logical entry
+        chunk = utf16_chars[(num_entries - 1 - i) * 13 : (num_entries - i) * 13]
+
+        entry = bytearray(32)
+        entry[0] = seq
+        for j in range(5):
+            struct.pack_into("<H", entry, 1 + j * 2, chunk[j])
+        entry[11] = 0x0F  # LFN attribute
+        entry[12] = 0x00
+        entry[13] = chk
+        for j in range(6):
+            struct.pack_into("<H", entry, 14 + j * 2, chunk[5 + j])
+        struct.pack_into("<H", entry, 26, 0)
+        for j in range(2):
+            struct.pack_into("<H", entry, 28 + j * 2, chunk[11 + j])
+        entries.append(bytes(entry))
+    return entries
+
 
 class FAT32Disk:
     def __init__(self):
@@ -122,7 +157,7 @@ class FAT32Disk:
         parts = filename.split(".")
         name = parts[0][:8].upper().ljust(8)
         ext = parts[1][:3].upper().ljust(3) if len(parts) > 1 else "   "
-        return name.encode("ascii"), ext.encode("ascii")
+        return name.encode("ascii", "replace"), ext.encode("ascii", "replace")
 
     def make_dir_entry(self, name_83: bytes, ext_83: bytes, attr: int, start_cluster: int, size: int) -> bytes:
         entry = bytearray(32)
@@ -133,6 +168,23 @@ class FAT32Disk:
         struct.pack_into("<H", entry, 26, start_cluster & 0xFFFF)
         struct.pack_into("<I", entry, 28, size)
         return bytes(entry)
+
+    def _append_to_dir(self, dir_cluster: int, entry: bytes):
+        cluster_size = SECTORS_PER_CLUSTER * SECTOR_SIZE
+        cur = dir_cluster
+        while True:
+            offset = self.cluster_offset(cur)
+            for i in range(0, cluster_size, 32):
+                if self.image[offset + i] == 0x00 or self.image[offset + i] == 0xE5:
+                    self.image[offset + i : offset + i + 32] = entry
+                    return
+            nxt = self.fat[cur]
+            if nxt >= 0x0FFFFFF8 or nxt < 2:
+                new_c = self.alloc_cluster()
+                self.fat[cur] = new_c
+                cur = new_c
+            else:
+                cur = nxt
 
     def add_directory(self, parent_cluster: int, dirname: str) -> int:
         dir_cluster = self.alloc_cluster()
@@ -145,6 +197,9 @@ class FAT32Disk:
         self.image[dir_offset + 32 : dir_offset + 64] = dotdot_entry
 
         name_83, ext_83 = self.make_83_name(dirname)
+        lfn_entries = make_lfn_entries(dirname, name_83, ext_83)
+        for lfn in lfn_entries:
+            self._append_to_dir(parent_cluster, lfn)
         entry = self.make_dir_entry(name_83, ext_83, 0x10, dir_cluster, 0)
         self._append_to_dir(parent_cluster, entry)
         return dir_cluster
@@ -152,17 +207,11 @@ class FAT32Disk:
     def add_file(self, parent_cluster: int, filename: str, data: bytes):
         start_cluster, size = self.write_file_data(data)
         name_83, ext_83 = self.make_83_name(filename)
+        lfn_entries = make_lfn_entries(filename, name_83, ext_83)
+        for lfn in lfn_entries:
+            self._append_to_dir(parent_cluster, lfn)
         entry = self.make_dir_entry(name_83, ext_83, 0x20, start_cluster, size)
         self._append_to_dir(parent_cluster, entry)
-
-    def _append_to_dir(self, dir_cluster: int, entry: bytes):
-        cluster_size = SECTORS_PER_CLUSTER * SECTOR_SIZE
-        offset = self.cluster_offset(dir_cluster)
-        for i in range(0, cluster_size, 32):
-            if self.image[offset + i] == 0x00 or self.image[offset + i] == 0xE5:
-                self.image[offset + i : offset + i + 32] = entry
-                return
-        print(f"[make_disk] Warning: Directory cluster {dir_cluster} is full")
 
     def load_existing(self, path: str):
         with open(path, "rb") as f:
@@ -174,43 +223,64 @@ class FAT32Disk:
                 self.fat[c] = val
 
     def update_binaries(self, bin_dir: str, binaries: list):
-        root_offset = self.cluster_offset(ROOT_CLUSTER)
-        bin_cluster = None
-        for i in range(0, SECTORS_PER_CLUSTER * SECTOR_SIZE, 32):
-            entry = self.image[root_offset + i : root_offset + i + 32]
-            if entry[0] == 0x00: break
-            if entry[0] == 0xE5: continue
-            if entry[0:11] == b"BIN        " and (entry[11] & 0x10):
-                ch = struct.unpack_from("<H", entry, 20)[0]
-                cl = struct.unpack_from("<H", entry, 26)[0]
-                bin_cluster = (ch << 16) | cl
-                break
-        if not bin_cluster:
-            print("[make_disk] /bin not found on existing disk.")
-            return
-
-        bin_offset = self.cluster_offset(bin_cluster)
-        updated = 0
+        dir_files = {}
         for name in binaries:
             bin_path = os.path.join(bin_dir, name)
             if not os.path.isfile(bin_path):
                 continue
             with open(bin_path, "rb") as f:
                 data = f.read()
+            target_dir = get_target_dir_for_binary(name)
+            if target_dir not in dir_files:
+                dir_files[target_dir] = {}
+            dir_files[target_dir][name] = data
 
+        for target_dir, files in dir_files.items():
+            self.update_dir_files(target_dir, files)
+
+    def find_or_create_dir(self, path: str):
+        parts = [p.strip() for p in path.strip("/").split("/") if p.strip()]
+        cur_cluster = ROOT_CLUSTER
+        for part in parts:
+            cur_offset = self.cluster_offset(cur_cluster)
+            name_83, ext_83 = self.make_83_name(part)
+            target = name_83 + ext_83
+            found = None
+            for i in range(0, SECTORS_PER_CLUSTER * SECTOR_SIZE, 32):
+                entry = self.image[cur_offset + i : cur_offset + i + 32]
+                if entry[0] == 0x00: break
+                if entry[0] == 0xE5: continue
+                if entry[0:11] == target and (entry[11] & 0x10) and entry[11] != 0x0F:
+                    ch = struct.unpack_from("<H", entry, 20)[0]
+                    cl = struct.unpack_from("<H", entry, 26)[0]
+                    found = (ch << 16) | cl
+                    break
+            if not found:
+                found = self.add_directory(cur_cluster, part)
+            cur_cluster = found
+        return cur_cluster
+
+    def update_dir_files(self, dir_path: str, files_dict: dict):
+        dir_cluster = self.find_or_create_dir(dir_path)
+        if not dir_cluster:
+            return
+
+        dir_offset = self.cluster_offset(dir_cluster)
+        updated = 0
+        for name, data in files_dict.items():
             name_83, ext_83 = self.make_83_name(name)
             target_key = name_83 + ext_83
 
             found_slot = None
             for i in range(0, SECTORS_PER_CLUSTER * SECTOR_SIZE, 32):
-                entry = self.image[bin_offset + i : bin_offset + i + 32]
+                entry = self.image[dir_offset + i : dir_offset + i + 32]
                 if entry[0] == 0x00:
-                    if found_slot is None: found_slot = bin_offset + i
+                    if found_slot is None: found_slot = dir_offset + i
                     break
                 if entry[0] == 0xE5:
-                    if found_slot is None: found_slot = bin_offset + i
+                    if found_slot is None: found_slot = dir_offset + i
                     continue
-                if entry[0:11] == target_key:
+                if entry[0:11] == target_key and entry[11] != 0x0F:
                     ch = struct.unpack_from("<H", entry, 20)[0]
                     cl = struct.unpack_from("<H", entry, 26)[0]
                     old_cluster = (ch << 16) | cl
@@ -219,7 +289,7 @@ class FAT32Disk:
                         nxt = self.fat[cur]
                         self.fat[cur] = 0
                         cur = nxt
-                    found_slot = bin_offset + i
+                    found_slot = dir_offset + i
                     break
 
             start_cluster, size = self.write_file_data(data)
@@ -227,9 +297,84 @@ class FAT32Disk:
             if found_slot is not None:
                 self.image[found_slot : found_slot + 32] = entry
                 updated += 1
+            else:
+                self.add_file(dir_cluster, name, data)
+                updated += 1
 
         self.write_fat_tables()
-        print(f"[make_disk] Updated {updated} binaries in /bin on persistent disk.")
+        if updated > 0:
+            print(f"[make_disk] Updated {updated} files in /{dir_path} on persistent disk.")
+
+
+def copy_include_tree(disk, base_path, src_dir):
+    for root, dirs, files in os.walk(src_dir):
+        rel = os.path.relpath(root, src_dir)
+        if rel == ".":
+            target_dir = base_path
+        else:
+            target_dir = f"{base_path}/{rel}"
+        files_dict = {}
+        for f in files:
+            if f.endswith(".h") or f.endswith(".def") or f.endswith(".inc"):
+                fpath = os.path.join(root, f)
+                with open(fpath, "rb") as fp:
+                    files_dict[f] = fp.read()
+        if files_dict:
+            disk.update_dir_files(target_dir, files_dict)
+
+
+BIN_MAP = {
+    # /bin (Root & POSIX essentials)
+    "sh": "bin",
+    "dash": "bin",
+    "ls": "bin",
+    "cat": "bin",
+    "cp": "bin",
+    "mv": "bin",
+    "rm": "bin",
+    "mkdir": "bin",
+    "pwd": "bin",
+    "date": "bin",
+    "sleep": "bin",
+    "kill": "bin",
+    "chmod": "bin",
+    "df": "bin",
+    "echo": "bin",
+    "clear": "bin",
+    "true": "bin",
+    "false": "bin",
+
+    # /sbin (Admin & Network essentials)
+    "ifconfig": "sbin",
+    "ping": "sbin",
+
+    # /usr/sbin (Daemons / System servers)
+    "wserver": "usr/sbin",
+
+    # /usr/bin (Default for all other tools, compilers, apps)
+}
+
+
+def get_target_dir_for_binary(name: str) -> str:
+    return BIN_MAP.get(name, "usr/bin")
+
+
+def discover_binaries(bin_dir: str) -> list:
+    discovered = []
+    if not os.path.isdir(bin_dir):
+        return discovered
+    for item in os.listdir(bin_dir):
+        full_path = os.path.join(bin_dir, item)
+        if os.path.isfile(full_path) and not item.endswith((".a", ".o", ".obj", ".txt", ".cmake", ".json", ".ninja")):
+            try:
+                with open(full_path, "rb") as f:
+                    magic = f.read(4)
+                if magic in (b"\xcf\xfa\xed\xfe", b"\xce\xfa\xed\xfe", b"\xfe\xed\xfa\xcf", b"\xfe\xed\xfa\xce", b"\x7fELF"):
+                    discovered.append(item)
+            except Exception:
+                pass
+    return sorted(discovered)
+
 
 def main():
     workspace = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -237,14 +382,37 @@ def main():
     os.makedirs(out_dir, exist_ok=True)
     out_path = os.path.join(out_dir, "disk.img")
     bin_dir = os.path.join(workspace, "build", "x86_64", "usr")
-    binaries = ["sh", "dash", "ls", "cat", "echo", "mkdir", "rm", "pwd", "neofetch", "proclist", "kilo", "touch", "tcc", "ifconfig", "ping", "nc", "curl", "machdemo", "smpdemo", "wserver", "guiapp", "calc"]
+    binaries = discover_binaries(bin_dir)
 
     force = "--force" in sys.argv or "-f" in sys.argv
     if os.path.isfile(out_path) and not force:
-        print(f"[make_disk] Disk image {out_path} exists. Updating /bin binaries in-place...")
+        print(f"[make_disk] Disk image {out_path} exists. Updating in-place...")
         disk = FAT32Disk()
         disk.load_existing(out_path)
         disk.update_binaries(bin_dir, binaries)
+
+        # Update Mach-O runtime objects and libraries
+        crt0_path = os.path.join(bin_dir, "CMakeFiles", "xiu_crt0.dir", "libsystem", "crt0.S.obj")
+        libsystem_path = os.path.join(bin_dir, "libsystem_xiu.a")
+        lib_files = {}
+        if os.path.isfile(crt0_path):
+            with open(crt0_path, "rb") as f:
+                cdata = f.read()
+            lib_files["crt0.o"] = cdata
+        if os.path.isfile(libsystem_path):
+            with open(libsystem_path, "rb") as f:
+                ldata = f.read()
+            lib_files["libc.a"] = ldata
+            lib_files["libsystem_xiu.a"] = ldata
+        if lib_files:
+            disk.update_dir_files("usr/lib", lib_files)
+
+        # Copy C header trees into /usr/include
+        copy_include_tree(disk, "usr/include", os.path.join(workspace, "usr", "libsystem", "include"))
+        copy_include_tree(disk, "usr/include", os.path.join(workspace, "tinycc", "include"))
+        copy_include_tree(disk, "usr/include/kernel", os.path.join(workspace, "kernel", "include", "kernel"))
+        copy_include_tree(disk, "usr/include/net", os.path.join(workspace, "kernel", "include", "net"))
+
         with open(out_path, "wb") as f:
             f.write(disk.image)
         return
@@ -253,50 +421,95 @@ def main():
     disk = FAT32Disk()
     disk.write_bpb()
 
-    bin_cluster = disk.add_directory(ROOT_CLUSTER, "bin")
-    etc_cluster = disk.add_directory(ROOT_CLUSTER, "etc")
-    users_cluster = disk.add_directory(ROOT_CLUSTER, "Users")
-    sys_cluster = disk.add_directory(ROOT_CLUSTER, "System")
-    tmp_cluster = disk.add_directory(ROOT_CLUSTER, "tmp")
-    test_cluster = disk.add_directory(ROOT_CLUSTER, "test")
-    lib_cluster = disk.add_directory(ROOT_CLUSTER, "lib")
-    usr_cluster = disk.add_directory(ROOT_CLUSTER, "usr")
-    usr_include_cluster = disk.add_directory(usr_cluster, "include")
-    usr_lib_cluster = disk.add_directory(usr_cluster, "lib")
+    # macOS / Darwin Canonical Hierarchy
+    disk.find_or_create_dir("Applications")
 
-    motd_content = b"Welcome to XIU Operating System!\nHybrid Mach/BSD Kernel with persistent FAT32 storage.\n"
+    disk.find_or_create_dir("Library")
+    disk.find_or_create_dir("Library/Preferences")
+    disk.find_or_create_dir("Library/Application Support")
+    disk.find_or_create_dir("Library/Frameworks")
+    disk.find_or_create_dir("Library/Fonts")
+    disk.find_or_create_dir("Library/Audio")
+    disk.find_or_create_dir("Library/Logs")
+
+    disk.find_or_create_dir("System")
+    disk.find_or_create_dir("System/Library")
+    coreservices_cluster = disk.find_or_create_dir("System/Library/CoreServices")
+    disk.find_or_create_dir("System/Library/Frameworks")
+    disk.find_or_create_dir("System/Library/Fonts")
+    disk.find_or_create_dir("System/DriverKit")
+    disk.find_or_create_dir("System/Volumes")
+
+    disk.find_or_create_dir("Users")
+    shared_cluster = disk.find_or_create_dir("Users/Shared")
+    root_home_cluster = disk.find_or_create_dir("Users/root")
+
+    disk.find_or_create_dir("Volumes")
+    disk.find_or_create_dir("Volumes/Macintosh HD")
+
+    disk.find_or_create_dir("Network")
+    bin_cluster = disk.find_or_create_dir("bin")
+    disk.find_or_create_dir("sbin")
+
+    disk.find_or_create_dir("usr")
+    usr_bin_cluster = disk.find_or_create_dir("usr/bin")
+    disk.find_or_create_dir("usr/sbin")
+    usr_lib_cluster = disk.find_or_create_dir("usr/lib")
+    usr_include_cluster = disk.find_or_create_dir("usr/include")
+    disk.find_or_create_dir("usr/share")
+    disk.find_or_create_dir("usr/local")
+    disk.find_or_create_dir("usr/local/bin")
+    disk.find_or_create_dir("usr/local/lib")
+    disk.find_or_create_dir("usr/local/include")
+
+    disk.find_or_create_dir("private")
+    etc_cluster = disk.find_or_create_dir("private/etc")
+    disk.find_or_create_dir("private/var")
+    disk.find_or_create_dir("private/var/log")
+    disk.find_or_create_dir("private/var/run")
+    disk.find_or_create_dir("private/var/tmp")
+    disk.find_or_create_dir("private/var/db")
+    disk.find_or_create_dir("private/var/root")
+    disk.find_or_create_dir("private/tmp")
+
+    disk.find_or_create_dir("cores")
+    disk.find_or_create_dir("opt")
+
+    motd_content = b"Welcome to XIU Operating System!\nApple Darwin / Mach-BSD Hybrid Architecture.\n"
     disk.add_file(etc_cluster, "motd", motd_content)
-    version_content = b"XIU OS v0.1.0 (x86_64-console)\n"
+    version_content = b"XIU OS v0.1.0 (Darwin 24.0.0 x86_64)\n"
     disk.add_file(etc_cluster, "version", version_content)
-    welcome_content = b"Hello from persistent user storage on disk0!\n"
-    disk.add_file(users_cluster, "welcome.txt", welcome_content)
-    hello_content = b'#include <stdio.h>\n\nint main() {\n    printf("Hello from self-hosted XIU C compiler!\\n");\n    return 0;\n}\n'
-    disk.add_file(test_cluster, "hello.c", hello_content)
+    hosts_content = b"127.0.0.1\tlocalhost\n10.0.2.15\txiu-mac\n"
+    disk.add_file(etc_cluster, "hosts", hosts_content)
 
-    # Copy runtime objects and libraries
+    sysversion_content = b'<?xml version="1.0" encoding="UTF-8"?>\n<dict>\n  <key>ProductBuildVersion</key>\n  <string>24A348</string>\n  <key>ProductName</key>\n  <string>XIU OS</string>\n  <key>ProductVersion</key>\n  <string>15.0</string>\n</dict>\n'
+    disk.add_file(coreservices_cluster, "SysVer.plist", sysversion_content)
+    disk.add_file(coreservices_cluster, "SystemVersion.plist", sysversion_content)
+
+    welcome_content = b"Hello from persistent user storage on disk0!\n"
+    disk.add_file(shared_cluster, "welcome.txt", welcome_content)
+    hello_content = b'#include <stdio.h>\n\nint main() {\n    printf("Hello from self-hosted XIU C compiler!\\n");\n    return 0;\n}\n'
+    disk.add_file(shared_cluster, "hello.c", hello_content)
+    disk.add_file(root_home_cluster, "hello.c", hello_content)
+
+    # Copy Mach-O runtime objects and libraries into /usr/lib
     crt0_path = os.path.join(bin_dir, "CMakeFiles", "xiu_crt0.dir", "libsystem", "crt0.S.obj")
     libsystem_path = os.path.join(bin_dir, "libsystem_xiu.a")
     if os.path.isfile(crt0_path):
         with open(crt0_path, "rb") as f:
             crt0_data = f.read()
-        disk.add_file(lib_cluster, "crt0.o", crt0_data)
         disk.add_file(usr_lib_cluster, "crt0.o", crt0_data)
     if os.path.isfile(libsystem_path):
         with open(libsystem_path, "rb") as f:
             libc_data = f.read()
-        disk.add_file(lib_cluster, "libc.a", libc_data)
-        disk.add_file(lib_cluster, "libsystem_xiu.a", libc_data)
         disk.add_file(usr_lib_cluster, "libc.a", libc_data)
         disk.add_file(usr_lib_cluster, "libsystem_xiu.a", libc_data)
 
-    # Copy C headers into /usr/include
-    inc_dir = os.path.join(workspace, "usr", "libsystem", "include")
-    if os.path.isdir(inc_dir):
-        for h in os.listdir(inc_dir):
-            h_path = os.path.join(inc_dir, h)
-            if os.path.isfile(h_path):
-                with open(h_path, "rb") as f:
-                    disk.add_file(usr_include_cluster, h, f.read())
+    # Copy C header trees into /usr/include
+    copy_include_tree(disk, "usr/include", os.path.join(workspace, "usr", "libsystem", "include"))
+    copy_include_tree(disk, "usr/include", os.path.join(workspace, "tinycc", "include"))
+    copy_include_tree(disk, "usr/include/kernel", os.path.join(workspace, "kernel", "include", "kernel"))
+    copy_include_tree(disk, "usr/include/net", os.path.join(workspace, "kernel", "include", "net"))
 
     copied_count = 0
     for name in binaries:
@@ -304,14 +517,17 @@ def main():
         if os.path.isfile(bin_path):
             with open(bin_path, "rb") as f:
                 data = f.read()
-            disk.add_file(bin_cluster, name, data)
+            target_dir = get_target_dir_for_binary(name)
+            target_cluster = disk.find_or_create_dir(target_dir)
+            disk.add_file(target_cluster, name, data)
             copied_count += 1
 
     disk.write_fat_tables()
     with open(out_path, "wb") as f:
         f.write(disk.image)
 
-    print(f"[make_disk] Successfully created {out_path} ({copied_count} binaries installed in /bin).")
+    print(f"[make_disk] Successfully created {out_path} ({copied_count} binaries installed in Darwin hierarchy).")
+
 
 if __name__ == "__main__":
     main()

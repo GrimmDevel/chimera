@@ -149,4 +149,8 @@ void scheduler_remove_thread(xiu_thread_t *th);
 xiu_thread_t *current_thread(void);
 xiu_task_t *current_task(void);
 
+xiu_error_t copyin(const void *uaddr, void *kaddr, usize len);
+xiu_error_t copyout(const void *kaddr, void *uaddr, usize len);
+xiu_error_t copyinstr(const void *uaddr, char *kaddr, usize maxlen, usize *lencopied);
+
 #endif

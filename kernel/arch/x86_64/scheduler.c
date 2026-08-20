@@ -44,6 +44,7 @@ void thread_init_stack(xiu_thread_t *th, void *entry, void *stack) {
 
   u64 *sp = (u64 *)kstack_top;
   *(--sp) = (u64)thread_launcher;
+  *(--sp) = 0x202; // rflags (IF=1)
   *(--sp) = 0; // rbp
   *(--sp) = 0; // rbx
   *(--sp) = 0; // r12
@@ -60,7 +61,7 @@ void thread_init_fork_stack(xiu_thread_t *th, void *entry, void *stack) {
   thread_init_stack(th, entry, stack);
   
   u64 *sp = (u64 *)th->th_saved_sp;
-  sp[6] = (u64)fork_thread_launcher;
+  sp[7] = (u64)fork_thread_launcher;
 }
 
 static void thread_launcher(void) {

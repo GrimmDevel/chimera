@@ -1,280 +1,500 @@
-/* =============================================================================
- * XIU Operating System — Virtual File System & Root Hierarchy
- * kernel/vfs/vfs.c
- * ============================================================================= */
-
-#include <kernel/vfs_node.h>
 #include <kernel/panic.h>
 #include <kernel/spinlock.h>
+#include <kernel/vfs_node.h>
+#include <kernel/proc.h>
 
 vnode_t *vfs_root_vnode = nullptr;
 
-/* ── Flat vnode registry ─────────────────────────────────────────────────── *
- * Open-addressing hash table: path string → vnode pointer.
- * Sized for Stage 2: max 128 entries (devfs, synthetics, a few app vnodes).
- * The table is append-only — vnodes are never removed in Stage 2.
- *
- * Key insight: we don't need a full pathname resolution engine yet.
- * vfs_lookup() splits the path into components but checks the full path
- * first as a fast-path for absolute device paths (/dev/fb0, etc.).
- * ─────────────────────────────────────────────────────────────────────────── */
-#define VFS_REGISTRY_SIZE   128
+#define VFS_REGISTRY_SIZE 4096
 
 typedef struct vfs_entry {
-    char      ve_path[256];
-    vnode_t  *ve_vnode;
+  char ve_path[256];
+  vnode_t *ve_vnode;
 } vfs_entry_t;
 
-static vfs_entry_t  s_registry[VFS_REGISTRY_SIZE];
-static spinlock_t   s_registry_lock = SPINLOCK_INIT;
+static vfs_entry_t s_registry[VFS_REGISTRY_SIZE];
+static spinlock_t s_registry_lock = SPINLOCK_INIT;
 
-// djb2 hash over the path string
 static u32 vfs_hash(const char *path) {
-    u32 h = 5381;
-    while (*path) h = ((h << 5) + h) ^ (u8)(*path++);
-    return h;
+  u32 h = 5381;
+  while (*path)
+    h = ((h << 5) + h) ^ (u8)(*path++);
+  return h;
 }
 
-// vfs_register
+static int k_strcasecmp(const char *s1, const char *s2) {
+  while (*s1 && *s2) {
+    char c1 = *s1;
+    char c2 = *s2;
+    if (c1 >= 'A' && c1 <= 'Z')
+      c1 += 32;
+    if (c2 >= 'A' && c2 <= 'Z')
+      c2 += 32;
+    if (c1 != c2)
+      return c1 - c2;
+    s1++;
+    s2++;
+  }
+  return (int)(u8)*s1 - (int)(u8)*s2;
+}
+
+static int k_strncasecmp(const char *s1, const char *s2, usize n) {
+  while (n && *s1 && *s2) {
+    char c1 = *s1;
+    char c2 = *s2;
+    if (c1 >= 'A' && c1 <= 'Z')
+      c1 += 32;
+    if (c2 >= 'A' && c2 <= 'Z')
+      c2 += 32;
+    if (c1 != c2)
+      return c1 - c2;
+    s1++;
+    s2++;
+    n--;
+  }
+  if (n == 0)
+    return 0;
+  return (int)(u8)*s1 - (int)(u8)*s2;
+}
+
+void vfs_normalize_path(const char *in, char *out, usize cap) {
+  if (!in || !out || cap == 0) {
+    if (out && cap > 0)
+      out[0] = '\0';
+    return;
+  }
+
+  const char *p = in;
+  for (const char *c = in; *c != '\0'; c++) {
+    if (*c == ':') {
+      p = c + 1;
+      break;
+    }
+  }
+
+  while (*p == ' ')
+    p++;
+
+  char temp[256];
+  usize ti = 0;
+
+  if (p[0] != '/') {
+    // prepend current working directory
+    xiu_task_t *task = current_task();
+    xiu_proc_t *proc = task ? task->ta_proc : nullptr;
+    const char *cwd_str = nullptr;
+    if (proc && proc->p_cwd) {
+      if (proc->p_cwd->v_op && __builtin_strcmp(proc->p_cwd->v_op->vop_name, "fat32_dir") == 0) {
+        typedef struct {
+          u32 start_cluster;
+          u32 file_size;
+          bool is_dir;
+          char path[256];
+        } fat32_path_info_t;
+        fat32_path_info_t *nd = (fat32_path_info_t *)proc->p_cwd->v_data;
+        if (nd && nd->path[0]) cwd_str = nd->path;
+      }
+      if (!cwd_str && proc->p_cwd->v_name[0]) {
+        cwd_str = proc->p_cwd->v_name;
+      }
+    }
+    if (!cwd_str || cwd_str[0] == '\0') {
+      cwd_str = "/";
+    }
+
+    usize clen = __builtin_strlen(cwd_str);
+    for (usize i = 0; i < clen && ti + 1 < sizeof(temp); i++) {
+      temp[ti++] = cwd_str[i];
+    }
+    if (ti == 0 || temp[ti - 1] != '/') {
+      temp[ti++] = '/';
+    }
+  }
+
+  while (*p && ti + 1 < sizeof(temp)) {
+    if (*p == '/') {
+      if (ti > 0 && temp[ti - 1] == '/') {
+        p++;
+        continue;
+      }
+    }
+    temp[ti++] = *p++;
+  }
+  temp[ti] = '\0';
+
+  char segs[16][64];
+  int seg_count = 0;
+
+  char *cur = temp;
+  while (*cur) {
+    while (*cur == '/')
+      cur++;
+    if (!*cur)
+      break;
+    char *end = cur;
+    while (*end && *end != '/')
+      end++;
+
+    usize len = (usize)(end - cur);
+    if (len == 1 && cur[0] == '.') {
+    } else if (len == 2 && cur[0] == '.' && cur[1] == '.') {
+      if (seg_count > 0)
+        seg_count--;
+    } else if (seg_count < 16 && len < 64) {
+      __builtin_memcpy(segs[seg_count], cur, len);
+      segs[seg_count][len] = '\0';
+      seg_count++;
+    }
+    cur = end;
+  }
+
+  char reconstructed[256];
+  usize ri = 0;
+  reconstructed[ri++] = '/';
+
+  for (int i = 0; i < seg_count; i++) {
+    usize slen = __builtin_strlen(segs[i]);
+    if (ri + slen + 1 >= sizeof(reconstructed))
+      break;
+    if (ri > 1)
+      reconstructed[ri++] = '/';
+    __builtin_memcpy(reconstructed + ri, segs[i], slen);
+    ri += slen;
+  }
+  reconstructed[ri] = '\0';
+
+  // darwin symlinks
+  const char *final_src = reconstructed;
+  char aliased[256];
+
+  if (__builtin_strcmp(reconstructed, "/etc") == 0 ||
+      k_strncasecmp(reconstructed, "/etc/", 5) == 0) {
+    __builtin_strncpy(aliased, "/private/etc", sizeof(aliased) - 1);
+    usize alen = __builtin_strlen(aliased);
+    __builtin_strncpy(aliased + alen, reconstructed + 4, sizeof(aliased) - alen - 1);
+    aliased[sizeof(aliased) - 1] = '\0';
+    final_src = aliased;
+  } else if (__builtin_strcmp(reconstructed, "/var") == 0 ||
+             k_strncasecmp(reconstructed, "/var/", 5) == 0) {
+    __builtin_strncpy(aliased, "/private/var", sizeof(aliased) - 1);
+    usize alen = __builtin_strlen(aliased);
+    __builtin_strncpy(aliased + alen, reconstructed + 4, sizeof(aliased) - alen - 1);
+    aliased[sizeof(aliased) - 1] = '\0';
+    final_src = aliased;
+  } else if (__builtin_strcmp(reconstructed, "/tmp") == 0 ||
+             k_strncasecmp(reconstructed, "/tmp/", 5) == 0) {
+    __builtin_strncpy(aliased, "/private/tmp", sizeof(aliased) - 1);
+    usize alen = __builtin_strlen(aliased);
+    __builtin_strncpy(aliased + alen, reconstructed + 4, sizeof(aliased) - alen - 1);
+    aliased[sizeof(aliased) - 1] = '\0';
+    final_src = aliased;
+  } else if (__builtin_strcmp(reconstructed, "/lib") == 0 ||
+             k_strncasecmp(reconstructed, "/lib/", 5) == 0) {
+    __builtin_strncpy(aliased, "/usr/lib", sizeof(aliased) - 1);
+    usize alen = __builtin_strlen(aliased);
+    __builtin_strncpy(aliased + alen, reconstructed + 4, sizeof(aliased) - alen - 1);
+    aliased[sizeof(aliased) - 1] = '\0';
+    final_src = aliased;
+  }
+
+  __builtin_strncpy(out, final_src, cap - 1);
+  out[cap - 1] = '\0';
+}
+
 xiu_error_t vfs_register(const char *path, vnode_t *vp) {
-    XIU_ASSERT(path != nullptr);
-    XIU_ASSERT(vp   != nullptr);
+  XIU_ASSERT(path != nullptr);
+  XIU_ASSERT(vp != nullptr);
 
-    irq_flags_t irq = spinlock_lock_irqsave(&s_registry_lock);
+  char norm[256];
+  vfs_normalize_path(path, norm, sizeof(norm));
 
-    u32 idx = vfs_hash(path) % VFS_REGISTRY_SIZE;
-    u32 probe = 0;
+  irq_flags_t irq = spinlock_lock_irqsave(&s_registry_lock);
 
-    while (probe < VFS_REGISTRY_SIZE) {
-        vfs_entry_t *e = &s_registry[idx];
-        if (e->ve_vnode == nullptr) {
-            // empty slot — insert here
-            __builtin_strncpy(e->ve_path, path, 255);
-            e->ve_path[255] = '\0';
-            e->ve_vnode = vp;
-            spinlock_unlock_irqrestore(&s_registry_lock, irq);
-            return XIU_SUCCESS;
-        }
-        if (__builtin_strcmp(e->ve_path, path) == 0) {
-            // already registered — update
-            e->ve_vnode = vp;
-            spinlock_unlock_irqrestore(&s_registry_lock, irq);
-            return XIU_SUCCESS;
-        }
-        idx = (idx + 1) % VFS_REGISTRY_SIZE;
-        probe++;
+  u32 idx = vfs_hash(norm) % VFS_REGISTRY_SIZE;
+  u32 probe = 0;
+
+  while (probe < VFS_REGISTRY_SIZE) {
+    vfs_entry_t *e = &s_registry[idx];
+    if (e->ve_vnode == nullptr) {
+      __builtin_strncpy(e->ve_path, norm, 255);
+      e->ve_path[255] = '\0';
+      e->ve_vnode = vp;
+      spinlock_unlock_irqrestore(&s_registry_lock, irq);
+      return XIU_SUCCESS;
     }
+    if (__builtin_strcmp(e->ve_path, norm) == 0) {
+      e->ve_vnode = vp;
+      spinlock_unlock_irqrestore(&s_registry_lock, irq);
+      return XIU_SUCCESS;
+    }
+    idx = (idx + 1) % VFS_REGISTRY_SIZE;
+    probe++;
+  }
 
-    spinlock_unlock_irqrestore(&s_registry_lock, irq);
-    kprintf("[vfs] vfs_register: registry full, cannot register '%s'\n", path);
-    return XIU_ERR_OVERFLOW;
+  spinlock_unlock_irqrestore(&s_registry_lock, irq);
+  return XIU_ERR_OVERFLOW;
 }
 
-/* ── vfs_lookup ──────────────────────────────────────────────────────────── *
- * Resolve an absolute path to a vnode.
- *
- * Fast-path: exact match in the hash table (O(1) average).
- * Returns XIU_SUCCESS with *vp_out set, or XIU_ERR_NOENT.
- * ─────────────────────────────────────────────────────────────────────────── */
+static void vfs_path_to_83(const char *in, char *out, usize cap) {
+  if (!in || !out || cap == 0)
+    return;
+  usize oi = 0;
+  while (*in && oi + 1 < cap) {
+    if (*in == '/') {
+      out[oi++] = *in++;
+      continue;
+    }
+    const char *seg_start = in;
+    while (*in && *in != '/')
+      in++;
+    usize seg_len = (usize)(in - seg_start);
+
+    const char *dot = nullptr;
+    for (usize i = 0; i < seg_len; i++) {
+      if (seg_start[i] == '.') {
+        dot = seg_start + i;
+        break;
+      }
+    }
+
+    usize name_len = dot ? (usize)(dot - seg_start) : seg_len;
+    if (name_len > 8)
+      name_len = 8;
+    for (usize i = 0; i < name_len && oi + 1 < cap; i++) {
+      char c = seg_start[i];
+      if (c >= 'A' && c <= 'Z')
+        c += 32;
+      out[oi++] = c;
+    }
+
+    if (dot) {
+      if (oi + 1 < cap)
+        out[oi++] = '.';
+      const char *ext_start = dot + 1;
+      usize ext_len = (usize)((seg_start + seg_len) - ext_start);
+      if (ext_len > 3)
+        ext_len = 3;
+      for (usize i = 0; i < ext_len && oi + 1 < cap; i++) {
+        char c = ext_start[i];
+        if (c >= 'A' && c <= 'Z')
+          c += 32;
+        out[oi++] = c;
+      }
+    }
+  }
+  out[oi] = '\0';
+}
+
 xiu_error_t vfs_lookup(const char *path, vnode_t **vp_out) {
-    XIU_ASSERT(path   != nullptr);
-    XIU_ASSERT(vp_out != nullptr);
+  XIU_ASSERT(path != nullptr);
+  XIU_ASSERT(vp_out != nullptr);
 
-    if (__builtin_strcmp(path, ".") == 0) {
-        path = "/";
+  char norm[256];
+  vfs_normalize_path(path, norm, sizeof(norm));
+
+  irq_flags_t irq = spinlock_lock_irqsave(&s_registry_lock);
+
+  u32 idx = vfs_hash(norm) % VFS_REGISTRY_SIZE;
+  u32 probe = 0;
+
+  while (probe < VFS_REGISTRY_SIZE) {
+    vfs_entry_t *e = &s_registry[idx];
+    if (e->ve_vnode == nullptr) {
+      break;
     }
+    if (__builtin_strcmp(e->ve_path, norm) == 0) {
+      *vp_out = e->ve_vnode;
+      spinlock_unlock_irqrestore(&s_registry_lock, irq);
+      return XIU_SUCCESS;
+    }
+    idx = (idx + 1) % VFS_REGISTRY_SIZE;
+    probe++;
+  }
 
-    irq_flags_t irq = spinlock_lock_irqsave(&s_registry_lock);
+  // hfs+/apfs case-insensitive fallback
+  for (u32 i = 0; i < VFS_REGISTRY_SIZE; i++) {
+    vfs_entry_t *e = &s_registry[i];
+    if (e->ve_vnode && e->ve_path[0] != '\0') {
+      if (k_strcasecmp(e->ve_path, norm) == 0) {
+        *vp_out = e->ve_vnode;
+        spinlock_unlock_irqrestore(&s_registry_lock, irq);
+        return XIU_SUCCESS;
+      }
+    }
+  }
 
-    u32 idx = vfs_hash(path) % VFS_REGISTRY_SIZE;
-    u32 probe = 0;
-
+  char path83[256];
+  vfs_path_to_83(norm, path83, sizeof(path83));
+  if (__builtin_strcmp(norm, path83) != 0) {
+    idx = vfs_hash(path83) % VFS_REGISTRY_SIZE;
+    probe = 0;
     while (probe < VFS_REGISTRY_SIZE) {
-        vfs_entry_t *e = &s_registry[idx];
-        if (e->ve_vnode == nullptr) {
-            break;  // empty slot = not found
-        }
-        if (__builtin_strcmp(e->ve_path, path) == 0) {
-            *vp_out = e->ve_vnode;
-            spinlock_unlock_irqrestore(&s_registry_lock, irq);
-            return XIU_SUCCESS;
-        }
-        idx = (idx + 1) % VFS_REGISTRY_SIZE;
-        probe++;
+      vfs_entry_t *e = &s_registry[idx];
+      if (e->ve_vnode == nullptr) {
+        break;
+      }
+      if (__builtin_strcmp(e->ve_path, path83) == 0) {
+        *vp_out = e->ve_vnode;
+        spinlock_unlock_irqrestore(&s_registry_lock, irq);
+        return XIU_SUCCESS;
+      }
+      idx = (idx + 1) % VFS_REGISTRY_SIZE;
+      probe++;
     }
+  }
 
-    spinlock_unlock_irqrestore(&s_registry_lock, irq);
-    return XIU_ERR_NOTFOUND;
+  spinlock_unlock_irqrestore(&s_registry_lock, irq);
+  return XIU_ERR_NOTFOUND;
 }
 
 const char *vfs_path_for_vnode(vnode_t *vp) {
-    if (!vp) return nullptr;
-    for (u32 i = 0; i < VFS_REGISTRY_SIZE; i++) {
-        if (s_registry[i].ve_vnode == vp)
-            return s_registry[i].ve_path;
-    }
+  if (!vp)
     return nullptr;
+  for (u32 i = 0; i < VFS_REGISTRY_SIZE; i++) {
+    if (s_registry[i].ve_vnode == vp)
+      return s_registry[i].ve_path;
+  }
+  return nullptr;
 }
 
 xiu_error_t vfs_readdir_flat(vnode_t *dvp, u32 index, char *name_out,
                              usize name_cap, vnode_t **child_out) {
-    const char *dir = vfs_path_for_vnode(dvp);
-    if (!dir || !name_out || name_cap == 0 || !child_out)
-        return XIU_ERR_INVALID;
+  const char *dir = vfs_path_for_vnode(dvp);
+  if (!dir || !name_out || name_cap == 0 || !child_out)
+    return XIU_ERR_INVALID;
 
-    usize dir_len = __builtin_strlen(dir);
-    bool root = (dir_len == 1 && dir[0] == '/');
-    u32 seen = 0;
+  usize dir_len = __builtin_strlen(dir);
+  bool root = (dir_len == 1 && dir[0] == '/');
+  u32 seen = 0;
 
-    for (u32 i = 0; i < VFS_REGISTRY_SIZE; i++) {
-        const char *path = s_registry[i].ve_path;
-        vnode_t *vp = s_registry[i].ve_vnode;
-        if (!vp || path[0] == '\0')
-            continue;
-        if (__builtin_strcmp(path, dir) == 0)
-            continue;
+  for (u32 i = 0; i < VFS_REGISTRY_SIZE; i++) {
+    const char *path = s_registry[i].ve_path;
+    vnode_t *vp = s_registry[i].ve_vnode;
+    if (!vp || path[0] == '\0')
+      continue;
+    if (__builtin_strcmp(path, dir) == 0)
+      continue;
 
-        const char *rest = nullptr;
-        if (root) {
-            if (path[0] != '/')
-                continue;
-            rest = path + 1;
-        } else {
-            bool prefix_match = true;
-            for (usize j = 0; j < dir_len; j++) {
-                if (path[j] != dir[j]) {
-                    prefix_match = false;
-                    break;
-                }
-            }
-            if (!prefix_match || path[dir_len] != '/')
-                continue;
-            rest = path + dir_len + 1;
-        }
-
-        if (!rest || rest[0] == '\0')
-            continue;
-        bool direct = true;
-        for (const char *p = rest; *p; p++) {
-            if (*p == '/') {
-                direct = false;
-                break;
-            }
-        }
-        if (!direct)
-            continue;
-
-        if (seen++ != index)
-            continue;
-
-        __builtin_strncpy(name_out, rest, name_cap - 1);
-        name_out[name_cap - 1] = '\0';
-        *child_out = vp;
-        return XIU_SUCCESS;
-    }
-
-    return XIU_ERR_NOTFOUND;
-}
-
-// static vnode pool for synthetic directories
-#define SYNTH_DIR_POOL_SIZE 64
-static vnode_t     s_synth_pool[SYNTH_DIR_POOL_SIZE];
-static u32         s_synth_count = 0;
-static vnode_ops_t s_root_ops    = { .vop_name = "rootfs" };
-static vnode_ops_t s_synthdir_ops = { .vop_name = "synthdir" };
-static vnode_t     s_root_vnode_obj;
-
-static xiu_error_t create_synthetic_dir(const char *name) {
-    if (s_synth_count >= SYNTH_DIR_POOL_SIZE) {
-        kprintf("[vfs] WARNING: synth dir pool exhausted, skipping /%s\n", name);
-        return XIU_ERR_OVERFLOW;
-    }
-
-    vnode_t *vp = &s_synth_pool[s_synth_count++];
-    __builtin_memset(vp, 0, sizeof(vnode_t));
-    vp->v_signature = XIU_VNODE_MAGIC;
-    vp->v_type      = VDIR;
-    vp->v_flags     = VN_SYSTEM;
-    vp->v_op        = &s_synthdir_ops;
-    __builtin_strncpy(vp->v_name, name, sizeof(vp->v_name) - 1);
-
-    // build and register the full path
-    char fullpath[260];
-    fullpath[0] = '/';
-    __builtin_strncpy(fullpath + 1, name, 254);
-    fullpath[255] = '\0';
-
-    kprintf("        vfs: creating /%s...\n", name);
-    return vfs_register(fullpath, vp);
-}
-
-xiu_error_t vfs_register_module(const char *path, void *addr, usize size) {
-    if (s_synth_count >= SYNTH_DIR_POOL_SIZE) return XIU_ERR_OVERFLOW;
-    
-    // strip drive prefixes if present
-    const char *p = path;
-    for (const char *c = path; *c != '\0'; c++) {
-        if (*c == ':') {
-            p = c + 1;
-            break;
-        }
-    }
-    char norm_path[256];
-    if (p[0] != '/') {
-        norm_path[0] = '/';
-        __builtin_strncpy(norm_path + 1, p, 254);
+    const char *rest = nullptr;
+    if (root) {
+      if (path[0] != '/')
+        continue;
+      rest = path + 1;
     } else {
-        __builtin_strncpy(norm_path, p, 255);
+      bool prefix_match = true;
+      for (usize j = 0; j < dir_len; j++) {
+        if (path[j] != dir[j]) {
+          prefix_match = false;
+          break;
+        }
+      }
+      if (!prefix_match || path[dir_len] != '/')
+        continue;
+      rest = path + dir_len + 1;
     }
-    norm_path[255] = '\0';
 
-    vnode_t *vp = &s_synth_pool[s_synth_count++];
-    __builtin_memset(vp, 0, sizeof(vnode_t));
-    vp->v_signature = XIU_VNODE_MAGIC;
-    vp->v_type      = VREG;
-    vp->v_flags     = VN_SYSTEM;
-    vp->v_op        = &s_root_ops; // modules are read-only blocks
-    vp->v_data      = addr;
-    vp->v_attr.va_size = size;
-    
-    // copy name from last component of path
-    const char *name = norm_path;
-    for(const char *s = norm_path; *s; s++) if(*s == '/') name = s + 1;
-    __builtin_strncpy(vp->v_name, name, sizeof(vp->v_name) - 1);
+    if (!rest || rest[0] == '\0')
+      continue;
 
-    return vfs_register(norm_path, vp);
-}
+    bool direct = true;
+    for (const char *p = rest; *p; p++) {
+      if (*p == '/') {
+        direct = false;
+        break;
+      }
+    }
+    if (!direct)
+      continue;
 
-xiu_error_t vfs_init(void) {
-    __builtin_memset(s_registry, 0, sizeof(s_registry));
+    bool duplicate = false;
+    for (u32 prev = 0; prev < i; prev++) {
+      const char *prev_path = s_registry[prev].ve_path;
+      if (!s_registry[prev].ve_vnode || prev_path[0] == '\0')
+        continue;
+      const char *prev_rest = nullptr;
+      if (root) {
+        if (prev_path[0] == '/')
+          prev_rest = prev_path + 1;
+      } else {
+        if (__builtin_strncmp(prev_path, dir, dir_len) == 0 &&
+            prev_path[dir_len] == '/')
+          prev_rest = prev_path + dir_len + 1;
+      }
+      if (!prev_rest)
+        continue;
 
-    // create and register root vnode
-    vfs_root_vnode = &s_root_vnode_obj;
-    __builtin_memset(vfs_root_vnode, 0, sizeof(vnode_t));
-    vfs_root_vnode->v_signature = XIU_VNODE_MAGIC;
-    vfs_root_vnode->v_type      = VDIR;
-    vfs_root_vnode->v_flags     = VN_ROOT | VN_SYSTEM;
-    vfs_root_vnode->v_op        = &s_root_ops;
-    __builtin_strncpy(vfs_root_vnode->v_name, "/", 2);
+      bool prev_direct = true;
+      for (const char *p = prev_rest; *p; p++) {
+        if (*p == '/') {
+          prev_direct = false;
+          break;
+        }
+      }
+      if (prev_direct && __builtin_strcmp(prev_rest, rest) == 0) {
+        duplicate = true;
+        break;
+      }
+    }
+    if (duplicate)
+      continue;
 
-    vfs_register("/", vfs_root_vnode);
+    if (seen++ != index)
+      continue;
+
+    __builtin_strncpy(name_out, rest, name_cap - 1);
+    name_out[name_cap - 1] = '\0';
+    *child_out = vp;
     return XIU_SUCCESS;
+  }
+
+  return XIU_ERR_NOTFOUND;
 }
+
+#define BOOT_MODULE_MAX 64
+static vnode_t s_boot_module_vnodes[BOOT_MODULE_MAX];
+static u32 s_boot_module_count = 0;
+static vnode_ops_t s_root_ops = {.vop_name = "rootfs"};
+static vnode_t s_root_vnode_obj;
 
 extern void devfs_init(void);
 
-xiu_error_t vfs_build_root_hierarchy(void) {
-    create_synthetic_dir("bin");
-    create_synthetic_dir("sbin");
-    create_synthetic_dir("etc");
-    create_synthetic_dir("dev");
-    create_synthetic_dir("tmp");
-    create_synthetic_dir("Users");
-    create_synthetic_dir("System");
-    create_synthetic_dir("Library");
-    create_synthetic_dir("Volumes");
-    create_synthetic_dir("private");
+xiu_error_t vfs_register_module(const char *path, void *addr, usize size) {
+  if (s_boot_module_count >= BOOT_MODULE_MAX)
+    return XIU_ERR_OVERFLOW;
 
-    devfs_init();
-    return XIU_SUCCESS;
+  char norm_path[256];
+  vfs_normalize_path(path, norm_path, sizeof(norm_path));
+
+  vnode_t *vp = &s_boot_module_vnodes[s_boot_module_count++];
+  __builtin_memset(vp, 0, sizeof(vnode_t));
+  vp->v_signature = XIU_VNODE_MAGIC;
+  vp->v_type = VREG;
+  vp->v_flags = VN_SYSTEM;
+  vp->v_op = &s_root_ops;
+  vp->v_data = addr;
+  vp->v_attr.va_size = size;
+
+  const char *name = norm_path;
+  for (const char *s = norm_path; *s; s++)
+    if (*s == '/')
+      name = s + 1;
+  __builtin_strncpy(vp->v_name, name, sizeof(vp->v_name) - 1);
+
+  return vfs_register(norm_path, vp);
+}
+
+xiu_error_t vfs_init(void) {
+  __builtin_memset(s_registry, 0, sizeof(s_registry));
+
+  vfs_root_vnode = &s_root_vnode_obj;
+  __builtin_memset(vfs_root_vnode, 0, sizeof(vnode_t));
+  vfs_root_vnode->v_signature = XIU_VNODE_MAGIC;
+  vfs_root_vnode->v_type = VDIR;
+  vfs_root_vnode->v_flags = VN_ROOT | VN_SYSTEM;
+  vfs_root_vnode->v_op = &s_root_ops;
+  __builtin_strncpy(vfs_root_vnode->v_name, "/", 2);
+
+  vfs_register("/", vfs_root_vnode);
+  devfs_init();
+  return XIU_SUCCESS;
 }

@@ -70,6 +70,7 @@ int umask(int mask);
 int usleep(unsigned int usec);
 unsigned int sleep(unsigned int seconds);
 int sched_yield(void);
+int getpagesize(void);
 
 // xiu Specific
 void xiu_libc_init_terminal(u32 port, u64 win_id);

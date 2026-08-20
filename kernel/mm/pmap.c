@@ -15,7 +15,23 @@ extern void kprintf(const char *fmt, ...);
 
 extern void pmm_retain_page(xiu_paddr_t addr);
 extern void pmm_release_page(xiu_paddr_t addr);
-extern u16 pmm_get_refcount(xiu_paddr_t addr);
+#include <kernel/spinlock.h>
+
+static u64 s_kernel_pml4_phys = 0;
+static spinlock_t s_pmap_lock = SPINLOCK_INIT;
+
+void pmap_bootstrap(void) {
+    u64 cr3;
+    __asm__ volatile("mov %%cr3, %0" : "=r"(cr3));
+    s_kernel_pml4_phys = cr3 & ~0xFFFULL;
+    spinlock_init(&s_pmap_lock);
+    kprintf("        pmap: master kernel PML4 at phys=0x%llx, HHDM at virt=0x%llx\n",
+            (unsigned long long)s_kernel_pml4_phys, (unsigned long long)g_hhdm_base);
+}
+
+u64 pmap_kernel_pml4(void) {
+    return s_kernel_pml4_phys;
+}
 
 static inline u64 *get_table_ptr(u64 phys) {
     return (u64 *)(phys + g_hhdm_base);

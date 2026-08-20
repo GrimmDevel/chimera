@@ -20,7 +20,7 @@ extern xiu_error_t copyin(const void *uaddr, void *kaddr, usize len);
 fat32_fs_t g_fat32;
 static spinlock_t s_fat_lock = SPINLOCK_INIT;
 
-#define FAT32_MAX_VNODES 256
+#define FAT32_MAX_VNODES 4096
 
 typedef struct {
     u32 start_cluster;
@@ -747,11 +747,40 @@ xiu_error_t fat32_unlink_file(const char *path) {
     return XIU_SUCCESS;
 }
 
-// directory scanner
+static void fat32_map_canonical_name(char *name, usize max_len, bool is_dir) {
+    (void)max_len;
+    if (is_dir) {
+        if (__builtin_strcmp(name, "applicat") == 0) __builtin_strncpy(name, "Applications", max_len - 1);
+        else if (__builtin_strcmp(name, "library") == 0) __builtin_strncpy(name, "Library", max_len - 1);
+        else if (__builtin_strcmp(name, "system") == 0) __builtin_strncpy(name, "System", max_len - 1);
+        else if (__builtin_strcmp(name, "users") == 0) __builtin_strncpy(name, "Users", max_len - 1);
+        else if (__builtin_strcmp(name, "volumes") == 0) __builtin_strncpy(name, "Volumes", max_len - 1);
+        else if (__builtin_strcmp(name, "network") == 0) __builtin_strncpy(name, "Network", max_len - 1);
+        else if (__builtin_strcmp(name, "coreserv") == 0) __builtin_strncpy(name, "CoreServices", max_len - 1);
+        else if (__builtin_strcmp(name, "framewor") == 0) __builtin_strncpy(name, "Frameworks", max_len - 1);
+        else if (__builtin_strcmp(name, "preferen") == 0) __builtin_strncpy(name, "Preferences", max_len - 1);
+        else if (__builtin_strcmp(name, "shared") == 0) __builtin_strncpy(name, "Shared", max_len - 1);
+        else if (__builtin_strcmp(name, "fonts") == 0) __builtin_strncpy(name, "Fonts", max_len - 1);
+    } else {
+        if (__builtin_strcmp(name, "sysver.pli") == 0 || __builtin_strcmp(name, "sysver") == 0)
+            __builtin_strncpy(name, "SysVer.plist", max_len - 1);
+        else if (__builtin_strcmp(name, "systemve.pli") == 0 || __builtin_strcmp(name, "systemve") == 0)
+            __builtin_strncpy(name, "SystemVersion.plist", max_len - 1);
+    }
+}
+
+typedef struct {
+    char name[256];
+    u8   checksum;
+    bool valid;
+} fat32_lfn_parser_t;
+
 static void fat32_scan_directory(u32 dir_cluster, const char *parent_path) {
     u32 cluster = dir_cluster;
     u8 cluster_buf[4096];
     u32 current_offset_in_dir = 0;
+    fat32_lfn_parser_t lfn;
+    __builtin_memset(&lfn, 0, sizeof(lfn));
 
     while (cluster >= 2 && cluster < 0x0FFFFFF8) {
         u32 lba = fat32_cluster_to_lba(cluster);
@@ -766,18 +795,77 @@ static void fat32_scan_directory(u32 dir_cluster, const char *parent_path) {
             u8 *entry = cluster_buf + i;
             u32 entry_offset = current_offset_in_dir + i;
 
-            if (entry[0] == 0x00) return; // end of directory
-            if (entry[0] == 0xE5) continue; // deleted
-            if (entry[11] == 0x0F) continue; // lfn
-            if (entry[0] == '.') continue; // . or ..
+            if (entry[0] == 0x00) return;
+            if (entry[0] == 0xE5) {
+                lfn.valid = false;
+                continue;
+            }
+
+            if (entry[11] == 0x0F) {
+                u8 seq = entry[0];
+                u8 seq_num = seq & 0x1F;
+                bool is_last = (seq & 0x40) != 0;
+                u8 chk = entry[13];
+
+                if (is_last) {
+                    __builtin_memset(&lfn, 0, sizeof(lfn));
+                    lfn.checksum = chk;
+                    lfn.valid = true;
+                } else if (!lfn.valid || lfn.checksum != chk) {
+                    lfn.valid = false;
+                    continue;
+                }
+
+                if (seq_num >= 1 && seq_num <= 20) {
+                    usize base_char = (seq_num - 1) * 13;
+                    for (int c = 0; c < 5; c++) {
+                        u16 wc = *(u16 *)(entry + 1 + c * 2);
+                        if (wc == 0x0000 || wc == 0xFFFF) break;
+                        if (base_char + c < 255) lfn.name[base_char + c] = (char)(wc & 0xFF);
+                    }
+                    for (int c = 0; c < 6; c++) {
+                        u16 wc = *(u16 *)(entry + 14 + c * 2);
+                        if (wc == 0x0000 || wc == 0xFFFF) break;
+                        if (base_char + 5 + c < 255) lfn.name[base_char + 5 + c] = (char)(wc & 0xFF);
+                    }
+                    for (int c = 0; c < 2; c++) {
+                        u16 wc = *(u16 *)(entry + 28 + c * 2);
+                        if (wc == 0x0000 || wc == 0xFFFF) break;
+                        if (base_char + 11 + c < 255) lfn.name[base_char + 11 + c] = (char)(wc & 0xFF);
+                    }
+                }
+                continue;
+            }
+
+            if (entry[0] == '.') {
+                lfn.valid = false;
+                continue;
+            }
 
             u8 attr = entry[11];
             bool is_dir = (attr & 0x10) != 0;
             u32 start_cluster = ((u32)*(u16 *)(entry + 20) << 16) | *(u16 *)(entry + 26);
             u32 file_size = *(u32 *)(entry + 28);
 
-            char fname[32];
-            fat32_format_name(entry, fname, sizeof(fname));
+            char fname[256];
+            bool have_lfn = false;
+
+            u8 short_chk = 0;
+            for (int k = 0; k < 11; k++) {
+                short_chk = (((short_chk & 1) << 7) + (short_chk >> 1) + entry[k]) & 0xFF;
+            }
+
+            if (lfn.valid && lfn.checksum == short_chk && lfn.name[0] != '\0') {
+                __builtin_strncpy(fname, lfn.name, sizeof(fname) - 1);
+                fname[sizeof(fname) - 1] = '\0';
+                have_lfn = true;
+            }
+            lfn.valid = false;
+
+            if (!have_lfn) {
+                fat32_format_name(entry, fname, sizeof(fname));
+                fat32_map_canonical_name(fname, sizeof(fname), is_dir);
+            }
 
             char full_path[256];
             if (__builtin_strcmp(parent_path, "") == 0 || __builtin_strcmp(parent_path, "/") == 0) {

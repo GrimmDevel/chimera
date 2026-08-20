@@ -226,6 +226,8 @@ static vnode_ops_t s_disk_ops = {
     .vop_write = dev_disk_write
 };
 
+static vnode_t s_dev_dir_vnode;
+static vnode_ops_t s_dev_dir_ops = { .vop_name = "devfs_dir" };
 static vnode_t s_dev_null_vnode;
 static vnode_t s_dev_serial_vnode;
 static vnode_t s_dev_console_vnode;
@@ -257,6 +259,7 @@ void devfs_init(void) {
 
     pty_init();
 
+    devfs_mknode(&s_dev_dir_vnode,     "dev",     VDIR, &s_dev_dir_ops,       "/dev");
     devfs_mknode(&s_dev_null_vnode,    "null",    VCHR, &s_null_ops,          "/dev/null");
     devfs_mknode(&s_dev_serial_vnode,  "serial",  VCHR, &s_serial_ops,        "/dev/serial");
     devfs_mknode(&s_dev_console_vnode, "console", VCHR, &s_console_ops,       "/dev/console");

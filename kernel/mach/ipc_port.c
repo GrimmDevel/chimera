@@ -125,19 +125,33 @@ void ipc_space_destroy(ipc_space_t *space) {
     irq_flags_t f = spinlock_lock_irqsave(&space->is_lock);
     space->is_active = false;
 
-    // destroy all live ports in the space
+    ipc_port_t *ports_to_destroy[IPC_SPACE_INITIAL_CAPACITY];
+    ipc_port_t *ports_to_release[IPC_SPACE_INITIAL_CAPACITY];
+    u32 destroy_count = 0;
+    u32 release_count = 0;
+
+    // extract live ports before dropping lock to prevent deadlock in ipc_port_destroy
     for (u32 i = 1; i < space->is_table_used; i++) {
         ipc_entry_t *e = &space->is_table[i];
         if (e->ie_object && (e->ie_bits & MACH_PORT_TYPE_RECEIVE)) {
-            ipc_port_destroy(e->ie_object);
+            if (destroy_count < IPC_SPACE_INITIAL_CAPACITY)
+                ports_to_destroy[destroy_count++] = e->ie_object;
         } else if (e->ie_object) {
-            ipc_port_release(e->ie_object);
+            if (release_count < IPC_SPACE_INITIAL_CAPACITY)
+                ports_to_release[release_count++] = e->ie_object;
         }
         e->ie_object = nullptr;
         e->ie_bits   = MACH_PORT_TYPE_NONE;
     }
-
+    space->is_table_used = 1;
     spinlock_unlock_irqrestore(&space->is_lock, f);
+
+    for (u32 i = 0; i < destroy_count; i++) {
+        ipc_port_destroy(ports_to_destroy[i]);
+    }
+    for (u32 i = 0; i < release_count; i++) {
+        ipc_port_release(ports_to_release[i]);
+    }
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════

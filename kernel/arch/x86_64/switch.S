@@ -4,6 +4,8 @@
 .global context_switch
 context_switch:
     // rdi = old_stack_ptr (void**), rsi = new_stack_ptr (void*), rdx = new_cr3
+    pushfq
+    cli
     push rbp
     push rbx
     push r12
@@ -26,5 +28,6 @@ context_switch:
     pop r12
     pop rbx
     pop rbp
+    popfq
 
     ret

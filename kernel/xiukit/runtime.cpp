@@ -8,33 +8,41 @@
 
 // minimal operator new/delete for kernel classes
 
+extern "C" void *kalloc(usize size);
+extern "C" void kfree(void *ptr);
+
 void* operator new(usize size) {
-    // todo: use kalloc when wired
-    (void)size;
-    xiu_panic("C++ operator new called but kalloc not yet wired\n");
-    return (void*)0xDEADBEEF;
+    void *ptr = kalloc(size);
+    if (!ptr) {
+        xiu_panic("C++ operator new: Out of memory (size=%zu)\n", size);
+    }
+    return ptr;
 }
 
 void* operator new[](usize size) {
+    void *ptr = kalloc(size);
+    if (!ptr) {
+        xiu_panic("C++ operator new[]: Out of memory (size=%zu)\n", size);
+    }
+    return ptr;
+}
+
+void operator delete(void* p) noexcept {
+    kfree(p);
+}
+
+void operator delete[](void* p) noexcept {
+    kfree(p);
+}
+
+void operator delete(void* p, usize size) noexcept {
     (void)size;
-    xiu_panic("C++ operator new[] called but kalloc not yet wired\n");
-    return (void*)0xDEADBEEF;
+    kfree(p);
 }
 
-void operator delete(void* p) {
-    (void)p;
-}
-
-void operator delete[](void* p) {
-    (void)p;
-}
-
-void operator delete(void* p, usize size) {
-    (void)p; (void)size;
-}
-
-void operator delete[](void* p, usize size) {
-    (void)p; (void)size;
+void operator delete[](void* p, usize size) noexcept {
+    (void)size;
+    kfree(p);
 }
 
 // pure virtual call handler

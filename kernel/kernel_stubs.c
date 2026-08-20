@@ -8,14 +8,6 @@ extern xiu_thread_t *current_thread(void);
 extern void task_switch_to_user(u64 entry, u64 stack);
 extern void context_switch(void **old_sp, void *new_sp, u64 new_cr3);
 
-void pmap_bootstrap(void) {}
-void vm_map_init(void) {}
-void vm_object_init(void) {}
-void zone_init(void) {}
-
-void xiu_kit_init(void) {}
-void xiu_kit_start_matching(void) {}
-
 #include <arch/x86_64/msr.h>
 
 extern void x86_64_syscall_entry(void);

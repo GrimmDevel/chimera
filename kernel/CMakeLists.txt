@@ -11,6 +11,8 @@ add_executable(xiu_kernel
     mm/pmm.c
     mm/pmap.c
     mm/copy.c
+    mm/zone.c
+    mm/vm_object.c
     bsd/proc.c
     bsd/fileproc.c
     bsd/launchd.c
@@ -39,6 +41,7 @@ add_executable(xiu_kernel
     xiukit/runtime.cpp
     xiukit/hid.cpp
     xiukit/xhci.cpp
+    xiukit/ahci.cpp
     arch/x86_64/gdt.c
     arch/x86_64/idt.c
     arch/x86_64/lapic.c
