@@ -283,6 +283,7 @@ shingetline(void)
     dont_queue_signals();
     for (;;) {
 	c = shingetchar();
+
 	if (c < 0 || c == '\n') {
 	    winch_block();
 	    restore_queue_signals(q);
@@ -386,48 +387,28 @@ inputline(void)
 	    if (rprompt)
 		ingetcpmptr = &rprompt;
 	}
-    }
-    if (!(interact && isset(SHINSTDIN) && SHTTY != -1 && isset(USEZLE))) {
-	/*
-	 * If not using zle, read the line straight from the input file.
-	 * Possibly we don't get the whole line at once:  in that case,
-	 * we get another chunk with the next call to inputline().
-	 */
 
-	if (interact && isset(SHINSTDIN)) {
-	    /*
-	     * We may still be interactive (e.g. running under emacs),
-	     * so output a prompt if necessary.  We don't know enough
-	     * about the input device to be able to handle an rprompt,
-	     * though.
-	     */
-	    char *pptbuf;
-	    int pptlen;
-	    pptbuf = unmetafy(promptexpand(ingetcpmptl ? *ingetcpmptl : NULL,
-					   0, NULL, NULL, NULL), &pptlen);
-	    write_loop(2, pptbuf, pptlen);
-	    free(pptbuf);
+	char *pptbuf = NULL;
+	int pptlen = 0;
+	if (ingetcpmptl && *ingetcpmptl) {
+	    pptbuf = unmetafy(promptexpand(*ingetcpmptl, 0, NULL, NULL, NULL), &pptlen);
 	}
-	ingetcline = shingetline();
-    } else {
-	/*
-	 * Since we may have to read multiple lines before getting
-	 * a complete piece of input, we tell zle not to restore the
-	 * original tty settings after reading each chunk.  Instead,
-	 * this is done when the history mechanism for the current input
-	 * terminates, which is not until we have the whole input.
-	 * This is supposed to minimise problems on systems that clobber
-	 * typeahead when the terminal settings are altered.
-	 *                     pws 1998/03/12
-	 */
-	int flags = ZLRF_HISTORY|ZLRF_NOSETTY;
-	if (isset(IGNOREEOF))
-	    flags |= ZLRF_IGNOREEOF;
-	ingetcline = zleentry(ZLE_CMD_READ, ingetcpmptl, ingetcpmptr,
-			      flags, context);
-	histdone |= HISTFLAG_SETTY;
+	if (!pptbuf || pptlen == 0) {
+	    const char *u = get_username();
+	    if (!u || !*u) u = "root";
+	    char def_prompt[128];
+	    pptlen = snprintf(def_prompt, sizeof(def_prompt), "%s@Mac %s %% ", u, (pwd && *pwd) ? pwd : "/");
+	    write_loop(2, def_prompt, pptlen);
+	} else {
+	    write_loop(2, pptbuf, pptlen);
+	}
+	if (pptbuf)
+	    free(pptbuf);
     }
+    ingetcline = shingetline();
+
     if (!ingetcline) {
+
 	return lexstop = 1;
     }
     if (errflag) {

@@ -362,6 +362,11 @@ BIN_MAP = {
     "Filer": "System/Library/CoreServices",
 
     # /usr/bin (Default for all other tools, compilers, apps)
+    "login": "usr/bin",
+    "passwd": "usr/bin",
+    "su": "usr/bin",
+    "id": "usr/bin",
+    "whoami": "usr/bin",
 }
 
 
@@ -387,18 +392,30 @@ def discover_binaries(bin_dir: str) -> list:
 
 
 def install_system_files(disk):
+    def read_etc_file(name, default):
+        p = os.path.join("etc", name)
+        if os.path.isfile(p):
+            with open(p, "rb") as f:
+                return f.read()
+        return default
+
     etc_files = {
         "motd": b"Welcome to XIU Operating System!\nHybrid Mach/BSD Architecture (Darwin/XNU compatible).\n",
         "version": b"XIU OS v1.0.0 (x86_64)\n",
         "hosts": b"127.0.0.1\tlocalhost\n10.0.2.15\tMac\n",
         "resolv.conf": b"nameserver 10.0.2.3\n",
-        "passwd": b"root:x:0:0:System Administrator:/Users/root:/bin/zsh\nfvr:x:501:20:fvr:/Users/fvr:/bin/zsh\nuser:x:502:20:Default User:/Users/user:/bin/zsh\n",
-        "group": b"wheel:x:0:root\nadmin:x:80:root,fvr,user\nstaff:x:20:fvr,user\n",
-        "shells": b"/bin/zsh\n/bin/sh\n",
+        "passwd": read_etc_file("passwd", b"root:*:0:0:System Administrator:/Users/root:/bin/zsh\nfvr:*:501:20:fvr:/Users/fvr:/bin/zsh\nuser:*:502:20:Default User:/Users/user:/bin/zsh\n"),
+        "master.passwd": read_etc_file("master.passwd", b"root::0:0::0:0:System Administrator:/Users/root:/bin/zsh\nfvr::501:20::0:0:fvr:/Users/fvr:/bin/zsh\nuser::502:20::0:0:Default User:/Users/user:/bin/zsh\n"),
+        "group": read_etc_file("group", b"wheel:*:0:root\nadmin:*:80:root,fvr,user\nstaff:*:20:fvr,user\n"),
+        "shells": read_etc_file("shells", b"/bin/zsh\n/bin/sh\n"),
+        "adduser.conf": read_etc_file("adduser.conf", b""),
         "sudoers": b"root\tALL=(ALL) ALL\n%admin\tALL=(ALL) ALL\n%wheel\tALL=(ALL) ALL\n",
         "sudo.conf": b"# sudo.conf\n",
-        "zprofile": b'export PATH="/bin:/usr/bin:/sbin:/usr/sbin:/usr/local/bin"\nexport TERM="xterm-256color"\nexport HOME="/Users/fvr"\nexport USER="fvr"\nexport LOGNAME="fvr"\nexport PROMPT="%n@%m %~ %# "\n',
-        "zshrc": b'export PATH="/bin:/usr/bin:/sbin:/usr/sbin:/usr/local/bin"\nexport TERM="xterm-256color"\nexport HOME="/Users/fvr"\nexport USER="fvr"\nexport LOGNAME="fvr"\nexport PROMPT="%n@%m %~ %# "\nunsetopt zle\n',
+        "zshenv": b'export PATH="/bin:/usr/bin:/sbin:/usr/sbin:/usr/local/bin"\n',
+        "zprofile": b'export PATH="/bin:/usr/bin:/sbin:/usr/sbin:/usr/local/bin"\nexport TERM="xterm-256color"\nexport PROMPT="%n@%m %~ %# "\nexport PS1="%n@%m %~ %# "\n',
+        "zshrc": b'export PATH="/bin:/usr/bin:/sbin:/usr/sbin:/usr/local/bin"\nexport TERM="xterm-256color"\nexport PROMPT="%n@%m %~ %# "\nexport PS1="%n@%m %~ %# "\nunsetopt zle\nunsetopt promptcr\nunsetopt promptsp\n',
+        "zlogin": b'',
+
         "termcap": b"xterm-256color|xterm with 256 colors:\\\n\t:am:xn:hs:co#80:li#25:colors#256:\\\n\t:cl=\\E[2J\\E[H:cd=\\E[J:ce=\\E[K:cm=\\E[%i%d;%dH:\\\n\t:up=\\E[A:do=\\E[B:le=\\E[D:nd=\\E[C:\\\n\t:so=\\E[7m:se=\\E[27m:us=\\E[4m:ue=\\E[24m:\\\n\t:md=\\E[1m:me=\\E[0m:AF=\\E[3%dm:AB=\\E[4%dm:\\\n\t:kb=\\177:kd=\\E[B:kl=\\E[D:kr=\\E[C:ku=\\E[A:\n",
     }
     disk.update_dir_files("private/etc", etc_files)
@@ -504,6 +521,9 @@ def install_system_files(disk):
     disk.update_dir_files("Applications/Terminal.app/Contents", term_app_files)
 
     root_files = {
+        ".zshenv": b"",
+        ".zprofile": b"",
+        ".zlogin": b"",
         ".zshrc": b'''# ~/.zshrc for root
 export HOME=/Users/root
 export USER=root
@@ -513,6 +533,8 @@ export TERM=xterm-256color
 export PROMPT='%n@%m %~ %# '
 unset RPROMPT
 unsetopt zle
+unsetopt promptcr
+unsetopt promptsp
 alias ls='ls'
 alias ll='ls -la'
 alias la='ls -a'
@@ -526,6 +548,9 @@ alias sh='/bin/sh'
     disk.update_dir_files("Users/root", root_files)
 
     fvr_files = {
+        ".zshenv": b"",
+        ".zprofile": b"",
+        ".zlogin": b"",
         ".zshrc": b'''# ~/.zshrc for fvr
 export HOME=/Users/fvr
 export USER=fvr
@@ -535,6 +560,8 @@ export TERM=xterm-256color
 export PROMPT='%n@%m %~ %# '
 unset RPROMPT
 unsetopt zle
+unsetopt promptcr
+unsetopt promptsp
 alias ls='ls'
 alias ll='ls -la'
 alias la='ls -a'
@@ -548,6 +575,9 @@ alias sh='/bin/sh'
     disk.update_dir_files("Users/fvr", fvr_files)
 
     user_files = {
+        ".zshenv": b"",
+        ".zprofile": b"",
+        ".zlogin": b"",
         ".zshrc": b'''# ~/.zshrc for user
 export HOME=/Users/user
 export USER=user
@@ -557,6 +587,8 @@ export TERM=xterm-256color
 export PROMPT='%n@%m %~ %# '
 unset RPROMPT
 unsetopt zle
+unsetopt promptcr
+unsetopt promptsp
 alias ls='ls'
 alias ll='ls -la'
 alias la='ls -a'
@@ -570,6 +602,127 @@ alias sh='/bin/sh'
     disk.update_dir_files("Users/Shared", {"welcome.txt": b"Hello from persistent user storage on disk0!\n"})
 
 
+def copy_ravynos_assets(disk, workspace):
+    ravynos_dir = os.path.join(workspace, "ravynos")
+    if not os.path.isdir(ravynos_dir):
+        return
+
+    # 1. SystemLibrary/LaunchAgents
+    agents_dir = os.path.join(ravynos_dir, "SystemLibrary", "LaunchAgents")
+    if os.path.isdir(agents_dir):
+        files_dict = {}
+        for f in os.listdir(agents_dir):
+            if f.endswith(".json") or f.endswith(".plist"):
+                with open(os.path.join(agents_dir, f), "rb") as fp:
+                    files_dict[f] = fp.read()
+        if files_dict:
+            disk.update_dir_files("System/Library/LaunchAgents", files_dict)
+
+    # 2. SystemLibrary/LaunchDaemons
+    daemons_dir = os.path.join(ravynos_dir, "SystemLibrary", "LaunchDaemons")
+    if os.path.isdir(daemons_dir):
+        files_dict = {}
+        for f in os.listdir(daemons_dir):
+            if f.endswith(".json") or f.endswith(".plist"):
+                with open(os.path.join(daemons_dir, f), "rb") as fp:
+                    files_dict[f] = fp.read()
+        if files_dict:
+            disk.update_dir_files("System/Library/LaunchDaemons", files_dict)
+
+    # 3. Desktop Pictures
+    pics_dir = os.path.join(ravynos_dir, "SystemLibrary", "Desktop_Pictures")
+    if os.path.isdir(pics_dir):
+        files_dict = {}
+        for f in os.listdir(pics_dir):
+            p = os.path.join(pics_dir, f)
+            if os.path.isfile(p) and f.endswith((".png", ".jpg", ".JPG", ".jpeg", ".json")) and os.path.getsize(p) < 2 * 1024 * 1024:
+                with open(p, "rb") as fp:
+                    files_dict[f] = fp.read()
+        if files_dict:
+            disk.update_dir_files("System/Library/Desktop_Pictures", files_dict)
+
+    # 4. Fonts
+    fonts_dir = os.path.join(ravynos_dir, "SystemLibrary", "Fonts", "TTF")
+    if os.path.isdir(fonts_dir):
+        files_dict = {}
+        for f in os.listdir(fonts_dir):
+            p = os.path.join(fonts_dir, f)
+            if os.path.isfile(p) and f.endswith((".ttf", ".otf")) and os.path.getsize(p) < 500 * 1024:
+                with open(p, "rb") as fp:
+                    files_dict[f] = fp.read()
+        if files_dict:
+            disk.update_dir_files("System/Library/Fonts", files_dict)
+            disk.update_dir_files("Library/Fonts", files_dict)
+
+    # 5. WindowServer & CoreServices Resources
+    ws_dir = os.path.join(ravynos_dir, "CoreServices", "WindowServer")
+    if os.path.isdir(ws_dir):
+        files_dict = {}
+        for f in ["Icon.png", "Info.plist"]:
+            p = os.path.join(ws_dir, f)
+            if os.path.isfile(p):
+                with open(p, "rb") as fp:
+                    files_dict[f] = fp.read()
+        if files_dict:
+            disk.update_dir_files("System/Library/CoreServices/WindowServer.app/Contents/Resources", files_dict)
+
+        c_dir = os.path.join(ws_dir, "Cursors")
+        if os.path.isdir(c_dir):
+            c_dict = {}
+            for f in os.listdir(c_dir):
+                if f.endswith(".png"):
+                    with open(os.path.join(c_dir, f), "rb") as fp:
+                        c_dict[f] = fp.read()
+            if c_dict:
+                disk.update_dir_files("System/Library/CoreServices/WindowServer.app/Contents/Resources/Cursors", c_dict)
+
+        d_dir = os.path.join(ws_dir, "Decorations")
+        if os.path.isdir(d_dir):
+            d_dict = {}
+            for f in os.listdir(d_dir):
+                if f.endswith(".png"):
+                    with open(os.path.join(d_dir, f), "rb") as fp:
+                        d_dict[f] = fp.read()
+            if d_dict:
+                disk.update_dir_files("System/Library/CoreServices/WindowServer.app/Contents/Resources/Decorations", d_dict)
+
+    # 6. SystemUIServer Resources
+    sysui_dir = os.path.join(ravynos_dir, "CoreServices", "WindowServer", "SystemUIServer")
+    if os.path.isdir(sysui_dir):
+        files_dict = {}
+        for f in ["Info.plist", "ravynos-mark-64.png", "NSMenuArrow.tiff", "NSMenuViewDoubleRightArrow.tiff"]:
+            p = os.path.join(sysui_dir, f)
+            if os.path.isfile(p):
+                with open(p, "rb") as fp:
+                    files_dict[f] = fp.read()
+        if files_dict:
+            disk.update_dir_files("System/Library/CoreServices/SystemUIServer.app/Contents/Resources", files_dict)
+
+    # 7. Dock Resources
+    dock_dir = os.path.join(ravynos_dir, "CoreServices", "Dock")
+    if os.path.isdir(dock_dir):
+        files_dict = {}
+        for f in ["Info.plist", "Dock.png", "running.png", "window.png"]:
+            p = os.path.join(dock_dir, f)
+            if os.path.isfile(p):
+                with open(p, "rb") as fp:
+                    files_dict[f] = fp.read()
+        if files_dict:
+            disk.update_dir_files("System/Library/CoreServices/Dock.app/Contents/Resources", files_dict)
+
+    # 8. Filer Resources
+    filer_dir = os.path.join(ravynos_dir, "CoreServices", "Filer")
+    if os.path.isdir(filer_dir):
+        files_dict = {}
+        for f in ["filer.png"]:
+            p = os.path.join(filer_dir, f)
+            if os.path.isfile(p):
+                with open(p, "rb") as fp:
+                    files_dict[f] = fp.read()
+        if files_dict:
+            disk.update_dir_files("System/Library/CoreServices/Filer.app/Contents/Resources", files_dict)
+
+
 def main():
     workspace = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
     out_dir = os.path.join(workspace, "build")
@@ -578,45 +731,10 @@ def main():
     bin_dir = os.path.join(workspace, "build", "x86_64", "usr")
     binaries = discover_binaries(bin_dir)
 
-    force = "--force" in sys.argv or "-f" in sys.argv
-    if os.path.isfile(out_path) and not force:
-        print(f"[make_disk] Disk image {out_path} exists. Updating in-place...")
-        disk = FAT32Disk()
-        disk.load_existing(out_path)
-        disk.update_binaries(bin_dir, binaries)
-
-        # Update Mach-O runtime objects and libraries
-        crt0_path = os.path.join(bin_dir, "CMakeFiles", "xiu_crt0.dir", "libsystem", "crt0.S.obj")
-        libsystem_path = os.path.join(bin_dir, "libsystem_xiu.a")
-        lib_files = {}
-        if os.path.isfile(crt0_path):
-            with open(crt0_path, "rb") as f:
-                cdata = f.read()
-            lib_files["crt0.o"] = cdata
-        if os.path.isfile(libsystem_path):
-            with open(libsystem_path, "rb") as f:
-                ldata = f.read()
-            lib_files["libc.a"] = ldata
-            lib_files["libsystem_xiu.a"] = ldata
-        if lib_files:
-            disk.update_dir_files("usr/lib", lib_files)
-
-        # Copy C header trees into /usr/include
-        copy_include_tree(disk, "usr/include", os.path.join(workspace, "usr", "libsystem", "include"))
-        copy_include_tree(disk, "usr/include", os.path.join(workspace, "tinycc", "include"))
-        copy_include_tree(disk, "usr/include/kernel", os.path.join(workspace, "kernel", "include", "kernel"))
-        copy_include_tree(disk, "usr/include/net", os.path.join(workspace, "kernel", "include", "net"))
-
-        # Install system plists and configs
-        install_system_files(disk)
-
-        with open(out_path, "wb") as f:
-            f.write(disk.image)
-        return
-
-    print(f"[make_disk] Generating 64MB FAT32 disk image: {out_path}")
+    print(f"[make_disk] Generating 512MB FAT32 disk image: {out_path}")
     disk = FAT32Disk()
     disk.write_bpb()
+
 
     # macOS / Darwin Canonical Hierarchy
     disk.find_or_create_dir("Applications")
@@ -640,6 +758,16 @@ def main():
     disk.find_or_create_dir("Users")
     shared_cluster = disk.find_or_create_dir("Users/Shared")
     root_home_cluster = disk.find_or_create_dir("Users/root")
+
+    for u in ["root", "fvr", "user"]:
+        disk.find_or_create_dir(f"Users/{u}")
+        disk.find_or_create_dir(f"Users/{u}/Desktop")
+        disk.find_or_create_dir(f"Users/{u}/Documents")
+        disk.find_or_create_dir(f"Users/{u}/Downloads")
+        disk.find_or_create_dir(f"Users/{u}/Library")
+        disk.find_or_create_dir(f"Users/{u}/Library/Preferences")
+        disk.find_or_create_dir(f"Users/{u}/Pictures")
+        disk.find_or_create_dir(f"Users/{u}/Public")
 
     disk.find_or_create_dir("Volumes")
     disk.find_or_create_dir("Volumes/Macintosh HD")
@@ -722,9 +850,16 @@ def main():
             disk.add_file(target_cluster, name, data)
             copied_count += 1
 
+    # Install system plists and configs
+    install_system_files(disk)
+
+    # Copy missing desktop assets, fonts, wallpapers, and service configs from /ravynos
+    copy_ravynos_assets(disk, workspace)
+
     disk.write_fat_tables()
     with open(out_path, "wb") as f:
         f.write(disk.image)
+
 
     print(f"[make_disk] Successfully created {out_path} ({copied_count} binaries installed in Darwin hierarchy).")
 

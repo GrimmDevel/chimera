@@ -73,6 +73,7 @@
 
 #ifndef __ASSEMBLER__
 #include <sys/cdefs.h>
+#include <stdint.h>
 
 /* Machine type dependent parameters. */
 #include <machine/types.h>

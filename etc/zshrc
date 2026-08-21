@@ -1,0 +1,7 @@
+# /etc/zshrc
+export PATH="/bin:/usr/bin:/sbin:/usr/sbin:/usr/local/bin"
+export TERM="xterm-256color"
+export PROMPT="%n@%m %~ %# "
+export PS1="%n@%m %~ %# "
+unsetopt zle
+

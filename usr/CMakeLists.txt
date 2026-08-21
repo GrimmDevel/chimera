@@ -23,6 +23,15 @@ add_compile_options(
 set(CMAKE_C_LINK_EXECUTABLE 
     "${CMAKE_C_COMPILER} --target=x86_64-apple-darwin -static -nostdlib -Wl,-e,_start -Wl,-pagezero_size,0x1000 <OBJECTS> -o <TARGET> <LINK_LIBRARIES> <LINK_FLAGS>")
 
+include_directories(
+    libsystem/include
+    libsystem/stdtime
+    libsystem/locale
+    libsystem/string
+    libsystem/gen
+    libsystem/stdio
+)
+
 # 1. C runtime entry and libsystem_xiu
 add_library(xiu_crt0 OBJECT
     libsystem/crt0.S
@@ -30,6 +39,70 @@ add_library(xiu_crt0 OBJECT
 
 add_library(system_xiu STATIC
     libsystem/libsystem_xiu.c
+    libsystem/pwd_grp.c
+    libsystem/getlogin.c
+    libsystem/setlogin.c
+    libsystem/pam_shim.c
+    libsystem/stdtime/localtime.c
+    libsystem/stdtime/strftime.c
+    libsystem/stdtime/difftime.c
+    libsystem/stdtime/asctime.c
+    libsystem/stdtime/timelocal.c
+    libsystem/stdio/vsscanf.c
+    libsystem/locale/mbrtowc.c
+    libsystem/locale/mbsrtowcs.c
+    libsystem/locale/wcrtomb.c
+    libsystem/locale/wcsrtombs.c
+    libsystem/locale/utf8.c
+    libsystem/locale/mblen.c
+    libsystem/locale/mbsinit.c
+    libsystem/locale/mbtowc.c
+    libsystem/locale/wctob.c
+    libsystem/locale/wctomb.c
+    libsystem/locale/localeconv.c
+    libsystem/locale/nl_langinfo.c
+    libsystem/locale/setlocale.c
+
+
+    libsystem/string/wcschr.c
+    libsystem/string/wcscmp.c
+    libsystem/string/wcslen.c
+    libsystem/string/wmemchr.c
+    libsystem/string/wcsncmp.c
+    libsystem/string/wcscpy.c
+    libsystem/string/wcscat.c
+    libsystem/string/wcsdup.c
+    libsystem/string/wcsstr.c
+    libsystem/string/wmemcmp.c
+    libsystem/string/wmemcpy.c
+    libsystem/string/wmemmove.c
+    libsystem/string/wmemset.c
+    libsystem/string/strlcat.c
+    libsystem/string/strcasecmp.c
+    libsystem/string/strerror.c
+    libsystem/string/strsignal.c
+    libsystem/gen/errlst.c
+    libsystem/gen/isatty.c
+
+
+    libsystem/gen/uname.c
+    libsystem/gen/gethostname.c
+    libsystem/gen/sethostname.c
+    libsystem/gen/getprogname.c
+    libsystem/gen/setprogname.c
+    libsystem/gen/err.c
+    libsystem/gen/setmode.c
+    libsystem/gen/times.c
+    libsystem/gen/termios.c
+    libcrypt/crypt.c
+    libcrypt/misc.c
+    libcrypt/crypt-sha256.c
+    libcrypt/crypt-sha512.c
+    libcrypt/crypt-md5.c
+    libcrypt/crypt-nthash.c
+    libcrypt/sha2.c
+    libcrypt/md5.c
+    libcrypt/md4.c
     libsystem/libinput_xiu.c
     libsystem/plist.c
     libsystem/gui.c
@@ -37,6 +110,32 @@ add_library(system_xiu STATIC
     libsystem/blocks/runtime.c
     libsystem/syscalls.S
     libsystem/setjmp.S
+)
+
+
+add_library(crypt STATIC
+    libcrypt/crypt.c
+    libcrypt/misc.c
+    libcrypt/crypt-sha256.c
+    libcrypt/crypt-sha512.c
+    libcrypt/crypt-md5.c
+    libcrypt/crypt-nthash.c
+    libcrypt/sha2.c
+    libcrypt/md5.c
+    libcrypt/md4.c
+)
+target_include_directories(crypt PUBLIC
+    ${CMAKE_SOURCE_DIR}/usr/libsystem/include
+    ${CMAKE_SOURCE_DIR}/usr/libcrypt/include
+    ${CMAKE_SOURCE_DIR}/usr/libcrypt
+)
+target_compile_options(crypt PUBLIC
+    -nostdinc
+    -isystem ${CMAKE_SOURCE_DIR}/usr/libsystem/include
+    -I${CMAKE_SOURCE_DIR}/usr/libcrypt/include
+    -I${CMAKE_SOURCE_DIR}/usr/libcrypt
+    -Wno-incompatible-pointer-types-discards-qualifiers
+    -Wno-pointer-sign
 )
 
 set(LIBOBJC_SRCS
@@ -389,10 +488,18 @@ target_compile_options(AppKit PUBLIC
 )
 
 target_include_directories(system_xiu PUBLIC
-    ${CMAKE_SOURCE_DIR}/kernel/include
-    ${CMAKE_SOURCE_DIR}/usr/libsystem
     ${CMAKE_SOURCE_DIR}/usr/libsystem/include
+    ${CMAKE_SOURCE_DIR}/usr/libcrypt/include
+    ${CMAKE_SOURCE_DIR}/usr/libcrypt
+    ${CMAKE_SOURCE_DIR}/usr/libsystem
     ${CMAKE_SOURCE_DIR}/usr/libsystem/blocks
+)
+target_compile_options(system_xiu PUBLIC
+    -nostdinc
+    -isystem ${CMAKE_SOURCE_DIR}/usr/libsystem/include
+    -I${CMAKE_SOURCE_DIR}/usr/libcrypt/include
+    -I${CMAKE_SOURCE_DIR}/usr/libcrypt
+    -Wno-error -Wno-unused-variable -Wno-incompatible-pointer-types -Wno-implicit-function-declaration -Wno-pointer-bool-conversion -Wno-pointer-sign
 )
 
 function(xiu_add_user_crt target)
@@ -543,6 +650,7 @@ set_source_files_properties(
     CoreServices/Dock/DesktopWindow.m
     CoreServices/Dock/DockTileData.m
     CoreServices/Filer/FilerMain.m
+    CoreServices/WindowServer/ws_font.c
     PROPERTIES
     LANGUAGE C
     COMPILE_FLAGS "-x objective-c -D__RAVYNOS__ -D__MACH__ -D__WSRPC -D__XIU__ -DRELEASE_LOGO=@\\\"ravynos-mark-64.png\\\" -nostdinc -isystem ${CMAKE_SOURCE_DIR}/usr/libsystem/include -I${CMAKE_SOURCE_DIR}/usr/CoreServices -I${CMAKE_SOURCE_DIR}/usr/CoreServices/WindowServer -I${CMAKE_SOURCE_DIR}/usr/CoreServices/WindowServer/SystemUIServer -I${CMAKE_SOURCE_DIR}/usr/CoreServices/Dock -I${CMAKE_SOURCE_DIR}/usr/CoreServices/WindowServer/libxkbcommon/include -I${CMAKE_SOURCE_DIR}/usr/Frameworks -I${CMAKE_SOURCE_DIR}/usr/Frameworks/Foundation/Headers -I${CMAKE_SOURCE_DIR}/usr/Frameworks/AppKit -I${CMAKE_SOURCE_DIR}/usr/Frameworks/CoreGraphics -I${CMAKE_SOURCE_DIR}/usr/Frameworks/Onyx2D -Wno-incompatible-pointer-types -Wno-int-conversion -Wno-implicit-function-declaration -Wno-visibility -Wno-deprecated-declarations"
@@ -556,6 +664,7 @@ add_executable(WindowServer
     CoreServices/WindowServer/WSWindowRecord.m
     CoreServices/WindowServer/WSAppRecord.m
     CoreServices/WindowServer/WSInput.m
+    CoreServices/WindowServer/ws_font.c
 )
 xiu_add_user_crt(WindowServer)
 target_link_libraries(WindowServer xkbcommon AppKit CoreGraphics Onyx2D Foundation objc system_xiu)
@@ -651,6 +760,22 @@ target_link_libraries(env system_xiu)
 add_executable(whoami bin/whoami.c)
 xiu_add_user_crt(whoami)
 target_link_libraries(whoami system_xiu)
+
+add_executable(login bin/login.c)
+xiu_add_user_crt(login)
+target_link_libraries(login system_xiu crypt)
+
+add_executable(passwd bin/passwd_cmd.c)
+xiu_add_user_crt(passwd)
+target_link_libraries(passwd system_xiu crypt)
+
+add_executable(su bin/su.c)
+xiu_add_user_crt(su)
+target_link_libraries(su system_xiu crypt)
+
+add_executable(id bin/id.c)
+xiu_add_user_crt(id)
+target_link_libraries(id system_xiu)
 
 add_executable(sleep bin/sleep.c)
 xiu_add_user_crt(sleep)
@@ -928,10 +1053,10 @@ add_executable(sudo
 xiu_add_user_crt(sudo)
 target_link_libraries(sudo system_xiu)
 target_include_directories(sudo PRIVATE
+    ${CMAKE_SOURCE_DIR}/usr/libsystem/include
     ${SUDO_DIR}
     ${SUDO_DIR}/include
     ${SUDO_DIR}/src
-    ${CMAKE_SOURCE_DIR}/usr/libsystem/include
 )
 target_compile_definitions(sudo PRIVATE
     -DHAVE_CONFIG_H=1
@@ -940,6 +1065,8 @@ target_compile_definitions(sudo PRIVATE
     -D__MACH__=1
     -D__XIU__=1
     -D__APPLE__=1
+    -D_DARWIN_C_SOURCE=1
+    -DSTUB_LOAD_INTERFACES=1
 )
 target_compile_options(sudo PRIVATE -Wno-everything)
 

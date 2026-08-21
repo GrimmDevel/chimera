@@ -75,6 +75,12 @@
 #define __END_DECLS
 #endif
 
+#define __strong_reference(sym,aliassym) \
+	extern __typeof (sym) aliassym __attribute__ ((__alias__ (#sym)));
+#define __weak_reference(sym,alias)
+#define __warn_references(sym,msg)
+
+
 /* This SDK is designed to work with clang and specific versions of
  * gcc >= 4.0 with Apple's patch sets */
 #if !defined(__GNUC__) || __GNUC__ < 4

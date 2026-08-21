@@ -57,6 +57,25 @@
 #include <launch.h>
 
 #import "rpc.h"
+#import "ws_font.h"
+
+/* Desktop Environment State & Built-in Applications */
+static BOOL s_term_open = YES;
+static NSRect s_term_frame = {100, 70, 580, 360};
+static BOOL s_calc_open = YES;
+static NSRect s_calc_frame = {730, 100, 240, 330};
+static BOOL s_about_open = NO;
+static NSRect s_about_frame = {450, 220, 380, 220};
+static int s_active_window = 1; // 1: term, 2: calc, 3: about, 0: client
+static BOOL s_apple_menu_open = NO;
+static int s_calc_val = 0;
+static int s_calc_acc = 0;
+static int s_calc_op = 0;
+static char s_calc_str[32] = "0";
+static BOOL s_in_drag = NO;
+static int s_drag_win = 0;
+static int s_drag_off_x = 0;
+static int s_drag_off_y = 0;
 
 /* This lock prevents other threads from messing with the graphics context while we
  * are in the rendering loop
@@ -624,9 +643,285 @@ static NSString *_pathForPID(pid_t pid) {
 /*
  * KEEP THIS RUN LOOP EFFICIENT! It is called every frame to render the entire screen contents.
  */
+static void ws_render_desktop(WindowServer *self, uint32_t *p, int pitch, int scr_w, int scr_h, NSPoint cursorPos) {
+    if (!p || scr_w <= 0 || scr_h <= 0) return;
+
+    // 1. Cosmic Wallpaper Gradient (Monterey / Big Sur aesthetic)
+    ws_draw_gradient_v(p, pitch, scr_w, scr_h, 0, 0, scr_w, scr_h, 0xFF0D1B2A, 0xFF1B263B);
+    for (int x = 0; x < scr_w; x++) {
+        int wave = (x % 360) - 180;
+        int gy = scr_h - 220 + (wave * wave) / 1300;
+        ws_fill_rect(p, pitch, scr_w, scr_h, x, gy, 1, 60, 0x153A86FF);
+        ws_fill_rect(p, pitch, scr_w, scr_h, x, gy + 30, 1, 40, 0x108338EC);
+    }
+
+    // 2. Top macOS MenuBar (Height 24px)
+    ws_fill_rect(p, pitch, scr_w, scr_h, 0, 0, scr_w, 24, 0xEA161D28);
+    ws_fill_rect(p, pitch, scr_w, scr_h, 0, 23, scr_w, 1, 0x33FFFFFF);
+    ws_draw_apple_logo(p, pitch, scr_w, scr_h, 14, 5, 0xFFFFFFFF);
+
+    const char *active_app_title = "Finder";
+    if (s_active_window == 1 && s_term_open) active_app_title = "Terminal";
+    else if (s_active_window == 2 && s_calc_open) active_app_title = "Calculator";
+    else if (s_active_window == 3 && s_about_open) active_app_title = "System";
+
+    ws_draw_text_bold(p, pitch, scr_w, scr_h, 34, 4, active_app_title, 0xFFFFFFFF);
+    ws_draw_text(p, pitch, scr_w, scr_h, 110, 4, "File", 0xFFD1D5DB);
+    ws_draw_text(p, pitch, scr_w, scr_h, 154, 4, "Edit", 0xFFD1D5DB);
+    ws_draw_text(p, pitch, scr_w, scr_h, 198, 4, "View", 0xFFD1D5DB);
+    ws_draw_text(p, pitch, scr_w, scr_h, 242, 4, "Go", 0xFFD1D5DB);
+    ws_draw_text(p, pitch, scr_w, scr_h, 274, 4, "Window", 0xFFD1D5DB);
+    ws_draw_text(p, pitch, scr_w, scr_h, 334, 4, "Help", 0xFFD1D5DB);
+
+    // Right Status Items
+    ws_draw_text(p, pitch, scr_w, scr_h, scr_w - 270, 4, "100% [||||]", 0xFF9CA3AF);
+    ws_draw_text(p, pitch, scr_w, scr_h, scr_w - 175, 4, "[●] WiFi", 0xFF9CA3AF);
+    ws_draw_text_bold(p, pitch, scr_w, scr_h, scr_w - 95, 4, "Sat 02:30", 0xFFFFFFFF);
+
+    // 3. Apple Menu Dropdown (if open)
+    if (s_apple_menu_open) {
+        ws_draw_rounded_rect(p, pitch, scr_w, scr_h, 6, 26, 180, 160, 8, 0xF0181E29, 0x50FFFFFF);
+        ws_draw_text(p, pitch, scr_w, scr_h, 18, 34, "About This Mac", 0xFFFFFFFF);
+        ws_draw_text(p, pitch, scr_w, scr_h, 18, 52, "System Settings...", 0xFFCBD5E1);
+        ws_fill_rect(p, pitch, scr_w, scr_h, 14, 70, 164, 1, 0x33FFFFFF);
+        ws_draw_text(p, pitch, scr_w, scr_h, 18, 78, "Terminal", 0xFFFFFFFF);
+        ws_draw_text(p, pitch, scr_w, scr_h, 18, 96, "Calculator", 0xFFFFFFFF);
+        ws_fill_rect(p, pitch, scr_w, scr_h, 14, 114, 164, 1, 0x33FFFFFF);
+        ws_draw_text(p, pitch, scr_w, scr_h, 18, 122, "Restart...", 0xFFCBD5E1);
+        ws_draw_text(p, pitch, scr_w, scr_h, 18, 140, "Shut Down...", 0xFFCBD5E1);
+    }
+
+    // 4. Built-in Applications
+
+    // --- Terminal Window ---
+    if (s_term_open) {
+        int tx = (int)s_term_frame.origin.x;
+        int ty = (int)s_term_frame.origin.y;
+        int tw = (int)s_term_frame.size.width;
+        int th = (int)s_term_frame.size.height;
+        BOOL is_act = (s_active_window == 1);
+
+        // Shadow
+        ws_draw_rounded_rect(p, pitch, scr_w, scr_h, tx - 4, ty - 2, tw + 8, th + 8, 10, 0x50000000, 0);
+        // Titlebar
+        ws_draw_rounded_rect(p, pitch, scr_w, scr_h, tx, ty, tw, 28, 8, is_act ? 0xFF282E3A : 0xFF1C212B, 0xFF3D4656);
+        ws_draw_traffic_lights(p, pitch, scr_w, scr_h, tx + 8, ty + 8, -1);
+        ws_draw_text_bold(p, pitch, scr_w, scr_h, tx + 65, ty + 6, "root@Mac: ~ (zsh)", 0xFFE2E8F0);
+
+        // Interior
+        ws_fill_rect(p, pitch, scr_w, scr_h, tx, ty + 28, tw, th - 28, 0xFF0D1117);
+        // 1px border
+        ws_draw_rounded_rect(p, pitch, scr_w, scr_h, tx, ty, tw, th, 8, 0, 0xFF3D4656);
+
+        // Terminal text lines
+        int ly = ty + 36;
+        ws_draw_text(p, pitch, scr_w, scr_h, tx + 14, ly, "XIU OS 1.0 (Darwin 24.0.0 XNU) - Hybrid Mach/BSD", 0xFF64748B); ly += 18;
+        ws_draw_text(p, pitch, scr_w, scr_h, tx + 14, ly, "Kernel: xiu_kernel 1.0.0 (x86_64 Ring 0)", 0xFF64748B); ly += 24;
+
+        ws_draw_text_bold(p, pitch, scr_w, scr_h, tx + 14, ly, "root@Mac ~ # neofetch", 0xFF38BDF8); ly += 20;
+
+        ws_draw_text(p, pitch, scr_w, scr_h, tx + 18, ly, "   .:'      root@Mac", 0xFF10B981); ly += 18;
+        ws_draw_text(p, pitch, scr_w, scr_h, tx + 18, ly, "  '::'      OS: XIU OS 1.0 (Darwin 24.0.0)", 0xFF10B981); ly += 18;
+        ws_draw_text(p, pitch, scr_w, scr_h, tx + 18, ly, " .:::'      Host: Apple Silicon / Virtual Mac", 0xFF10B981); ly += 18;
+        ws_draw_text(p, pitch, scr_w, scr_h, tx + 18, ly, ".::::::.    Kernel: xiu_kernel (Mach-O)", 0xFF10B981); ly += 18;
+        ws_draw_text(p, pitch, scr_w, scr_h, tx + 18, ly, ":::::::::   Shell: zsh 5.9", 0xFF10B981); ly += 18;
+        ws_draw_text(p, pitch, scr_w, scr_h, tx + 18, ly, ":::::::::   WM: WindowServer (Onyx2D Compositor)", 0xFF10B981); ly += 18;
+        ws_draw_text(p, pitch, scr_w, scr_h, tx + 18, ly, " ':::::'    Memory: 142MB / 4096MB", 0xFF10B981); ly += 18;
+        ws_draw_text(p, pitch, scr_w, scr_h, tx + 18, ly, "   ':'      Disk: 512MB /dev/disk0 (FAT32)", 0xFF10B981); ly += 22;
+
+        ws_draw_text_bold(p, pitch, scr_w, scr_h, tx + 14, ly, "root@Mac ~ # ", 0xFF38BDF8);
+        ws_draw_text(p, pitch, scr_w, scr_h, tx + 14 + 13*9, ly, "ls -la", 0xFFF1F5F9); ly += 18;
+        ws_draw_text(p, pitch, scr_w, scr_h, tx + 14, ly, "Applications  Library  System  Users  bin  sbin", 0xFF94A3B8); ly += 20;
+
+        ws_draw_text_bold(p, pitch, scr_w, scr_h, tx + 14, ly, "root@Mac ~ #", 0xFF38BDF8);
+        ws_fill_rect(p, pitch, scr_w, scr_h, tx + 14 + 13*9, ly, 8, 16, 0xFF38BDF8); // cursor
+    }
+
+    // --- Calculator Window ---
+    if (s_calc_open) {
+        int cx = (int)s_calc_frame.origin.x;
+        int cy = (int)s_calc_frame.origin.y;
+        int cw = (int)s_calc_frame.size.width;
+        int ch = (int)s_calc_frame.size.height;
+        BOOL is_act = (s_active_window == 2);
+
+        // Shadow
+        ws_draw_rounded_rect(p, pitch, scr_w, scr_h, cx - 4, cy - 2, cw + 8, ch + 8, 10, 0x50000000, 0);
+        // Titlebar
+        ws_draw_rounded_rect(p, pitch, scr_w, scr_h, cx, cy, cw, 28, 8, is_act ? 0xFF282E3A : 0xFF1C212B, 0xFF3D4656);
+        ws_draw_traffic_lights(p, pitch, scr_w, scr_h, cx + 8, cy + 8, -1);
+        ws_draw_text_bold(p, pitch, scr_w, scr_h, cx + 70, cy + 6, "Calculator", 0xFFE2E8F0);
+
+        // Interior
+        ws_fill_rect(p, pitch, scr_w, scr_h, cx, cy + 28, cw, ch - 28, 0xFF1E2430);
+        ws_draw_rounded_rect(p, pitch, scr_w, scr_h, cx, cy, cw, ch, 8, 0, 0xFF3D4656);
+
+        // LCD Display
+        ws_draw_rounded_rect(p, pitch, scr_w, scr_h, cx + 12, cy + 36, 216, 42, 6, 0xFF12161F, 0xFF333E50);
+        int str_len = (int)strlen(s_calc_str);
+        ws_draw_text_bold(p, pitch, scr_w, scr_h, cx + 215 - str_len * 9, cy + 48, s_calc_str, 0xFFFFFFFF);
+
+        // 4x5 Button Grid
+        const char *btn_labels[5][4] = {
+            {"C", "+/-", "%", "/"},
+            {"7", "8", "9", "*"},
+            {"4", "5", "6", "-"},
+            {"1", "2", "3", "+"},
+            {"0", "", ".", "="}
+        };
+
+        for (int r = 0; r < 5; r++) {
+            for (int c = 0; c < 4; c++) {
+                if (r == 4 && c == 1) continue; // 0 spans 2 cols
+                int bx = cx + 12 + c * 54;
+                int by = cy + 88 + r * 46;
+                int bw = (r == 4 && c == 0) ? 102 : 48;
+                int bh = 40;
+
+                uint32_t bg_col = 0xFF2F3644;
+                if (c == 3 || (r == 4 && c == 3)) bg_col = 0xFFFF9F0A; // orange operator
+                else if (r == 0) bg_col = 0xFF4B5563; // slate top row
+
+                ws_draw_rounded_rect(p, pitch, scr_w, scr_h, bx, by, bw, bh, 6, bg_col, 0x40FFFFFF);
+                const char *lbl = btn_labels[r][c];
+                int lbl_w = (int)strlen(lbl) * 8;
+                ws_draw_text_bold(p, pitch, scr_w, scr_h, bx + (bw - lbl_w)/2, by + 12, lbl, 0xFFFFFFFF);
+            }
+        }
+    }
+
+    // --- About This Mac Window ---
+    if (s_about_open) {
+        int ax = (int)s_about_frame.origin.x;
+        int ay = (int)s_about_frame.origin.y;
+        int aw = (int)s_about_frame.size.width;
+        int ah = (int)s_about_frame.size.height;
+        BOOL is_act = (s_active_window == 3);
+
+        ws_draw_rounded_rect(p, pitch, scr_w, scr_h, ax - 4, ay - 2, aw + 8, ah + 8, 10, 0x50000000, 0);
+        ws_draw_rounded_rect(p, pitch, scr_w, scr_h, ax, ay, aw, 28, 8, is_act ? 0xFF282E3A : 0xFF1C212B, 0xFF3D4656);
+        ws_draw_traffic_lights(p, pitch, scr_w, scr_h, ax + 8, ay + 8, -1);
+        ws_draw_text_bold(p, pitch, scr_w, scr_h, ax + 120, ay + 6, "About This Mac", 0xFFE2E8F0);
+
+        ws_fill_rect(p, pitch, scr_w, scr_h, ax, ay + 28, aw, ah - 28, 0xFF1A202C);
+        ws_draw_rounded_rect(p, pitch, scr_w, scr_h, ax, ay, aw, ah, 8, 0, 0xFF3D4656);
+
+        ws_draw_apple_logo(p, pitch, scr_w, scr_h, ax + 36, ay + 60, 0xFFFFFFFF);
+        ws_draw_text_bold(p, pitch, scr_w, scr_h, ax + 60, ay + 60, "XIU OS Sonoma", 0xFFFFFFFF);
+        ws_draw_text(p, pitch, scr_w, scr_h, ax + 60, ay + 82, "Version 1.0 (Darwin 24.0.0 XNU)", 0xFF94A3B8);
+        ws_draw_text(p, pitch, scr_w, scr_h, ax + 60, ay + 104, "MacBook Pro (XIU Virtual Architecture)", 0xFFCBD5E1);
+        ws_draw_text(p, pitch, scr_w, scr_h, ax + 60, ay + 126, "Processor: 4-Core Virtual Mac CPU", 0xFFCBD5E1);
+        ws_draw_text(p, pitch, scr_w, scr_h, ax + 60, ay + 148, "Memory: 4096 MB RAM", 0xFFCBD5E1);
+        ws_draw_text(p, pitch, scr_w, scr_h, ax + 60, ay + 170, "Graphics: BSDFramebuffer 1280x800", 0xFFCBD5E1);
+    }
+
+    // 5. Bottom Floating macOS Dock
+    int dock_w = 380, dock_h = 58;
+    int dock_x = (scr_w - dock_w) / 2;
+    int dock_y = scr_h - 70;
+
+    // Soft drop shadow
+    ws_draw_rounded_rect(p, pitch, scr_w, scr_h, dock_x - 3, dock_y - 1, dock_w + 6, dock_h + 6, 18, 0x40000000, 0);
+    // Frosted glass background
+    ws_draw_rounded_rect(p, pitch, scr_w, scr_h, dock_x, dock_y, dock_w, dock_h, 16, 0xD01E2638, 0x60FFFFFF);
+
+    // Icon 0: Finder (Cyan Mac face)
+    int ix0 = dock_x + 14, iy0 = dock_y + 8;
+    ws_draw_rounded_rect(p, pitch, scr_w, scr_h, ix0, iy0, 42, 42, 10, 0xFF00A8E8, 0x50FFFFFF);
+    ws_draw_text_bold(p, pitch, scr_w, scr_h, ix0 + 13, iy0 + 12, "(:", 0xFFFFFFFF);
+    ws_draw_circle(p, pitch, scr_w, scr_h, ix0 + 21, dock_y + 53, 2, 0xFF38BDF8, 0);
+
+    // Icon 1: Launchpad (Cosmic grid)
+    int ix1 = dock_x + 66, iy1 = dock_y + 8;
+    ws_draw_rounded_rect(p, pitch, scr_w, scr_h, ix1, iy1, 42, 42, 10, 0xFF4338CA, 0x50FFFFFF);
+    for (int r = 0; r < 3; r++) {
+        for (int c = 0; c < 3; c++) {
+            ws_draw_circle(p, pitch, scr_w, scr_h, ix1 + 13 + c*8, iy1 + 13 + r*8, 2, 0xFFFFFFFF, 0);
+        }
+    }
+
+    // Icon 2: Terminal (Dark slate console with >_)
+    int ix2 = dock_x + 118, iy2 = dock_y + 8;
+    ws_draw_rounded_rect(p, pitch, scr_w, scr_h, ix2, iy2, 42, 42, 10, 0xFF0F172A, 0x50FFFFFF);
+    ws_draw_text_bold(p, pitch, scr_w, scr_h, ix2 + 11, iy2 + 12, ">_", 0xFF10B981);
+    if (s_term_open) ws_draw_circle(p, pitch, scr_w, scr_h, ix2 + 21, dock_y + 53, 2, 0xFF38BDF8, 0);
+
+    // Icon 3: Calculator (Orange arithmetic +-x=)
+    int ix3 = dock_x + 170, iy3 = dock_y + 8;
+    ws_draw_rounded_rect(p, pitch, scr_w, scr_h, ix3, iy3, 42, 42, 10, 0xFFFF9F0A, 0x50FFFFFF);
+    ws_draw_text_bold(p, pitch, scr_w, scr_h, ix3 + 8, iy3 + 7, "+ -", 0xFFFFFFFF);
+    ws_draw_text_bold(p, pitch, scr_w, scr_h, ix3 + 8, iy3 + 22, "x =", 0xFFFFFFFF);
+    if (s_calc_open) ws_draw_circle(p, pitch, scr_w, scr_h, ix3 + 21, dock_y + 53, 2, 0xFF38BDF8, 0);
+
+    // Icon 4: System Settings (Gear)
+    int ix4 = dock_x + 222, iy4 = dock_y + 8;
+    ws_draw_rounded_rect(p, pitch, scr_w, scr_h, ix4, iy4, 42, 42, 10, 0xFF64748B, 0x50FFFFFF);
+    ws_draw_circle(p, pitch, scr_w, scr_h, ix4 + 21, iy4 + 21, 10, 0xFF94A3B8, 0xFF475569);
+    ws_draw_circle(p, pitch, scr_w, scr_h, ix4 + 21, iy4 + 21, 4, 0xFF334155, 0);
+
+    // Divider
+    ws_fill_rect(p, pitch, scr_w, scr_h, dock_x + 272, dock_y + 12, 1, 34, 0x33FFFFFF);
+
+    // Icon 5: Trash
+    int ix5 = dock_x + 286, iy5 = dock_y + 8;
+    ws_draw_rounded_rect(p, pitch, scr_w, scr_h, ix5, iy5, 42, 42, 10, 0xFF334155, 0x50FFFFFF);
+    ws_draw_rounded_rect(p, pitch, scr_w, scr_h, ix5 + 11, iy5 + 11, 20, 22, 3, 0xFF94A3B8, 0xFFCBD5E1);
+    ws_fill_rect(p, pitch, scr_w, scr_h, ix5 + 8, iy5 + 8, 26, 3, 0xFFCBD5E1);
+
+    // Tooltip over hovered Dock icon
+    int mx = (int)cursorPos.x, my = (int)cursorPos.y;
+    if (my >= dock_y && my <= dock_y + dock_h) {
+        const char *tip = NULL;
+        int tip_x = 0;
+        if (mx >= ix0 && mx < ix0 + 42) { tip = "Finder"; tip_x = ix0; }
+        else if (mx >= ix1 && mx < ix1 + 42) { tip = "Launchpad"; tip_x = ix1 - 10; }
+        else if (mx >= ix2 && mx < ix2 + 42) { tip = "Terminal"; tip_x = ix2 - 6; }
+        else if (mx >= ix3 && mx < ix3 + 42) { tip = "Calculator"; tip_x = ix3 - 14; }
+        else if (mx >= ix4 && mx < ix4 + 42) { tip = "Settings"; tip_x = ix4 - 6; }
+        else if (mx >= ix5 && mx < ix5 + 42) { tip = "Trash"; tip_x = ix5; }
+
+        if (tip) {
+            int tw = (int)strlen(tip) * 8 + 16;
+            ws_draw_rounded_rect(p, pitch, scr_w, scr_h, tip_x, dock_y - 28, tw, 22, 5, 0xEE1E2638, 0x60FFFFFF);
+            ws_draw_text(p, pitch, scr_w, scr_h, tip_x + 8, dock_y - 24, tip, 0xFFFFFFFF);
+        }
+    }
+
+    // 6. Draw macOS Cursor (Black arrow with 1px white outline)
+    int cx = (int)cursorPos.x;
+    int cy = (int)cursorPos.y - _cursor_height;
+    for (int r = 0; r < 15; r++) {
+        for (int c = 0; c <= r / 2 + 1; c++) {
+            ws_put_pixel(p, pitch, scr_w, scr_h, cx + c, cy + r, 0xFF000000);
+            if (c > 0 && c < r / 2 + 1 && r < 14) {
+                ws_put_pixel(p, pitch, scr_w, scr_h, cx + c, cy + r, 0xFFFFFFFF);
+            }
+        }
+    }
+}
+
+// Compositor Main Loop
 -(void)run {
-    printf("[WindowServer] -run: Starting WindowServer rendering and compositor loop...\n");
-    fflush(stdout);
+    int scr_w = [fb width];
+    int scr_h = [fb height];
+    int pitch = [fb stride] / 4;
+    if (scr_w <= 0) scr_w = (int)_geometry.size.width;
+    if (scr_h <= 0) scr_h = (int)_geometry.size.height;
+    if (pitch <= 0) pitch = scr_w;
+
+    uint32_t *raw_pixels = (uint32_t *)[fb pixels];
+    uint32_t *vram_pixels = (uint32_t *)[fb vram];
+    if (raw_pixels) {
+        printf("[WindowServer] -run: Rendering initial desktop scene to pixels=%p, vram=%p (%dx%d, pitch=%d)...\n",
+               raw_pixels, vram_pixels, scr_w, scr_h, pitch);
+        ws_render_desktop(self, raw_pixels, pitch, scr_w, scr_h, NSMakePoint(scr_w / 2, scr_h / 2));
+        if (vram_pixels && raw_pixels != vram_pixels) {
+            memcpy(vram_pixels, raw_pixels, pitch * scr_h * 4);
+        }
+        [fb draw];
+        printf("[WindowServer] -run: Initial desktop scene drawn successfully!\n");
+        fflush(stdout);
+    }
 
     // Launch Desktop Environment (SystemUIServer for MenuBar & Extras, Dock for application launcher)
     printf("[WindowServer] -run: Launching desktop session (SystemUIServer & Dock)...\n");
@@ -658,10 +953,6 @@ static NSString *_pathForPID(pid_t pid) {
     printf("[WindowServer] Forked Dock (PID %d)\n", dock_pid);
     fflush(stdout);
 
-    pthread_mutex_lock(&renderLock);
-    O2BitmapContext *ctx = [fb context];
-    pthread_mutex_unlock(&renderLock);
-
     NSRect cursorRect = NSMakeRect(0, 0, _cursor_height, _cursor_height);
 
     struct pollfd fds;
@@ -669,7 +960,8 @@ static NSString *_pathForPID(pid_t pid) {
     fds.events = POLLIN;
 
     uint64_t frame_count = 0;
-    printf("[WindowServer] Entering compositor loop (ready=%d, inputFD=%d)...\n", ready, fds.fd);
+    printf("[WindowServer] Compositor loop started: geometry=%dx%d, pitch=%d, ctxPixels=%p, vram=%p (inputFD=%d)\n",
+           scr_w, scr_h, pitch, [fb pixels], [fb vram], fds.fd);
     fflush(stdout);
 
     BOOL needsRedraw = YES;
@@ -696,52 +988,49 @@ static NSString *_pathForPID(pid_t pid) {
         }
 
         // 3. Render desktop background, windows, decorations
-        if(needsRedraw || (++frame_count % 30) == 0) {
+        frame_count++;
+        if(needsRedraw || (frame_count % 30) == 0) {
             needsRedraw = NO;
             pthread_mutex_lock(&renderLock);
-            ctx = [fb context];
-            if(ctx) {
-                // 1. Wallpaper background
-                O2ContextSetRGBFillColor(ctx, 0.11f, 0.13f, 0.17f, 1.0f);
-                O2ContextFillRect(ctx, (O2Rect)_geometry);
+            
+            uint32_t *raw_pixels = (uint32_t *)[fb pixels];
+            uint32_t *vram_pixels = (uint32_t *)[fb vram];
 
-                // Windows
-                for(int level = 0; level < kCGNumReservedWindowLevels; ++level) {
-                    NSArray *wins = _windows[level];
-                    int count = [wins count];
-                    for(int i = 0; i < count; ++i) {
-                        WSWindowRecord *win = [wins objectAtIndex:i];
-                        if(win.state == HIDDEN || win.state == MINIMIZED || win.state == CLOSED)
-                            continue;
-                        if(win != curWindow && win.surface) {
-                            [ctx drawImage:win.surface inRect:win.geometry];
+            if (raw_pixels) {
+                // Render rich desktop UI (wallpaper, 24px frosted MenuBar, bottom floating glass Dock, built-in apps, cursor)
+                ws_render_desktop(self, raw_pixels, pitch, scr_w, scr_h, cursorRect.origin);
+
+                // Render client windows if any
+                O2BitmapContext *ctx = [fb context];
+                if (ctx) {
+                    for(int level = 0; level < kCGNumReservedWindowLevels; ++level) {
+                        NSArray *wins = _windows[level];
+                        int count = [wins count];
+                        for(int i = 0; i < count; ++i) {
+                            WSWindowRecord *win = [wins objectAtIndex:i];
+                            if(win.state == HIDDEN || win.state == MINIMIZED || win.state == CLOSED)
+                                continue;
+                            if(win != curWindow && win.surface) {
+                                [ctx drawImage:win.surface inRect:win.geometry];
+                            }
                         }
-                    }
-                    if(curWindow && curWindow.level == level && curWindow.state != MINIMIZED
-                            && curWindow.state != HIDDEN && curWindow.surface) {
-                        [ctx drawImage:curWindow.surface inRect:curWindow.geometry];
+                        if(curWindow && curWindow.level == level && curWindow.state != MINIMIZED
+                                && curWindow.state != HIDDEN && curWindow.surface) {
+                            [ctx drawImage:curWindow.surface inRect:curWindow.geometry];
+                        }
                     }
                 }
 
-                // Draw macOS arrow cursor
-                int cx = (int)cursorRect.origin.x;
-                int cy = (int)cursorRect.origin.y - _cursor_height;
-                for (int r = 0; r < 14; r++) {
-                    for (int c = 0; c <= r / 2 + 1; c++) {
-                        O2ContextSetRGBFillColor(ctx, 0.0f, 0.0f, 0.0f, 1.0f);
-                        O2ContextFillRect(ctx, (O2Rect){cx + c, cy + r, 1, 1});
-                        if (c > 0 && c < r / 2 + 1 && r < 13) {
-                            O2ContextSetRGBFillColor(ctx, 1.0f, 1.0f, 1.0f, 1.0f);
-                            O2ContextFillRect(ctx, (O2Rect){cx + c, cy + r, 1, 1});
-                        }
-                    }
+                // If direct VRAM pointer is available, ensure instant blit
+                if (vram_pixels && raw_pixels != vram_pixels) {
+                    memcpy(vram_pixels, raw_pixels, pitch * scr_h * 4);
                 }
 
                 [fb draw];
 
-                if(frame_count == 1 || (frame_count % 300) == 0) {
-                    printf("[WindowServer] Frame #%llu rendered (active windows: %lu)\n",
-                           frame_count, (unsigned long)[_windows[kCGNormalWindowLevelKey] count]);
+                if(frame_count == 1 || (frame_count % 60) == 0) {
+                    printf("[WindowServer] Compositor frame #%llu rendered (scr=%dx%d, raw_pixels=%p, vram=%p, wins=%lu)\n",
+                           frame_count, scr_w, scr_h, raw_pixels, vram_pixels, (unsigned long)[_windows[kCGNormalWindowLevelKey] count]);
                     fflush(stdout);
                 }
             }
@@ -2030,11 +2319,214 @@ static NSString *_pathForPID(pid_t pid) {
     return nil;
 }
 
+static void ws_handle_mouse_click(WindowServer *self, NSPoint pos) {
+    int x = (int)pos.x, y = (int)pos.y;
+
+    // 1. MenuBar & Apple Menu
+    if (y >= 0 && y <= 24) {
+        if (x >= 0 && x <= 30) {
+            s_apple_menu_open = !s_apple_menu_open;
+            return;
+        }
+        s_apple_menu_open = NO;
+        return;
+    }
+
+    // 2. Apple Menu dropdown clicks
+    if (s_apple_menu_open) {
+        if (x >= 6 && x <= 186 && y >= 26 && y <= 186) {
+            if (y < 48) { // About
+                s_about_open = YES;
+                s_active_window = 3;
+            } else if (y >= 75 && y < 92) { // Terminal
+                s_term_open = YES;
+                s_active_window = 1;
+            } else if (y >= 92 && y < 110) { // Calculator
+                s_calc_open = YES;
+                s_active_window = 2;
+            }
+            s_apple_menu_open = NO;
+            return;
+        }
+        s_apple_menu_open = NO;
+    }
+
+    // 3. Dock icon clicks
+    int dock_w = 380, dock_h = 58;
+    int scr_w = (int)self->_geometry.size.width;
+    int scr_h = (int)self->_geometry.size.height;
+    int dock_x = (scr_w - dock_w) / 2;
+    int dock_y = scr_h - 70;
+
+    if (y >= dock_y && y <= dock_y + dock_h) {
+        int ix0 = dock_x + 14;
+        int ix1 = dock_x + 66;
+        int ix2 = dock_x + 118;
+        int ix3 = dock_x + 170;
+        int ix4 = dock_x + 222;
+
+        if (x >= ix0 && x < ix0 + 42) {
+            s_active_window = 0;
+        } else if (x >= ix2 && x < ix2 + 42) {
+            s_term_open = !s_term_open;
+            if (s_term_open) s_active_window = 1;
+        } else if (x >= ix3 && x < ix3 + 42) {
+            s_calc_open = !s_calc_open;
+            if (s_calc_open) s_active_window = 2;
+        } else if (x >= ix4 && x < ix4 + 42) {
+            s_about_open = !s_about_open;
+            if (s_about_open) s_active_window = 3;
+        }
+        return;
+    }
+
+    // 4. Calculator interactive button clicks
+    if (s_calc_open && x >= s_calc_frame.origin.x && x <= s_calc_frame.origin.x + s_calc_frame.size.width &&
+        y >= s_calc_frame.origin.y + 28 && y <= s_calc_frame.origin.y + s_calc_frame.size.height) {
+        s_active_window = 2;
+        int cx = (int)s_calc_frame.origin.x;
+        int cy = (int)s_calc_frame.origin.y;
+
+        const char *btn_labels[5][4] = {
+            {"C", "+/-", "%", "/"},
+            {"7", "8", "9", "*"},
+            {"4", "5", "6", "-"},
+            {"1", "2", "3", "+"},
+            {"0", "", ".", "="}
+        };
+
+        for (int r = 0; r < 5; r++) {
+            for (int c = 0; c < 4; c++) {
+                if (r == 4 && c == 1) continue;
+                int bx = cx + 12 + c * 54;
+                int by = cy + 88 + r * 46;
+                int bw = (r == 4 && c == 0) ? 102 : 48;
+                int bh = 40;
+
+                if (x >= bx && x <= bx + bw && y >= by && y <= by + bh) {
+                    const char *lbl = btn_labels[r][c];
+                    if (strcmp(lbl, "C") == 0) {
+                        s_calc_val = 0; s_calc_acc = 0; s_calc_op = 0;
+                        strcpy(s_calc_str, "0");
+                    } else if (lbl[0] >= '0' && lbl[0] <= '9') {
+                        int d = lbl[0] - '0';
+                        if (strcmp(s_calc_str, "0") == 0 || strcmp(s_calc_str, "+") == 0 ||
+                            strcmp(s_calc_str, "-") == 0 || strcmp(s_calc_str, "*") == 0 ||
+                            strcmp(s_calc_str, "/") == 0) {
+                            s_calc_val = d;
+                            sprintf(s_calc_str, "%d", d);
+                        } else {
+                            s_calc_val = s_calc_val * 10 + d;
+                            sprintf(s_calc_str, "%d", s_calc_val);
+                        }
+                    } else if (strcmp(lbl, "+") == 0) {
+                        s_calc_acc = s_calc_val; s_calc_val = 0; s_calc_op = 1;
+                        strcpy(s_calc_str, "+");
+                    } else if (strcmp(lbl, "-") == 0) {
+                        s_calc_acc = s_calc_val; s_calc_val = 0; s_calc_op = 2;
+                        strcpy(s_calc_str, "-");
+                    } else if (strcmp(lbl, "*") == 0) {
+                        s_calc_acc = s_calc_val; s_calc_val = 0; s_calc_op = 3;
+                        strcpy(s_calc_str, "*");
+                    } else if (strcmp(lbl, "/") == 0) {
+                        s_calc_acc = s_calc_val; s_calc_val = 0; s_calc_op = 4;
+                        strcpy(s_calc_str, "/");
+                    } else if (strcmp(lbl, "=") == 0) {
+                        int res = s_calc_val;
+                        if (s_calc_op == 1) res = s_calc_acc + s_calc_val;
+                        else if (s_calc_op == 2) res = s_calc_acc - s_calc_val;
+                        else if (s_calc_op == 3) res = s_calc_acc * s_calc_val;
+                        else if (s_calc_op == 4 && s_calc_val != 0) res = s_calc_acc / s_calc_val;
+                        s_calc_val = res;
+                        s_calc_acc = 0;
+                        s_calc_op = 0;
+                        sprintf(s_calc_str, "%d", res);
+                    }
+                    return;
+                }
+            }
+        }
+        return;
+    }
+
+    // 5. Traffic light buttons & Titlebar dragging
+    // Terminal window titlebar
+    if (s_term_open && x >= s_term_frame.origin.x && x <= s_term_frame.origin.x + s_term_frame.size.width &&
+        y >= s_term_frame.origin.y && y <= s_term_frame.origin.y + 28) {
+        s_active_window = 1;
+        if (x >= s_term_frame.origin.x + 6 && x <= s_term_frame.origin.x + 20) { // Red close
+            s_term_open = NO;
+            return;
+        }
+        s_in_drag = YES;
+        s_drag_win = 1;
+        s_drag_off_x = x - (int)s_term_frame.origin.x;
+        s_drag_off_y = y - (int)s_term_frame.origin.y;
+        return;
+    }
+
+    // Calculator window titlebar
+    if (s_calc_open && x >= s_calc_frame.origin.x && x <= s_calc_frame.origin.x + s_calc_frame.size.width &&
+        y >= s_calc_frame.origin.y && y <= s_calc_frame.origin.y + 28) {
+        s_active_window = 2;
+        if (x >= s_calc_frame.origin.x + 6 && x <= s_calc_frame.origin.x + 20) { // Red close
+            s_calc_open = NO;
+            return;
+        }
+        s_in_drag = YES;
+        s_drag_win = 2;
+        s_drag_off_x = x - (int)s_calc_frame.origin.x;
+        s_drag_off_y = y - (int)s_calc_frame.origin.y;
+        return;
+    }
+
+    // About window titlebar
+    if (s_about_open && x >= s_about_frame.origin.x && x <= s_about_frame.origin.x + s_about_frame.size.width &&
+        y >= s_about_frame.origin.y && y <= s_about_frame.origin.y + 28) {
+        s_active_window = 3;
+        if (x >= s_about_frame.origin.x + 6 && x <= s_about_frame.origin.x + 20) { // Red close
+            s_about_open = NO;
+            return;
+        }
+        s_in_drag = YES;
+        s_drag_win = 3;
+        s_drag_off_x = x - (int)s_about_frame.origin.x;
+        s_drag_off_y = y - (int)s_about_frame.origin.y;
+        return;
+    }
+
+    // Focus on window body click
+    if (s_term_open && NSPointInRect(pos, s_term_frame)) s_active_window = 1;
+    else if (s_calc_open && NSPointInRect(pos, s_calc_frame)) s_active_window = 2;
+    else if (s_about_open && NSPointInRect(pos, s_about_frame)) s_active_window = 3;
+}
+
 - (BOOL)sendEventToApp:(struct mach_event *)event {
     static BOOL inDrag = NO;
     static WSWindowRecord *dragWindow = nil;
 
     NSPoint pos = NSMakePoint(event->x, event->y);
+
+    if(event->code == NSLeftMouseDown) {
+        ws_handle_mouse_click(self, pos);
+    } else if(event->code == NSLeftMouseDragged) {
+        if(s_in_drag) {
+            if(s_drag_win == 1) {
+                s_term_frame.origin.x = pos.x - s_drag_off_x;
+                s_term_frame.origin.y = pos.y - s_drag_off_y;
+            } else if(s_drag_win == 2) {
+                s_calc_frame.origin.x = pos.x - s_drag_off_x;
+                s_calc_frame.origin.y = pos.y - s_drag_off_y;
+            } else if(s_drag_win == 3) {
+                s_about_frame.origin.x = pos.x - s_drag_off_x;
+                s_about_frame.origin.y = pos.y - s_drag_off_y;
+            }
+            return YES;
+        }
+    } else if(event->code == NSLeftMouseUp) {
+        s_in_drag = NO;
+        s_drag_win = 0;
+    }
 
     /* Any key input goes to active window & app, even if pointer is over something else
      * Otherwise, identify the window (if any) that is under the pointer. Windows on macOS
@@ -2096,38 +2588,12 @@ static NSString *_pathForPID(pid_t pid) {
                 return YES;
             }
 
-            // these are just requests - the client can ignore them, so we don't
-            // actually change the window until it sends us a new state message
-#if 0
-            } else if(NSPointInRect(pos, window.miniButtonRect)) {
-                if(window.state != MINIMIZED)
-                    window.prevState = window.state;
-                else
-                    window.prevState = NORMAL;
-                window.state = MINIMIZED;
-                [self updateClientWindowState:window];
-
-                // Are there other windows active for this app?
-                NSArray *wins = [app windows];
-                for(int i = 0; i < [wins count]; ++i) {
-                    curWindow = [wins objectAtIndex:i];
-                    if(curWindow.number != window.number)
-                        i = [wins count];
-                }
-                if(curWindow.number == window.number)
-                    curWindow = nil; // app stays active though
-            } else {
-#endif
-                // Handled all WS cases - send this to the window!
-                if(![app skipSwitcher]) {
-                    [self deactivateApp:curApp];
-                    curApp = app;
-                    curWindow = window;
-                    [self activateApp:curApp];
-                }
-#if 0
+            if(![app skipSwitcher]) {
+                [self deactivateApp:curApp];
+                curApp = app;
+                curWindow = window;
+                [self activateApp:curApp];
             }
-#endif
             break;
         }
         case NSLeftMouseUp: {

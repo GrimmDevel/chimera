@@ -176,6 +176,7 @@ void	 swab(const void * __restrict, void * __restrict, ssize_t);
 __OSX_AVAILABLE(10.12.1) __IOS_AVAILABLE(10.1)
 __TVOS_AVAILABLE(10.0.1) __WATCHOS_AVAILABLE(3.1)
 int	timingsafe_bcmp(const void *__b1, const void *__b2, size_t __len);
+void	explicit_bzero(void *__b, size_t __len);
 __END_DECLS
 
 /* Some functions historically defined in string.h were placed in strings.h

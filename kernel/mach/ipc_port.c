@@ -133,7 +133,7 @@ void ipc_space_destroy(ipc_space_t *space) {
     // extract live ports before dropping lock to prevent deadlock in ipc_port_destroy
     for (u32 i = 1; i < space->is_table_used; i++) {
         ipc_entry_t *e = &space->is_table[i];
-        if (e->ie_object && (e->ie_bits & MACH_PORT_TYPE_RECEIVE)) {
+        if (e->ie_object && (e->ie_bits & MACH_PORT_TYPE_RECEIVE) && (e->ie_object->ip_receiver == space)) {
             if (destroy_count < IPC_SPACE_INITIAL_CAPACITY)
                 ports_to_destroy[destroy_count++] = e->ie_object;
         } else if (e->ie_object) {
@@ -449,12 +449,14 @@ xiu_error_t mach_port_deallocate_kernel(ipc_space_t *space, mach_port_name_t nam
         spinlock_unlock_irqrestore(&space->is_lock, f);
 
         if (port) {
-            if (bits & MACH_PORT_TYPE_RECEIVE) {
+            if ((bits & MACH_PORT_TYPE_RECEIVE) && (port->ip_receiver == space)) {
                 ipc_port_destroy(port);
             } else if (bits & MACH_PORT_TYPE_SEND) {
                 spinlock_lock(&port->ip_lock);
                 if (port->ip_srights > 0) port->ip_srights--;
                 spinlock_unlock(&port->ip_lock);
+                ipc_port_release(port);
+            } else {
                 ipc_port_release(port);
             }
         }

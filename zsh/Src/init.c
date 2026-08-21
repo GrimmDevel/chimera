@@ -355,12 +355,13 @@ static void parseopts_setemulate(char *nam, int flags)
     opts[MONITOR] = 2;   /* may be unset in init_io() */
     opts[HASHDIRS] = 2;  /* same relationship to INTERACTIVE */
     opts[USEZLE] = 0;    /* default to robust canonical line editing without termcap curses */
-    opts[PROMPTSP] = 0;  /* prevent terminal width padding bug */
-    opts[PROMPTCR] = 0;
     opts[PROMPTPERCENT] = 1;
-    opts[PROMPTSUBST] = 1;
+    opts[PROMPTSUBST] = 0;
+    opts[PROMPTSP] = 0;
+    opts[PROMPTCR] = 0;
     opts[SHINSTDIN] = 0;
     opts[SINGLECOMMAND] = 0;
+
 }
 
 /*
@@ -585,14 +586,9 @@ init_io(char *cmd)
     int i;
 #endif
 
-/* stdout, stderr fully buffered */
-#ifdef _IOFBF
-    setvbuf(stdout, outbuf, _IOFBF, BUFSIZ);
-    setvbuf(stderr, errbuf, _IOFBF, BUFSIZ);
-#else
-    setbuffer(stdout, outbuf, BUFSIZ);
-    setbuffer(stderr, errbuf, BUFSIZ);
-#endif
+    setvbuf(stdout, NULL, _IONBF, 0);
+    setvbuf(stderr, NULL, _IONBF, 0);
+
 
 /* This works around a bug in some versions of in.rshd. *
  * Currently this is not defined by default.            */
@@ -687,14 +683,10 @@ init_io(char *cmd)
 	    ttystrname = ztrdup("/dev/tty");
     }
 
-    /* We will only use zle if shell is interactive, *
-     * SHTTY != -1, and shout != 0                   */
     if (interact) {
 	init_shout();
-	if(!SHTTY || !shout)
-	    opts[USEZLE] = 0;
-    } else
-	opts[USEZLE] = 0;
+    }
+    opts[USEZLE] = 0;
 
 #ifdef JOB_CONTROL
     /* If interactive, make sure the shell is in the foreground and is the
@@ -715,7 +707,6 @@ init_io(char *cmd)
 mod_export void
 init_shout(void)
 {
-    static char shoutbuf[BUFSIZ];
 #if defined(JOB_CONTROL) && defined(TIOCSETD) && defined(NTTYDISC)
     int ldisc;
 #endif
@@ -734,10 +725,9 @@ init_shout(void)
 
     /* Associate terminal file descriptor with a FILE pointer */
     shout = fdopen(SHTTY, "w");
-#ifdef _IOFBF
     if (shout)
-	setvbuf(shout, shoutbuf, _IOFBF, BUFSIZ);
-#endif
+	setvbuf(shout, NULL, _IONBF, 0);
+
   
     gettyinfo(&shttyinfo);	/* get tty state */
 #if defined(__sgi)
@@ -1652,20 +1642,30 @@ VA_DCL
 	 */
     case ZLE_CMD_READ:
     {
-	char *pptbuf, **lp;
-	int pptlen;
+	char *pptbuf = NULL, **lp;
+	int pptlen = 0;
 
 	lp = va_arg(ap, char **);
 
-	pptbuf = unmetafy(promptexpand(lp ? *lp : NULL, 0, NULL, NULL,
-				       NULL),
-			  &pptlen);
-	write_loop(2, pptbuf, pptlen);
-	free(pptbuf);
+	if (lp && *lp) {
+	    pptbuf = unmetafy(promptexpand(*lp, 0, NULL, NULL, NULL), &pptlen);
+	}
+	if (!pptbuf || pptlen == 0) {
+	    const char *u = get_username();
+	    if (!u || !*u) u = "root";
+	    char def_prompt[128];
+	    pptlen = snprintf(def_prompt, sizeof(def_prompt), "%s@Mac %s %% ", u, (pwd && *pwd) ? pwd : "/");
+	    write_loop(2, def_prompt, pptlen);
+	} else {
+	    write_loop(2, pptbuf, pptlen);
+	}
+	if (pptbuf)
+	    free(pptbuf);
 
 	ret = shingetline();
 	break;
     }
+
 
     case ZLE_CMD_GET_LINE:
     {

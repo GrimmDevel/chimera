@@ -42,6 +42,8 @@ extern "C" {
 #define SYS_sigaction       46
 #define SYS_getgid          47
 #define SYS_sigprocmask     48
+#define SYS_getlogin        49
+#define SYS_setlogin        50
 #define SYS_sigpending      52
 #define SYS_sigaltstack     53
 #define SYS_ioctl           54
@@ -84,11 +86,13 @@ extern "C" {
 #define SYS_utimes          138
 #define SYS_futimes         139
 #define SYS_setsid          147
+#define SYS_getpgid         151
 #define SYS_pread           153
 #define SYS_pwrite          154
 #define SYS_setgid          181
 #define SYS_setegid         182
 #define SYS_seteuid         183
+#define SYS_getsid          310
 #define SYS_stat            188
 #define SYS_fstat           189
 #define SYS_lstat           190

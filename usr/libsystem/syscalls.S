@@ -42,12 +42,15 @@ SYSCALL_STUB(xiu_getegid, 43)
 SYSCALL_STUB(xiu_sigaction, 46)
 SYSCALL_STUB(xiu_getgid, 47)
 SYSCALL_STUB(xiu_sigprocmask, 48)
+SYSCALL_STUB(xiu_getlogin, 49)
+SYSCALL_STUB(xiu_setlogin, 50)
 SYSCALL_STUB(xiu_sigpending, 52)
 SYSCALL_STUB(xiu_sigaltstack, 53)
 SYSCALL_STUB(xiu_ioctl, 54)
 SYSCALL_STUB(xiu_execve, 59)
 SYSCALL_STUB(xiu_umask, 60)
 SYSCALL_STUB(xiu_munmap, 73)
+SYSCALL_STUB(xiu_mprotect, 74)
 SYSCALL_STUB(xiu_getgroups, 79)
 SYSCALL_STUB(xiu_setgroups, 80)
 SYSCALL_STUB(xiu_getpgrp, 81)
@@ -75,11 +78,13 @@ SYSCALL_STUB(xiu_socketpair, 135)
 SYSCALL_STUB(xiu_mkdir, 136)
 SYSCALL_STUB(xiu_rmdir, 137)
 SYSCALL_STUB(xiu_setsid, 147)
+SYSCALL_STUB(xiu_getpgid, 151)
 SYSCALL_STUB(xiu_pread, 153)
 SYSCALL_STUB(xiu_pwrite, 154)
 SYSCALL_STUB(xiu_setgid, 181)
 SYSCALL_STUB(xiu_setegid, 182)
 SYSCALL_STUB(xiu_seteuid, 183)
+SYSCALL_STUB(xiu_getsid, 310)
 SYSCALL_STUB(xiu_stat, 188)
 SYSCALL_STUB(xiu_fstat, 189)
 SYSCALL_STUB(xiu_lstat, 190)
@@ -107,5 +112,31 @@ SYSCALL_STUB(xiu_mach_lookup_service, 264)
 SYSCALL_STUB(xiu_mach_port_deallocate, 265)
 SYSCALL_STUB(xiu_mach_port_type, 266)
 SYSCALL_STUB(xiu_task_self, 268)
+
+.globl "_getgroups$DARWIN_EXTSN"
+"_getgroups$DARWIN_EXTSN":
+    jmp _xiu_getgroups
+
+.globl "_select$DARWIN_EXTSN"
+"_select$DARWIN_EXTSN":
+    jmp _xiu_select
+
+.globl __ioctl
+__ioctl:
+    jmp _xiu_ioctl
+
+.globl __select
+__select:
+    jmp _xiu_select
+
+.globl __sigprocmask
+__sigprocmask:
+    jmp _xiu_sigprocmask
+
+.globl __pthread_once
+__pthread_once:
+    jmp _pthread_once
+
+
 
 

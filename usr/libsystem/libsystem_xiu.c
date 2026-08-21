@@ -88,6 +88,8 @@ extern i64 xiu_setgid(gid_t gid);
 extern i64 xiu_setegid(gid_t egid);
 extern i64 xiu_getgroups(int size, gid_t list[]);
 extern i64 xiu_setgroups(int size, const gid_t *list);
+extern i64 xiu_getlogin(char *name, usize namelen);
+extern i64 xiu_setlogin(const char *name);
 extern i64 xiu_getppid(void);
 extern i64 xiu_getpgrp(void);
 extern i64 xiu_setpgid(pid_t pid, pid_t pgid);
@@ -340,9 +342,8 @@ pid_t wait4(pid_t pid, int *status, int options, struct rusage *rusage) {
 }
 
 pid_t getpid(void) { return (pid_t)xiu_getpid(); }
-int tcsetpgrp(int fd, pid_t pgrp) { return ioctl(fd, 0x5410, &pgrp); }
-int tcgetpgrp(int fd) { int pgrp = 0; if (ioctl(fd, 0x540F, &pgrp) < 0) return -1; return pgrp; }
 int pipe(int pipefd[2]) { return (int)xiu_pipe(pipefd); }
+
 i64 lseek(int fd, i64 offset, int whence) { return xiu_lseek(fd, offset, whence); }
 int fcntl(int fd, int cmd, ...) {
   __builtin_va_list ap;
@@ -701,16 +702,6 @@ int sigaddset(sigset_t *set, int signum) { if (set) *set |= (1U << (signum - 1))
 int sigdelset(sigset_t *set, int signum) { if (set) *set &= ~(1U << (signum - 1)); return 0; }
 int sigismember(const sigset_t *set, int signum) { if (!set) return 0; return (*set & (1U << (signum - 1))) != 0; }
 
-int tcgetattr(int fd, struct termios *termios_p) {
-    if (!termios_p) return -1;
-    return ioctl(fd, 0x5401, termios_p);
-}
-
-int tcsetattr(int fd, int optional_actions, const struct termios *termios_p) {
-    (void)optional_actions;
-    if (!termios_p) return -1;
-    return ioctl(fd, 0x5402, (void *)termios_p);
-}
 
 // string Utilities
 
@@ -1449,9 +1440,9 @@ int dlclose(void *handle) { (void)handle; return 0; }
 void *dlsym(void *handle, const char *symbol) { (void)handle; (void)symbol; return (void *)0; }
 char *dlerror(void) { return "Dynamic linking not supported"; }
 
+extern i64 xiu_mprotect(void *addr, usize len, int prot);
 int mprotect(void *addr, usize len, int prot) {
-  (void)addr; (void)len; (void)prot;
-  return 0;
+  return (int)xiu_mprotect(addr, len, prot);
 }
 
 float strtof(const char *nptr, char **endptr) {
@@ -1462,40 +1453,11 @@ long double strtold(const char *nptr, char **endptr) {
   return (long double)strtod(nptr, endptr);
 }
 
-static struct tm s_tm_buf;
-struct tm *localtime(const time_t *timer) {
-  time_t t = timer ? *timer : 0;
-  __builtin_memset(&s_tm_buf, 0, sizeof(s_tm_buf));
-  s_tm_buf.tm_year = 126; // 2026 - 1900
-  s_tm_buf.tm_mon = 7;   // august
-  s_tm_buf.tm_mday = 19;
-  s_tm_buf.tm_hour = 3;
-  s_tm_buf.tm_min = 27;
-  s_tm_buf.tm_sec = (int)(t % 60);
-  return &s_tm_buf;
-}
-
-struct tm *localtime_r(const time_t *timer, struct tm *result) {
-  if (!result) return NULL;
-  struct tm *t = localtime(timer);
-  if (t) *result = *t;
-  return result;
-}
-
-struct tm *gmtime(const time_t *timer) {
-  return localtime(timer);
-}
-
-struct tm *gmtime_r(const time_t *timer, struct tm *result) {
-  return localtime_r(timer, result);
-}
-
-void tzset(void) {}
-
 int setpriority(int which, id_t who, int prio) {
   (void)which; (void)who; (void)prio;
   return 0;
 }
+
 
 int socketpair(int domain, int type, int protocol, int sv[2]) {
   (void)domain; (void)type; (void)protocol;
@@ -1604,24 +1566,17 @@ int futimens(int fd, const struct timespec times[2]) {
   return 0;
 }
 
+extern i64 xiu_getpgid(pid_t pid);
+extern i64 xiu_getsid(pid_t pid);
+
 pid_t getpgid(pid_t pid) {
-  return pid ? pid : getpgrp();
+  return (pid_t)xiu_getpgid(pid);
 }
 
 pid_t getsid(pid_t pid) {
-  return pid ? pid : getpgrp();
+  return (pid_t)xiu_getsid(pid);
 }
 
-int getgrouplist(const char *name, int basegid, int *groups, int *ngroups) {
-  (void)name;
-  if (!groups || !ngroups || *ngroups < 1) {
-    if (ngroups) *ngroups = 1;
-    return -1;
-  }
-  groups[0] = basegid;
-  *ngroups = 1;
-  return 1;
-}
 
 const char *const sudo_sys_signame[32] = {
     "ZERO", "HUP", "INT", "QUIT", "ILL", "TRAP", "ABRT", "EMT",
@@ -1830,16 +1785,11 @@ unsigned long strtoul(const char *nptr, char **endptr, int base) {
   return (unsigned long)strtoull(nptr, endptr, base);
 }
 
-int fflush(FILE *f) { return 0; }
-int sscanf(const char *str, const char *fmt, ...) { return 0; }
+int fflush(FILE *f) { (void)f; return 0; }
 int getrlimit(int res, struct rlimit *rl) { if (rl) { rl->rlim_cur = 0; rl->rlim_max = 0; } return -1; }
 int setrlimit(int res, const struct rlimit *rl) { return -1; }
 
-char *strerror(int errnum) {
-  static char buf[32];
-  sprintf(buf, "Error %d", errnum);
-  return buf;
-}
+
 
 usize strcspn(const char *s, const char *reject) {
   usize n = 0;
@@ -1981,18 +1931,7 @@ char *stpncpy(char *dest, const char *src, usize n) {
 }
 
 int killpg(pid_t pgrp, int sig) { return kill(-pgrp, sig); }
-int isatty(int fd) { return fd < 3; }
-char *setlocale(int category, const char *locale) { return "C"; }
-int strcoll(const char *s1, const char *s2) { return strcmp(s1, s2); }
-int strcasecmp(const char *s1, const char *s2) {
-    while (*s1 && *s2) {
-        int c1 = *s1; if (c1 >= 'A' && c1 <= 'Z') c1 += 32;
-        int c2 = *s2; if (c2 >= 'A' && c2 <= 'Z') c2 += 32;
-        if (c1 != c2) return c1 - c2;
-        s1++; s2++;
-    }
-    return *s1 - *s2;
-}
+
 
 static void swap_bytes(char *a, char *b, usize size) {
     while (size--) {
@@ -2063,26 +2002,12 @@ int sigprocmask(int how, const sigset_t *set, sigset_t *oldset) {
     return (int)xiu_sigprocmask(how, set, oldset);
 }
 
-const char *const sys_siglist[NSIG] = {
-    [0] = "Signal 0", [SIGHUP] = "Hangup", [SIGINT] = "Interrupt", [SIGQUIT] = "Quit",
-    [SIGILL] = "Illegal instruction", [SIGTRAP] = "Trace/breakpoint trap", [SIGABRT] = "Aborted",
-    [SIGFPE] = "Floating point exception", [SIGKILL] = "Killed", [SIGUSR1] = "User defined signal 1",
-    [SIGSEGV] = "Segmentation fault", [SIGUSR2] = "User defined signal 2", [SIGPIPE] = "Broken pipe",
-    [SIGALRM] = "Alarm clock", [SIGTERM] = "Terminated", [SIGCHLD] = "Child exited",
-    [SIGCONT] = "Continued", [SIGSTOP] = "Stopped (signal)", [SIGTSTP] = "Stopped",
-    [SIGTTIN] = "Stopped (tty input)", [SIGTTOU] = "Stopped (tty output)"
-};
 
 int fstat64(int fd, struct stat64 *buf) { return fstat(fd, (struct stat *)buf); }
 intmax_t strtoimax(const char *nptr, char **endptr, int base) { return (intmax_t)strtoll(nptr, endptr, base); }
-char *strsignal(int sig) {
-    if (sig >= 0 && sig < NSIG && sys_siglist[sig]) return (char *)sys_siglist[sig];
-    return "Unknown signal";
-}
-
-clock_t times(struct tms *buffer) { return 0; }
 
 int chdir(const char *path) { return (int)xiu_chdir(path); }
+
 
 void *memchr(const void *s, int c, usize n) {
     const unsigned char *p = (const unsigned char *)s;
@@ -2140,11 +2065,6 @@ int getopt(int argc, char * const argv[], const char *optstring) {
 
 #define _iscntrl iscntrl
 
-// wchar stubs
-usize mbrlen(const char *s, usize n, mbstate_t *ps) { return 1; }
-usize mbrtowc(wchar_t *pwc, const char *s, usize n, mbstate_t *ps) { if (pwc) *pwc = *s; return 1; }
-usize mbsrtowcs(wchar_t *dest, const char **src, usize len, mbstate_t *ps) { return 0; }
-wchar_t *wcschr(const wchar_t *s, wchar_t c) { return NULL; }
 
 // generic syscall wrapper for variadic syscalls
 extern i64 xiu_syscall(u64 num, u64 arg1, u64 arg2, u64 arg3, u64 arg4, u64 arg5, u64 arg6);
@@ -2626,69 +2546,29 @@ int asprintf(char **ret, const char *format, ...) {
     return res;
 }
 
-char *crypt(const char *key, const char *salt) {
-    (void)salt;
-    return (char *)key;
-}
-
-static struct passwd g_root_pw = {
-    .pw_name = "root",
-    .pw_passwd = "*",
-    .pw_uid = 0,
-    .pw_gid = 0,
-    .pw_change = 0,
-    .pw_class = "",
-    .pw_gecos = "Root User",
-    .pw_dir = "/Users/root",
-    .pw_shell = "/bin/zsh",
-    .pw_expire = 0,
-};
-
-static struct passwd g_fvr_pw = {
-    .pw_name = "fvr",
-    .pw_passwd = "*",
-    .pw_uid = 501,
-    .pw_gid = 20,
-    .pw_change = 0,
-    .pw_class = "",
-    .pw_gecos = "fvr",
-    .pw_dir = "/Users/fvr",
-    .pw_shell = "/bin/zsh",
-    .pw_expire = 0,
-};
-
-static struct passwd g_user_pw = {
-    .pw_name = "user",
-    .pw_passwd = "*",
-    .pw_uid = 502,
-    .pw_gid = 20,
-    .pw_change = 0,
-    .pw_class = "",
-    .pw_gecos = "XIU User",
-    .pw_dir = "/Users/user",
-    .pw_shell = "/bin/zsh",
-    .pw_expire = 0,
-};
-
-struct passwd *getpwnam(const char *name) {
-    if (!name) return NULL;
-    if (strcmp(name, "root") == 0) return &g_root_pw;
-    if (strcmp(name, "fvr") == 0) return &g_fvr_pw;
-    return &g_user_pw;
-}
-
-struct passwd *getpwuid(uid_t uid) {
-    if (uid == 0) {
-        char *u = getenv("USER");
-        if (u && strcmp(u, "root") == 0) return &g_root_pw;
-        return &g_fvr_pw;
+int __getlogin(char *name, int namelen) {
+    if (!name || namelen <= 0) {
+        errno = EINVAL;
+        return -1;
     }
-    if (uid == 501) return &g_fvr_pw;
-    return &g_user_pw;
+    i64 ret = xiu_getlogin(name, (usize)namelen);
+    if (ret < 0) {
+        errno = EPERM;
+        return -1;
+    }
+    return 0;
 }
 
-int setlogin(const char *name) {
-    (void)name;
+int __setlogin(const char *name) {
+    if (!name) {
+        errno = EINVAL;
+        return -1;
+    }
+    i64 ret = xiu_setlogin(name);
+    if (ret < 0) {
+        errno = EPERM;
+        return -1;
+    }
     return 0;
 }
 
@@ -2712,16 +2592,37 @@ int kvm_close(kvm_t *kd) {
     return 0;
 }
 
+typedef struct {
+  u32 pid;
+  u32 ppid;
+  u32 state;
+  u32 thread_count;
+  char name[32];
+} xiu_procinfo_t;
+
+extern i64 xiu_proclist(xiu_procinfo_t *buf, u64 max_count);
+
 struct kinfo_proc *kvm_getprocs(kvm_t *kd, int op, int arg, int *cnt) {
     (void)kd; (void)op; (void)arg;
-    static struct kinfo_proc kp;
-    memset(&kp, 0, sizeof(kp));
-    kp.ki_pid = arg > 0 ? arg : 1;
-    kp.ki_uid = 0;
-    kp.ki_rgid = 0;
-    if (cnt) *cnt = 1;
-    return &kp;
+    static struct kinfo_proc s_kinfo_procs[64];
+    xiu_procinfo_t raw_procs[64];
+    int n = (int)xiu_proclist(raw_procs, 64);
+    if (n < 0) n = 0;
+
+    memset(s_kinfo_procs, 0, sizeof(s_kinfo_procs));
+    for (int i = 0; i < n; i++) {
+        s_kinfo_procs[i].ki_pid = (pid_t)raw_procs[i].pid;
+        s_kinfo_procs[i].ki_ppid = (pid_t)raw_procs[i].ppid;
+        s_kinfo_procs[i].ki_uid = 0;
+        s_kinfo_procs[i].ki_rgid = 0;
+        s_kinfo_procs[i].ki_stat = (char)raw_procs[i].state;
+        strncpy(s_kinfo_procs[i].ki_comm, raw_procs[i].name, sizeof(s_kinfo_procs[i].ki_comm) - 1);
+    }
+    if (cnt) *cnt = n;
+    return s_kinfo_procs;
 }
+
+
 
 double pow(double x, double y) {
     if (y == 0.0) return 1.0;
@@ -2758,7 +2659,17 @@ int pthread_cancel(pthread_t thread) {
     return 0;
 }
 
+int pthread_once(pthread_once_t *once_control, void (*init_routine)(void)) {
+    if (!once_control || !init_routine) return -1;
+    if (once_control->__sig == 0x30B1BCBA) return 0;
+    init_routine();
+    once_control->__sig = 0x30B1BCBA;
+    return 0;
+}
+
+
 #define PTHREAD_KEYS_MAX 64
+
 static void *s_pthread_tls[PTHREAD_KEYS_MAX];
 static int s_pthread_key_count = 1;
 
@@ -3038,19 +2949,32 @@ char *nl_langinfo(int item) {
 }
 
 double sin(double x) {
-    return __builtin_sin(x);
+    double res;
+    __asm__ __volatile__ ("fsin" : "=t" (res) : "0" (x));
+    return res;
 }
 
 double cos(double x) {
-    return __builtin_cos(x);
+    double res;
+    __asm__ __volatile__ ("fcos" : "=t" (res) : "0" (x));
+    return res;
 }
 
 double fmod(double x, double y) {
-    return __builtin_fmod(x, y);
+    double res;
+    __asm__ __volatile__ ("1: fprem; fnstsw %%ax; sahf; jp 1b" : "=t" (res) : "0" (x), "u" (y) : "ax", "cc");
+    return res;
 }
 
 double acos(double x) {
-    return __builtin_acos(x);
+    if (x < -1.0) x = -1.0;
+    if (x > 1.0) x = 1.0;
+    double s = 1.0 - x * x;
+    double sq;
+    __asm__ __volatile__ ("fsqrt" : "=t" (sq) : "0" (s));
+    double res;
+    __asm__ __volatile__ ("fpatan" : "=t" (res) : "0" (x), "u" (sq) : "st(1)");
+    return res;
 }
 
 double __exp10(double x) {
@@ -3064,8 +2988,7 @@ struct __sincos_res {
 
 struct __sincos_res __sincos_stret(double x) {
     struct __sincos_res res;
-    res.s = __builtin_sin(x);
-    res.c = __builtin_cos(x);
+    __asm__ __volatile__ ("fsincos" : "=t" (res.c), "=u" (res.s) : "0" (x));
     return res;
 }
 
@@ -3253,152 +3176,38 @@ char *strsep(char **stringp, const char *delim) {
     return s;
 }
 
-static const char *s_progname = "xiu";
-const char *getprogname(void) { return s_progname; }
-void setprogname(const char *pn) { if (pn) s_progname = pn; }
-
-void vwarn(const char *fmt, va_list ap) {
-    int err = errno;
-    fprintf(stderr, "%s: ", getprogname());
-    if (fmt) {
-        vfprintf(stderr, fmt, ap);
-        fprintf(stderr, ": ");
-    }
-    fprintf(stderr, "%s\n", strerror(err));
-}
-
-void vwarnx(const char *fmt, va_list ap) {
-    fprintf(stderr, "%s: ", getprogname());
-    if (fmt) vfprintf(stderr, fmt, ap);
-    fprintf(stderr, "\n");
-}
-
-void warn(const char *fmt, ...) {
-    va_list ap;
-    va_start(ap, fmt);
-    vwarn(fmt, ap);
-    va_end(ap);
-}
-
-void warnx(const char *fmt, ...) {
-    va_list ap;
-    va_start(ap, fmt);
-    vwarnx(fmt, ap);
-    va_end(ap);
-}
-
-void verr(int eval, const char *fmt, va_list ap) {
-    vwarn(fmt, ap);
-    exit(eval);
-}
-
-void verrx(int eval, const char *fmt, va_list ap) {
-    vwarnx(fmt, ap);
-    exit(eval);
-}
-
-void err(int eval, const char *fmt, ...) {
-    va_list ap;
-    va_start(ap, fmt);
-    verr(eval, fmt, ap);
-    va_end(ap);
-}
-
-void errx(int eval, const char *fmt, ...) {
-    va_list ap;
-    va_start(ap, fmt);
-    verrx(eval, fmt, ap);
-    va_end(ap);
-}
-
-speed_t cfgetispeed(const struct termios *tp) {
-    return tp ? tp->c_ispeed : 0;
-}
-
-speed_t cfgetospeed(const struct termios *tp) {
-    return tp ? tp->c_ospeed : 0;
-}
-
-int cfsetispeed(struct termios *tp, speed_t speed) {
-    if (tp) { tp->c_ispeed = speed; return 0; }
-    return -1;
-}
-
-int cfsetospeed(struct termios *tp, speed_t speed) {
-    if (tp) { tp->c_ospeed = speed; return 0; }
-    return -1;
-}
-
-void cfmakeraw(struct termios *tp) {
-    if (!tp) return;
-    tp->c_iflag &= ~(IGNBRK | BRKINT | PARMRK | ISTRIP | INLCR | IGNCR | ICRNL | IXON);
-    tp->c_oflag &= ~OPOST;
-    tp->c_lflag &= ~(ECHO | ECHONL | ICANON | ISIG | IEXTEN);
-    tp->c_cflag &= ~(CSIZE | PARENB);
-    tp->c_cflag |= CS8;
-    tp->c_cc[VMIN] = 1;
-    tp->c_cc[VTIME] = 0;
-}
-
-void cfmakesane(struct termios *tp) {
-    if (!tp) return;
-    tp->c_cflag = CS8 | CREAD | CLOCAL;
-    tp->c_iflag = BRKINT | ICRNL | IMAXBEL;
-    tp->c_oflag = OPOST | ONLCR;
-    tp->c_lflag = ECHO | ECHOE | ECHOK | ECHOCTL | ECHOKE | ICANON | ISIG | IEXTEN;
-    tp->c_ispeed = 38400;
-    tp->c_ospeed = 38400;
-}
-
-int gethostname(char *name, size_t len) {
-    if (!name || len == 0) return -1;
-    strncpy(name, "Mac", len - 1);
-    name[len - 1] = '\0';
-    return 0;
-}
-
-char *getlogin(void) {
-    char *u = getenv("USER");
-    if (u && *u) return u;
-    return "fvr";
-}
-
-void *setmode(const char *mode_str) {
-    if (!mode_str) return NULL;
-    mode_t *m = (mode_t *)malloc(sizeof(mode_t));
-    if (!m) return NULL;
-    char *ep = NULL;
-    *m = (mode_t)strtoul(mode_str, &ep, 8);
-    return m;
-}
-
-mode_t getmode(const void *bbox, mode_t omode) {
-    if (!bbox) return omode;
-    return *(const mode_t *)bbox;
-}
+typedef struct {
+  u64 total_memory;
+  u64 free_memory;
+  u32 cpu_count;
+  u32 uptime_seconds;
+  char os_name[32];
+  char os_version[32];
+  char kernel_name[32];
+  char architecture[16];
+  char hostname[64];
+} xiu_sysinfo_t;
 
 int getrusage(int who, struct rusage *usage) {
+
     (void)who;
     if (!usage) return -1;
     memset(usage, 0, sizeof(*usage));
+    xiu_sysinfo_t si;
+    if (xiu_sysinfo(&si) == 0) {
+        usage->ru_utime.tv_sec = si.uptime_seconds / 2;
+        usage->ru_utime.tv_usec = 0;
+        usage->ru_stime.tv_sec = si.uptime_seconds / 2;
+        usage->ru_stime.tv_usec = 0;
+        usage->ru_maxrss = (long)((si.total_memory - si.free_memory) / 1024);
+    }
     return 0;
 }
+
 
 pid_t wait3(int *status, int options, struct rusage *rusage) {
     if (rusage) memset(rusage, 0, sizeof(*rusage));
     return waitpid(-1, status, options);
-}
-
-int mbtowc(wchar_t *pwc, const char *s, size_t n) {
-    if (!s) return 0;
-    if (n == 0) return -1;
-    if (pwc) *pwc = (wchar_t)(unsigned char)*s;
-    return (*s == 0) ? 0 : 1;
-}
-
-int wcscoll(const wchar_t *ws1, const wchar_t *ws2) {
-    while (*ws1 && (*ws1 == *ws2)) { ws1++; ws2++; }
-    return *(const unsigned int *)ws1 - *(const unsigned int *)ws2;
 }
 
 void *memccpy(void *dst, const void *src, int c, size_t n) {
@@ -3412,17 +3221,6 @@ void *memccpy(void *dst, const void *src, int c, size_t n) {
     return NULL;
 }
 
-size_t strftime(char *s, size_t max, const char *format, const struct tm *tm) {
-    (void)format;
-    if (!s || max == 0) return 0;
-    return snprintf(s, max, "%04d-%02d-%02d %02d:%02d:%02d",
-                    tm ? tm->tm_year + 1900 : 2026,
-                    tm ? tm->tm_mon + 1 : 1,
-                    tm ? tm->tm_mday : 1,
-                    tm ? tm->tm_hour : 0,
-                    tm ? tm->tm_min : 0,
-                    tm ? tm->tm_sec : 0);
-}
 
 size_t strlcpy(char *dst, const char *src, size_t size) {
     size_t srclen = strlen(src);
@@ -3434,19 +3232,11 @@ size_t strlcpy(char *dst, const char *src, size_t size) {
     return srclen;
 }
 
-int strncasecmp(const char *s1, const char *s2, size_t n) {
-    while (n && *s1 && *s2) {
-        int c1 = tolower((unsigned char)*s1);
-        int c2 = tolower((unsigned char)*s2);
-        if (c1 != c2) return c1 - c2;
-        s1++; s2++; n--;
-    }
-    return n ? ((unsigned char)*s1 - (unsigned char)*s2) : 0;
-}
-
 uintmax_t strtoumax(const char *nptr, char **endptr, int base) {
     return (uintmax_t)strtoull(nptr, endptr, base);
 }
+
+
 
 FILE *funopen(const void *cookie,
               int (*readfn)(void *, char *, int),
@@ -3494,18 +3284,6 @@ int fileno(FILE *f) {
     if (f == stdout) return 1;
     if (f == stderr) return 2;
     return 0;
-}
-
-static struct group g_root_grp = {
-    .gr_name = "root",
-    .gr_passwd = "*",
-    .gr_gid = 0,
-    .gr_mem = NULL,
-};
-
-struct group *getgrnam(const char *name) {
-    (void)name;
-    return &g_root_grp;
 }
 
 int isinf(double x) {
@@ -3569,15 +3347,6 @@ char *ttyname(int fd) {
     return "/dev/tty";
 }
 
-int uname(struct utsname *name) {
-    if (!name) return -1;
-    strncpy(name->sysname, "XIU", sizeof(name->sysname) - 1);
-    strncpy(name->nodename, "xiu", sizeof(name->nodename) - 1);
-    strncpy(name->release, "1.0", sizeof(name->release) - 1);
-    strncpy(name->version, "XIU Darwin/XNU Mach-O 64-bit", sizeof(name->version) - 1);
-    strncpy(name->machine, "x86_64", sizeof(name->machine) - 1);
-    return 0;
-}
 
 /* -----------------------------------------------------------------------------
  * Termcap / Terminfo Emulation for Darwin / XIU Console
@@ -3661,6 +3430,18 @@ int tputs(const char *cp, int affcnt, int (*outc)(int)) {
     }
     return 0;
 }
+
+void __assert_rtn(const char *func, const char *file, int line, const char *failedexpr) {
+    if (func && (uintptr_t)func != (uintptr_t)-1L) {
+        fprintf(stderr, "Assertion failed: (%s), function %s, file %s, line %d.\n",
+                failedexpr ? failedexpr : "", func, file ? file : "", line);
+    } else {
+        fprintf(stderr, "Assertion failed: (%s), file %s, line %d.\n",
+                failedexpr ? failedexpr : "", file ? file : "", line);
+    }
+    abort();
+}
+
 
 
 

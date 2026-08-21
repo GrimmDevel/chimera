@@ -92,7 +92,25 @@ struct passwd {
 	char	*pw_dir;		/* home directory */
 	char	*pw_shell;		/* default shell */
 	__darwin_time_t pw_expire;		/* account expiration */
+	int	pw_fields;		/* internal: fields filled in */
 };
+
+#define _PWF(x)		(1 << x)
+#define _PWF_NAME	_PWF(0)
+#define _PWF_PASSWD	_PWF(1)
+#define _PWF_UID	_PWF(2)
+#define _PWF_GID	_PWF(3)
+#define _PWF_CHANGE	_PWF(4)
+#define _PWF_CLASS	_PWF(5)
+#define _PWF_GECOS	_PWF(6)
+#define _PWF_DIR	_PWF(7)
+#define _PWF_SHELL	_PWF(8)
+#define _PWF_EXPIRE	_PWF(9)
+
+#define _PWF_SOURCE	0x3000
+#define _PWF_FILES	0x1000
+#define _PWF_NIS	0x2000
+#define _PWF_HESIOD	0x3000
 
 #include <sys/cdefs.h>
 

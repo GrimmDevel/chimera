@@ -55,10 +55,12 @@ extern xiu_error_t launchd_xiu_start(void);
 extern void scheduler_init(void);
 extern XIU_NORETURN void scheduler_run(void);
 
-// stage 4: Ring 3 Transition
 extern void gdt_init(void);
 extern void mach_load(void *module_ptr, struct xiu_task *out_task,
                       uptr *entry_point, uptr *user_stack);
+extern void mach_load_args(void *module_ptr, struct xiu_task *out_task,
+                           uptr *entry_point, uptr *user_stack,
+                           const char *arg0, char *const argv[], char *const envp[]);
 extern XIU_NORETURN void task_switch_to_user(uptr entry_point, uptr user_stack);
 
 // boot info passed from the boot stub
@@ -237,7 +239,20 @@ static bool spawn_user_process(const char *path, const char *name) {
     thread->th_state = THREAD_STATE_READY;
     thread->th_priority = 0;
 
-    mach_load(elf_addr, task, &entry_point, &user_stack);
+    const char *argv[] = { name, nullptr };
+    const char *envp[] = {
+        "HOME=/Users/root",
+        "USER=root",
+        "LOGNAME=root",
+        "PATH=/bin:/usr/bin:/sbin:/usr/sbin:/usr/local/bin",
+        "TERM=xterm-256color",
+        "SHELL=/bin/zsh",
+        "PWD=/",
+        "PROMPT=%n@%m %~ %# ",
+        "PS1=%n@%m %~ %# ",
+        nullptr
+    };
+    mach_load_args(elf_addr, task, &entry_point, &user_stack, path, (char *const *)argv, (char *const *)envp);
     thread->th_context = (void *)entry_point;
 
     scheduler_add_thread(thread);

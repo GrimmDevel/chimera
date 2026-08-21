@@ -68,7 +68,7 @@
 
 #define IF_NAMESIZE     16
 
-#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
+#if 1
 #include <sys/appleapiopts.h>
 #ifdef __APPLE__
 

@@ -1,0 +1,4 @@
+root::0:0::0:0:Charlie &:/Users/root:/bin/zsh
+fvr::501:20::0:0:fvr:/Users/fvr:/bin/zsh
+daemon:*:1:1::0:0:System Services:/var/empty:/usr/sbin/nologin
+nobody:*:65534:65534::0:0:Unprivileged User:/var/empty:/usr/sbin/nologin

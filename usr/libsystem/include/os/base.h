@@ -23,6 +23,13 @@
 
 #include <sys/cdefs.h>
 
+#ifndef OS_ASSUME_NONNULL_BEGIN
+#define OS_ASSUME_NONNULL_BEGIN
+#define OS_ASSUME_NONNULL_END
+#endif
+
+
+
 #if __GNUC__
 #define os_fastpath(x) ((long)(uintptr_t)__builtin_expect((uintptr_t)(x), ~0l))
 #define os_slowpath(x) ((long)(uintptr_t)__builtin_expect((uintptr_t)(x), 0l))

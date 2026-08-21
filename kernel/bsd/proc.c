@@ -80,6 +80,7 @@ xiu_error_t proc_create(xiu_proc_t *parent, const char *name, xiu_proc_t **proc_
         p->p_egid = parent->p_egid;
         p->p_ngroups = parent->p_ngroups;
         __builtin_memcpy(p->p_groups, parent->p_groups, sizeof(p->p_groups));
+        __builtin_memcpy(p->p_login, parent->p_login, sizeof(p->p_login));
         p->p_umask = parent->p_umask;
         p->p_pgrp = parent->p_pgrp ? parent->p_pgrp : p->p_pid;
         p->p_sid = parent->p_sid ? parent->p_sid : p->p_pid;
@@ -117,7 +118,31 @@ xiu_error_t proc_create(xiu_proc_t *parent, const char *name, xiu_proc_t **proc_
         }
     }
     
-    if (!parent) {
+    bool has_parent_fds = false;
+    if (parent) {
+        irq_flags_t pirq = spinlock_lock_irqsave(&parent->p_fdlock);
+        for (int i = 0; i < XIU_PROC_MAX_FDS; i++) {
+            if (parent->p_fd_table[i]) {
+                has_parent_fds = true;
+                break;
+            }
+        }
+        if (has_parent_fds) {
+            irq_flags_t cirq = spinlock_lock_irqsave(&p->p_fdlock);
+            for (int i = 0; i < XIU_PROC_MAX_FDS; i++) {
+                xiu_fileproc_t *fp = parent->p_fd_table[i];
+                if (fp) {
+                    fp_retain(fp);
+                    p->p_fd_table[i] = fp;
+                    p->p_fd_flags[i] = parent->p_fd_flags[i];
+                }
+            }
+            spinlock_unlock_irqrestore(&p->p_fdlock, cirq);
+        }
+        spinlock_unlock_irqrestore(&parent->p_fdlock, pirq);
+    }
+
+    if (!has_parent_fds) {
         extern xiu_error_t vfs_lookup(const char *path, vnode_t **vp_out);
         extern xiu_fileproc_t *fp_alloc(vnode_t *vp, u32 flags);
         extern int proc_fd_install(xiu_proc_t *p, xiu_fileproc_t *fp);
@@ -148,8 +173,6 @@ xiu_error_t proc_create(xiu_proc_t *parent, const char *name, xiu_proc_t **proc_
                 proc_fd_install(p, fp2);
                 fp_release(fp2);
             }
-            
-            dprintf("[proc_create] Initialized stdin/stdout/stderr (/dev/console) for %s (pid=%u)\n", name, p->p_pid);
         }
     }
     

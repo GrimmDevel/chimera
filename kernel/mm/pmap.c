@@ -304,3 +304,28 @@ void pmap_clear_user_mappings(u64 pml4_phys) {
     u64 cr3;
     __asm__ volatile("mov %%cr3, %0; mov %0, %%cr3" : "=r"(cr3));
 }
+
+#define PAGE_NX (1ULL << 63)
+
+int pmap_protect_user_range(u64 pml4_phys, u64 virt_start, usize len, u32 prot) {
+    if (!pml4_phys || len == 0) return -1;
+    u64 start_va = virt_start & ~0xFFFULL;
+    u64 end_va = (virt_start + len + 0xFFFULL) & ~0xFFFULL;
+    if (end_va >= 0x0000800000000000ULL) return -1;
+
+    for (u64 va = start_va; va < end_va; va += 4096) {
+        u64 *pte_ptr = pmap_get_pte_ptr(pml4_phys, va);
+        if (pte_ptr && (*pte_ptr & PAGE_PRESENT)) {
+            u64 pte = *pte_ptr;
+            u64 phys = pte & 0x000FFFFFFFFFF000ULL;
+            u64 new_flags = PAGE_PRESENT | PAGE_USER;
+            if (prot & 2 /* PROT_WRITE */) new_flags |= PAGE_WRITE;
+            if (!(prot & 4 /* PROT_EXEC */)) new_flags |= PAGE_NX;
+            if (prot == 0 /* PROT_NONE */) new_flags &= ~PAGE_PRESENT;
+            *pte_ptr = phys | new_flags;
+            __asm__ volatile("invlpg (%0)" :: "r"(va) : "memory");
+        }
+    }
+    return 0;
+}
+

@@ -173,6 +173,8 @@ struct xiu_fb_info {
 
 - (void)draw
 {
+    static uint64_t s_draw_calls = 0;
+    s_draw_calls++;
     void *pixels = 0;
     if(_captured && captureCtx)
         pixels = [[captureCtx surface] pixelBytes];
@@ -181,6 +183,11 @@ struct xiu_fb_info {
     if(!pixels) pixels = ctxPixels;
     if(data && pixels && pixels != data && size > 0) {
         memcpy(data, pixels, size);
+    }
+    if (s_draw_calls == 1 || (s_draw_calls % 60) == 0) {
+        printf("[BSDFramebuffer] draw #%llu: blitted %zu bytes (from %p to VRAM %p, %dx%d, stride=%d, captured=%u)\n",
+               s_draw_calls, size, pixels, data, width, height, stride, _captured);
+        fflush(stdout);
     }
 }
 
@@ -263,6 +270,26 @@ struct xiu_fb_info {
 // we can't change resolutions without a drm driver so this will always fail
 -(BOOL)setMode:(struct CGDisplayMode *)mode {
     return NO;
+}
+
+-(void *)pixels {
+    return ctxPixels ? ctxPixels : data;
+}
+
+-(void *)vram {
+    return data;
+}
+
+-(int)stride {
+    return stride;
+}
+
+-(int)width {
+    return width;
+}
+
+-(int)height {
+    return height;
 }
 
 @end

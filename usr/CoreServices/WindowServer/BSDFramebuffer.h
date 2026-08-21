@@ -63,6 +63,11 @@
 - (BOOL)useDoubleBuffer:(BOOL)val;
 - (O2Context *)context;
 - (CGColorSpaceRef)colorSpace;
+- (void *)pixels;
+- (void *)vram;
+- (int)stride;
+- (int)width;
+- (int)height;
 
 @end
 

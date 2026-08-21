@@ -54,6 +54,18 @@ for bin_path in build/${ARCH}/usr/*; do
     fi
 done
 
+if [ -d "etc" ]; then
+    cp -r etc/* "$ISO_ROOT/private/etc/" 2>/dev/null || true
+fi
+
+mkdir -p "$ISO_ROOT/Users/root" "$ISO_ROOT/Users/fvr" "$ISO_ROOT/Users/user" "$ISO_ROOT/Users/Shared"
+for u in root fvr user; do
+    mkdir -p "$ISO_ROOT/Users/$u/Desktop" "$ISO_ROOT/Users/$u/Documents" "$ISO_ROOT/Users/$u/Downloads" "$ISO_ROOT/Users/$u/Library" "$ISO_ROOT/Users/$u/Pictures" "$ISO_ROOT/Users/$u/Public"
+    printf 'export PATH="/bin:/usr/bin:/sbin:/usr/sbin:/usr/local/bin"\nexport TERM="xterm-256color"\nexport PROMPT="%%n@%%m %%~ %%# "\nexport PS1="%%n@%%m %%~ %%# "\nunsetopt zle\nunsetopt promptcr\nunsetopt promptsp\n' > "$ISO_ROOT/Users/$u/.zshrc"
+    printf '#include <stdio.h>\n\nint main() {\n    printf("Hello from self-hosted XIU C compiler!\\n");\n    return 0;\n}\n' > "$ISO_ROOT/Users/$u/hello.c"
+done
+
+
 printf "Welcome to XIU Operating System!\nApple Darwin / Mach-BSD Hybrid Architecture.\n" > "$ISO_ROOT/private/etc/motd"
 printf "XIU OS v0.1.0 (Darwin 24.0.0 %s)\n" "$ARCH" > "$ISO_ROOT/private/etc/version"
 printf "127.0.0.1\tlocalhost\n10.0.2.15\txiu-mac\n" > "$ISO_ROOT/private/etc/hosts"
@@ -76,7 +88,7 @@ if [ -n "$CMDLINE_ARG" ]; then
     echo "    cmdline: $CMDLINE_ARG" >> "$ISO_ROOT/limine.conf"
 fi
 
-for f in $(find "$ISO_ROOT/bin" "$ISO_ROOT/sbin" "$ISO_ROOT/usr/bin" "$ISO_ROOT/usr/sbin" "$ISO_ROOT/private/etc" -type f 2>/dev/null | sort); do
+for f in $(find "$ISO_ROOT/bin" "$ISO_ROOT/sbin" "$ISO_ROOT/usr/bin" "$ISO_ROOT/usr/sbin" "$ISO_ROOT/private/etc" "$ISO_ROOT/Users" -type f 2>/dev/null | sort); do
     rel_path="${f#$ISO_ROOT}"
     echo "    module_path: boot():$rel_path" >> "$ISO_ROOT/limine.conf"
 done

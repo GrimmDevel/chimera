@@ -545,7 +545,13 @@ void	*brk(const void *);
 int	 chroot(const char *) __POSIX_C_DEPRECATED(199506L);
 #endif
 
+struct crypt_data {
+	int initialized;
+	char __buf[256];
+};
+
 char	*crypt(const char *, const char *);
+char	*crypt_r(const char *, const char *, struct crypt_data *);
 #if __DARWIN_UNIX03
 void	 encrypt(char *, int) __DARWIN_ALIAS(encrypt);
 #else /* !__DARWIN_UNIX03 */

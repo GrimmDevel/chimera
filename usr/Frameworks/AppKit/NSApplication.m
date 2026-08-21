@@ -524,9 +524,10 @@ static NSMenuItem *itemWithTag(NSMenu *root, int tag) {
         fflush(stdout);
         exit(1);
     }
-    printf("[NSApplication -init PID %d] 6. wsReplyPort allocated (0x%x), detaching machServiceLoop...\n", getpid(), _wsReplyPort);
+    printf("[NSApplication -init PID %d] 6. wsReplyPort allocated (0x%x)\n", getpid(), _wsReplyPort);
     fflush(stdout);
-    [NSThread detachNewThreadSelector:@selector(machServiceLoop:) toTarget:self withObject:nil];
+    // ponytail: avoid detaching background fork until 1:1 kernel threads are implemented
+    // [NSThread detachNewThreadSelector:@selector(machServiceLoop:) toTarget:self withObject:nil];
 
     _wsSvcPort = MACH_PORT_NULL;
 

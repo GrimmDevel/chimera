@@ -65,6 +65,22 @@ __IOS_AVAILABLE(9.0) __OSX_AVAILABLE(10.11)
 extern void
 abort_report_np(const char *, ...) __dead2 __cold __printflike(1, 2);
 
+extern void
+_libc_fork_child(void);
+
+extern int __isthreaded;
+#define __LIBC_PTHREAD_KEY_LOCALTIME 0
+#define __LIBC_PTHREAD_KEY_GMTIME 1
+
+#define _pthread_mutex_lock(x) (0)
+#define _pthread_mutex_unlock(x) (0)
+#define _pthread_rwlock_rdlock(x) (0)
+#define _pthread_rwlock_wrlock(x) (0)
+#define _pthread_rwlock_unlock(x) (0)
+#define _pthread_setspecific(k, v) (0)
+#define _pthread_getspecific(k) (NULL)
+#define _pthread_key_create(k, d) (0)
+
 __END_DECLS
 
 #endif // __LIBC_PRIVATE_H__

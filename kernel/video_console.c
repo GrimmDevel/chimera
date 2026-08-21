@@ -566,3 +566,13 @@ void video_console_init(unsigned long baseaddr, uint64_t physaddr,
 
     spinlock_unlock_irqrestore(&s_vc_lock, flags);
 }
+
+void vc_set_enabled(bool enabled) {
+    irq_flags_t flags = spinlock_lock_irqsave(&s_vc_lock);
+    gc_enabled = enabled;
+    spinlock_unlock_irqrestore(&s_vc_lock, flags);
+}
+
+bool vc_get_enabled(void) {
+    return gc_enabled;
+}

@@ -136,6 +136,8 @@ static i64 sys_exit(u64 code, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
   return 0;
 }
 
+static void resolve_relative_path(xiu_proc_t *proc, const char *path, char *out_buf, usize out_max);
+
 // sys_chdir
 static i64 sys_chdir(u64 path_ptr, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
   (void)a2;
@@ -156,80 +158,24 @@ static i64 sys_chdir(u64 path_ptr, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
 
   dprintf("[SYSCALL] chdir(%s)\n", path);
 
-  // lookup the target directory with relative path resolution
+  char norm_path[256];
+  resolve_relative_path(proc, path, norm_path, sizeof(norm_path));
+
   vnode_t *new_cwd = nullptr;
-  char full_path[256];
-  const char *target_path = path;
-
-  if (__builtin_strcmp(path, ".") == 0) {
-    new_cwd = proc->p_cwd ? proc->p_cwd : nullptr;
-    if (!new_cwd) vfs_lookup("/", &new_cwd);
-  } else if (__builtin_strcmp(path, "..") == 0) {
-    vfs_lookup("/", &new_cwd);
-  } else if (path[0] != '/') {
-    const char *cwd_name = "/";
-    if (proc->p_cwd) {
-      if (proc->p_cwd->v_op && __builtin_strcmp(proc->p_cwd->v_op->vop_name, "fat32_dir") == 0) {
-        typedef struct {
-          u32 start_cluster;
-          u32 file_size;
-          bool is_dir;
-          char path[256];
-        } fat32_path_info_t;
-        fat32_path_info_t *nd = (fat32_path_info_t *)proc->p_cwd->v_data;
-        if (nd && nd->path[0]) cwd_name = nd->path;
-      } else {
-        cwd_name = proc->p_cwd->v_name;
-      }
-    }
-
-    if (__builtin_strcmp(cwd_name, "/") != 0) {
-      usize clen = __builtin_strlen(cwd_name);
-      __builtin_memcpy(full_path, cwd_name, clen);
-      full_path[clen] = '/';
-      const char *sub = path;
-      if (sub[0] == '.' && sub[1] == '/') sub += 2;
-      usize slen = __builtin_strlen(sub);
-      if (clen + 1 + slen < sizeof(full_path) - 1) {
-        __builtin_memcpy(full_path + clen + 1, sub, slen);
-        full_path[clen + 1 + slen] = '\0';
-        target_path = full_path;
-      }
-    } else {
-      full_path[0] = '/';
-      const char *sub = path;
-      if (sub[0] == '.' && sub[1] == '/') sub += 2;
-      usize slen = __builtin_strlen(sub);
-      if (1 + slen < sizeof(full_path) - 1) {
-        __builtin_memcpy(full_path + 1, sub, slen);
-        full_path[1 + slen] = '\0';
-        target_path = full_path;
-      }
-    }
-  }
-
-  if (!new_cwd) {
-    if (vfs_lookup(target_path, &new_cwd) != XIU_SUCCESS || !new_cwd) {
-      kprintf("[sys_chdir] path not found: %s (resolved: %s)\n", path, target_path);
-      return -1; // enoent
-    }
+  if (vfs_lookup(norm_path, &new_cwd) != XIU_SUCCESS || !new_cwd) {
+    return -1; // ENOENT
   }
 
   // verify it's a directory
   if (new_cwd->v_type != VDIR) {
-    kprintf("[sys_chdir] not a directory: %s\n", path);
-    return -20; // enotdir
+    return -20; // ENOTDIR
   }
 
   // update CWD
   irq_flags_t irq = spinlock_lock_irqsave(&proc->p_lock);
-  vnode_t *old_cwd = proc->p_cwd;
   proc->p_cwd = new_cwd;
   spinlock_unlock_irqrestore(&proc->p_lock, irq);
 
-  dprintf("[sys_chdir] changed CWD to: %s (vnode=%p, name=%s)\n", target_path, new_cwd, new_cwd->v_name);
-
-  (void)old_cwd;
   return 0;
 }
 
@@ -559,7 +505,6 @@ static i64 sys_open(u64 path_ptr, u64 flags, u64 mode, u64 a4, u64 a5, u64 a6) {
   }
 
   if (!vp) {
-    kprintf("[sys_open] '%s': ENOENT (vnode is NULL)\n", path);
     return -1;
   }
 
@@ -903,6 +848,10 @@ static i64 sys_fork(u64 a1, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
     for (u32 i = 1; i < parent_task->ta_ipc_space->is_table_used; i++) {
       ipc_entry_t *pe = &parent_task->ta_ipc_space->is_table[i];
       if (pe->ie_object && pe->ie_bits != MACH_PORT_TYPE_NONE) {
+        // Mach semantics: RECEIVE rights belong strictly to receiver space and are NEVER inherited by child!
+        if (pe->ie_bits & MACH_PORT_TYPE_RECEIVE) {
+          continue;
+        }
         if (i >= child->p_task->ta_ipc_space->is_table_used) {
           child->p_task->ta_ipc_space->is_table_used = i + 1;
         }
@@ -1158,6 +1107,7 @@ static i64 sys_mmap(u64 addr, u64 len, u64 prot, u64 flags, u64 fd,
    * treat as framebuffer mapping. This eliminates the hardcoded fd==3. */
   bool is_anon = (fd == (u64)-1 || (fd & 0xFFFFFFFF) == 0xFFFFFFFF);
   bool is_fb = false;
+  vnode_t *file_vp = nullptr;
 
   if (!is_anon) {
     // look up the fd in the calling process's file descriptor table
@@ -1166,22 +1116,19 @@ static i64 sys_mmap(u64 addr, u64 len, u64 prot, u64 flags, u64 fd,
     if (calling_proc) {
       xiu_fileproc_t *mmap_fp = proc_fd_lookup(calling_proc, (int)fd);
       if (mmap_fp && mmap_fp->fp_vnode) {
-        vnode_t *mmap_vp = mmap_fp->fp_vnode;
+        file_vp = mmap_fp->fp_vnode;
         // /dev/fb0 has VCHR type and provides vop_mmap
-        if (mmap_vp->v_type == VCHR && mmap_vp->v_op &&
-            mmap_vp->v_op->vop_mmap != nullptr) {
+        if (file_vp->v_type == VCHR && file_vp->v_op &&
+            file_vp->v_op->vop_mmap != nullptr) {
           is_fb = true;
         }
       }
       if (mmap_fp)
         fp_release(mmap_fp);
     }
-    if (!is_fb)
+    if (!is_fb && !file_vp)
       return -1; // unsupported fd type for mmap
   }
-
-  if (!is_fb && !is_anon)
-    return -1;
 
   if (!task || !task->ta_vm_map)
     return -1;
@@ -1218,6 +1165,37 @@ static i64 sys_mmap(u64 addr, u64 len, u64 prot, u64 flags, u64 fd,
   extern xiu_paddr_t pmm_alloc_page(void);
   extern u64 g_hhdm_base;
 
+  typedef struct {
+    vnode_t *vp;
+    u32 page_count;
+    xiu_paddr_t pages[2048];
+  } xiu_shm_entry_t;
+  static xiu_shm_entry_t s_shm_entries[64];
+  static spinlock_t s_shm_lock = {0};
+
+  xiu_shm_entry_t *shm = nullptr;
+  if (file_vp && !is_fb) {
+    irq_flags_t sf = spinlock_lock_irqsave(&s_shm_lock);
+    for (int i = 0; i < 64; i++) {
+      if (s_shm_entries[i].vp == file_vp) {
+        shm = &s_shm_entries[i];
+        break;
+      }
+    }
+    if (!shm) {
+      for (int i = 0; i < 64; i++) {
+        if (s_shm_entries[i].vp == nullptr) {
+          shm = &s_shm_entries[i];
+          shm->vp = file_vp;
+          shm->page_count = 0;
+          __builtin_memset(shm->pages, 0, sizeof(shm->pages));
+          break;
+        }
+      }
+    }
+    spinlock_unlock_irqrestore(&s_shm_lock, sf);
+  }
+
   static u64 s_surface_phys[64][2000];
 
   if (is_fb) {
@@ -1232,6 +1210,18 @@ static i64 sys_mmap(u64 addr, u64 len, u64 prot, u64 flags, u64 fd,
     if (is_fb) {
       paddr = g_fb_phys_addr + off;
       mapped_special = true;
+    } else if (shm) {
+      u64 page_idx = off / 4096;
+      if (page_idx < 2048) {
+        if (shm->pages[page_idx] == 0) {
+          shm->pages[page_idx] = pmm_alloc_page();
+          if (g_hhdm_base && shm->pages[page_idx] != (u64)-1) {
+            __builtin_memset((void *)(g_hhdm_base + shm->pages[page_idx]), 0, 4096);
+          }
+        }
+        paddr = shm->pages[page_idx];
+        mapped_special = true;
+      }
     } else if (vaddr >= 0xA0000000ULL && vaddr < 0xB0000000ULL) {
       // shared window surface
       u64 wid = (vaddr - 0xA0000000ULL) / 0x800000ULL;
@@ -1587,10 +1577,22 @@ static i64 sys_getcwd(u64 buf, u64 size, u64 a3, u64 a4, u64 a5, u64 a6) {
   extern const char *vfs_path_for_vnode(vnode_t *vp);
   const char *path = vfs_path_for_vnode(proc->p_cwd);
   if (!path || path[0] == '\0') {
-    if (proc->p_cwd->v_name[0] != '\0') {
-      path = proc->p_cwd->v_name;
-    } else {
-      path = "/";
+    if (proc->p_cwd->v_op && __builtin_strcmp(proc->p_cwd->v_op->vop_name, "fat32_dir") == 0) {
+      typedef struct {
+        u32 start_cluster;
+        u32 file_size;
+        bool is_dir;
+        char path[256];
+      } fat32_path_info_t;
+      fat32_path_info_t *nd = (fat32_path_info_t *)proc->p_cwd->v_data;
+      if (nd && nd->path[0]) path = nd->path;
+    }
+    if (!path || path[0] == '\0') {
+      if (proc->p_cwd->v_name[0] != '\0') {
+        path = proc->p_cwd->v_name;
+      } else {
+        path = "/";
+      }
     }
   }
 
@@ -2743,6 +2745,40 @@ static i64 sys_setegid(u64 egid, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
   }
   return -1;
 }
+static i64 sys_getlogin(u64 name_ptr, u64 namelen, u64 a3, u64 a4, u64 a5, u64 a6) {
+  (void)a3; (void)a4; (void)a5; (void)a6;
+  xiu_task_t *t = current_task();
+  if (!t || !t->ta_proc || !name_ptr || namelen == 0) return -1;
+  xiu_proc_t *p = t->ta_proc;
+  usize len = 0;
+  while (len < 31 && len < namelen - 1 && p->p_login[len]) {
+    len++;
+  }
+  char buf[32];
+  __builtin_memcpy(buf, p->p_login, len);
+  buf[len] = '\0';
+  if (copyout(buf, (void *)name_ptr, len + 1) != XIU_SUCCESS) {
+    return -1;
+  }
+  return 0;
+}
+
+static i64 sys_setlogin(u64 name_ptr, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
+  (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+  xiu_task_t *t = current_task();
+  if (!t || !t->ta_proc || !name_ptr) return -1;
+  xiu_proc_t *p = t->ta_proc;
+  if (p->p_uid != 0 && p->p_euid != 0) return -1;
+  char buf[32];
+  usize copied = 0;
+  if (copyinstr((const void *)name_ptr, buf, sizeof(buf), &copied) != XIU_SUCCESS) {
+    return -1;
+  }
+  buf[31] = '\0';
+  __builtin_memcpy(p->p_login, buf, sizeof(p->p_login));
+  return 0;
+}
+
 static i64 sys_getgroups(u64 size, u64 list_ptr, u64 a3, u64 a4, u64 a5, u64 a6) {
   (void)a3; (void)a4; (void)a5; (void)a6;
   xiu_task_t *t = current_task();
@@ -3052,8 +3088,36 @@ static i64 sys_socketpair(u64 dom, u64 type, u64 proto, u64 sv_ptr, u64 a5, u64 
 #define HW_MEMSIZE      24
 #define HW_AVAILCPU     25
 
+static char s_kernel_hostname[64] = "Mac";
+
+static i64 sys_mprotect(u64 addr, u64 len, u64 prot, u64 a4, u64 a5, u64 a6) {
+  (void)a4; (void)a5; (void)a6;
+  xiu_task_t *task = current_task();
+  if (!task || !task->ta_vm_map || len == 0) return -22;
+  extern int pmap_protect_user_range(u64 pml4_phys, u64 virt_start, usize len, u32 prot);
+  int rc = pmap_protect_user_range((u64)task->ta_vm_map, addr, (usize)len, (u32)prot);
+  return (rc == 0) ? 0 : -14;
+}
+
+static i64 sys_getpgid(u64 pid_u, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
+  (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+  xiu_task_t *t = current_task();
+  if (!t || !t->ta_proc) return -1;
+  xiu_proc_t *target = (pid_u == 0 || pid_u == t->ta_proc->p_pid) ? t->ta_proc : proc_find_by_pid((xiu_pid_t)pid_u);
+  if (!target) return -3;
+  return (i64)target->p_pgrp;
+}
+
+static i64 sys_getsid(u64 pid_u, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
+  (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+  xiu_task_t *t = current_task();
+  if (!t || !t->ta_proc) return -1;
+  xiu_proc_t *target = (pid_u == 0 || pid_u == t->ta_proc->p_pid) ? t->ta_proc : proc_find_by_pid((xiu_pid_t)pid_u);
+  if (!target) return -3;
+  return (i64)target->p_sid;
+}
+
 static i64 sys_sysctl(u64 name_ptr, u64 namelen, u64 oldp, u64 oldlenp, u64 newp, u64 newlen) {
-  (void)newp; (void)newlen;
   if (!name_ptr || namelen < 2) return -22;
 
   int mib[8];
@@ -3069,6 +3133,19 @@ static i64 sys_sysctl(u64 name_ptr, u64 namelen, u64 oldp, u64 oldlenp, u64 newp
 
   int ctl = mib[0];
   int sub = mib[1];
+
+  // handle write requests (e.g. sethostname)
+  if (newp && newlen > 0) {
+    xiu_task_t *t = current_task();
+    if (!t || !t->ta_proc || t->ta_proc->p_uid != 0) return -1; // -EPERM
+    if (ctl == CTL_KERN && sub == KERN_HOSTNAME) {
+      usize copy_len = (newlen < sizeof(s_kernel_hostname) - 1) ? newlen : (sizeof(s_kernel_hostname) - 1);
+      if (copyin((const void *)newp, s_kernel_hostname, copy_len) != XIU_SUCCESS) return -14;
+      s_kernel_hostname[copy_len] = '\0';
+      return 0;
+    }
+    return -22;
+  }
 
   const void *res_ptr = nullptr;
   usize res_sz = 0;
@@ -3086,8 +3163,8 @@ static i64 sys_sysctl(u64 name_ptr, u64 namelen, u64 oldp, u64 oldlenp, u64 newp
       res_ptr = "Darwin Kernel Version 24.0.0: XIU Hybrid x86_64";
       res_sz = __builtin_strlen((const char *)res_ptr) + 1;
     } else if (sub == KERN_HOSTNAME) {
-      res_ptr = "xiu-host";
-      res_sz = 9;
+      res_ptr = s_kernel_hostname;
+      res_sz = __builtin_strlen(s_kernel_hostname) + 1;
     } else if (sub == KERN_MAXVNODES) {
       int_val = 4096;
       res_ptr = &int_val;
@@ -3207,12 +3284,15 @@ const syscall_fn_t g_syscall_table[512] = {
     [SYS_sigaction]       = sys_sigaction,
     [SYS_getgid]          = sys_getgid,
     [SYS_sigprocmask]     = sys_sigprocmask,
+    [SYS_getlogin]        = sys_getlogin,
+    [SYS_setlogin]        = sys_setlogin,
     [SYS_sigpending]      = sys_sigpending,
     [SYS_sigaltstack]     = sys_sigaltstack,
     [SYS_ioctl]           = sys_ioctl,
     [SYS_execve]          = sys_execve,
     [SYS_umask]           = sys_umask,
     [SYS_munmap]          = sys_munmap,
+    [SYS_mprotect]        = sys_mprotect,
     [SYS_getgroups]       = sys_getgroups,
     [SYS_setgroups]       = sys_setgroups,
     [SYS_getpgrp]         = sys_getpgrp,
@@ -3240,6 +3320,8 @@ const syscall_fn_t g_syscall_table[512] = {
     [SYS_mkdir]           = sys_mkdir,
     [SYS_rmdir]           = sys_rmdir,
     [SYS_setsid]          = sys_setsid,
+    [SYS_getpgid]         = sys_getpgid,
+    [SYS_getsid]          = sys_getsid,
     [SYS_pread]           = sys_pread,
     [SYS_pwrite]          = sys_pwrite,
     [SYS_setgid]          = sys_setgid,
@@ -3267,6 +3349,7 @@ const syscall_fn_t g_syscall_table[512] = {
     [SYS_lstat64]         = sys_stat,
     [SYS_getcwd]          = sys_getcwd,
 
+
     // Mach IPC & system traps
     [SYS_mach_msg]        = sys_mach_msg,
     [SYS_mach_port_alloc] = sys_mach_port_allocate,
@@ -3285,13 +3368,21 @@ i64 syscall_dispatch(u64 num, u64 arg1, u64 arg2, u64 arg3, u64 arg4, u64 arg5,
                      u64 arg6, u64 frame) {
   g_syscall_frame = frame;
 
+  xiu_task_t *task = current_task();
+  xiu_proc_t *proc = task ? task->ta_proc : nullptr;
+
   if (num >= g_syscall_count || g_syscall_table[num] == nullptr) {
-    kprintf("[SYSCALL] Invalid syscall %llu\n", (unsigned long long)num);
+    kprintf("[SYSCALL] Invalid syscall %llu from '%s' (PID %d)\n",
+            (unsigned long long)num, proc ? proc->p_comm : "?", proc ? proc->p_pid : 0);
     g_syscall_frame = 0;
     return -78; // ENOSYS
   }
 
   i64 ret = g_syscall_table[num](arg1, arg2, arg3, arg4, arg5, arg6);
+
+
+
+
 
   if (frame) {
     extern void proc_deliver_signals(void *frame_ptr);
@@ -3301,4 +3392,5 @@ i64 syscall_dispatch(u64 num, u64 arg1, u64 arg2, u64 arg3, u64 arg4, u64 arg5,
   g_syscall_frame = 0;
   return ret;
 }
+
 

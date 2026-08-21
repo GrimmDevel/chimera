@@ -220,7 +220,8 @@ void console_scroll_to_bottom(void) {
 }
 
 void console_fb_set_active(bool active) {
-  (void)active;
+  extern void vc_set_enabled(bool enabled);
+  vc_set_enabled(active);
 }
 
 usize console_read(char *buf, usize count) {
@@ -307,8 +308,18 @@ xiu_error_t console_ioctl(u64 cmd, xiu_vaddr_t arg) {
   extern xiu_error_t copyout(const void *kaddr, void *uaddr, usize len);
   extern xiu_error_t copyin(const void *uaddr, void *kaddr, usize len);
 
-  // TIOCGETA (0x40487413 in Darwin 64-bit, 0x5401 in Linux)
-  if (cmd == 0x40487413 || cmd == 0x402c7413 || cmd == 0x5401) {
+  // FIODTYPE (0x4004667a or 0x2004667a or 0x8004667a)
+  if (cmd == 0x4004667a || cmd == 0x2004667a || cmd == 0x8004667a) {
+    if (arg) {
+      int d_type = 3; // D_TTY
+      return copyout(&d_type, (void *)arg, sizeof(int));
+    }
+    return XIU_SUCCESS;
+  }
+
+
+  // TIOCGETA (0x40487413 in Darwin 64-bit, 0x402c7413 in FreeBSD, 0x5401 in Linux)
+  if (cmd == 0x40487413 || cmd == 0x402c7413 || cmd == 0x5401 || (cmd & 0xff) == 19) {
     xiu_darwin_termios_t dt;
     __builtin_memset(&dt, 0, sizeof(dt));
     dt.c_iflag = 0x00000000;
@@ -330,7 +341,8 @@ xiu_error_t console_ioctl(u64 cmd, xiu_vaddr_t arg) {
   // TIOCSETA, TIOCSETAW, TIOCSETAF (0x80487414..0x80487416 in Darwin 64-bit)
   if (cmd == 0x80487414 || cmd == 0x80487415 || cmd == 0x80487416 ||
       cmd == 0x802c7414 || cmd == 0x802c7415 || cmd == 0x802c7416 ||
-      cmd == 0x5402 || cmd == 0x5403 || cmd == 0x5404) {
+      cmd == 0x5402 || cmd == 0x5403 || cmd == 0x5404 ||
+      (cmd & 0xff) == 20 || (cmd & 0xff) == 21 || (cmd & 0xff) == 22) {
     xiu_darwin_termios_t dt;
     if (copyin((const void *)arg, &dt, sizeof(dt)) != XIU_SUCCESS)
       return XIU_ERR_INVALID;
@@ -343,6 +355,7 @@ xiu_error_t console_ioctl(u64 cmd, xiu_vaddr_t arg) {
     console_set_raw_mode(raw);
     return XIU_SUCCESS;
   }
+
   // TIOCGWINSZ
   if (cmd == 0x40087468 || cmd == 0x5413) {
     struct vc_info *vi = vc_get_info();
