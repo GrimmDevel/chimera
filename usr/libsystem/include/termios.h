@@ -1,38 +1,35 @@
-#ifndef _TERMIOS_H
-#define _TERMIOS_H
+/*
+ * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ *
+ * @APPLE_LICENSE_HEADER_START@
+ * 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this
+ * file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
+ * 
+ * @APPLE_LICENSE_HEADER_END@
+ */
+#ifndef __TERMIOS_H__
+#define __TERMIOS_H__
 
-#include <sys/types.h>
+#include <sys/cdefs.h>
+#include <sys/termios.h>
+#include <_types.h>
+#include <sys/_types/_pid_t.h>
 
-typedef u32 tcflag_t;
-typedef u8  cc_t;
+__BEGIN_DECLS
+pid_t	tcgetsid(int);
+__END_DECLS
 
-struct termios {
-    tcflag_t c_iflag;
-    tcflag_t c_oflag;
-    tcflag_t c_cflag;
-    tcflag_t c_lflag;
-    cc_t     c_cc[32];
-};
-
-#define ICANON    0x0002
-#define ECHO      0x0008
-#define ISIG      0x0001
-#define IEXTEN    0x8000
-#define OPOST     0x0001
-#define CS8       0x0030
-#define BRKINT    0x0002
-#define ICRNL     0x0400
-#define INPCK     0x0010
-#define ISTRIP    0x0020
-#define IXON      0x0400
-#define VMIN      6
-#define VTIME     5
-
-#define TCSANOW   0
-#define TCSADRAIN 1
-#define TCSAFLUSH 2
-
-int tcgetattr(int fd, struct termios *termios_p);
-int tcsetattr(int fd, int optional_actions, const struct termios *termios_p);
-
-#endif
+#endif /* __TERMIOS_H__ */

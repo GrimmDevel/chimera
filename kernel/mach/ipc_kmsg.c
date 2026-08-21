@@ -27,13 +27,26 @@ ipc_kmsg_t *ipc_kmsg_alloc(mach_msg_size_t msg_size) {
               MACH_MSG_SIZE_MAX);
   }
 
-  u32 idx = atomic_fetch_add(&s_kmsg_next, 1) % KMSG_POOL_SIZE;
-  kmsg_pool_entry_t *e = &s_kmsg_pool[idx];
-  ipc_kmsg_t *kmsg = (ipc_kmsg_t *)e->buffer;
+  ipc_kmsg_t *kmsg;
+  if (msg_size <= KMSG_INLINE_MAX) {
+    u32 idx = atomic_fetch_add(&s_kmsg_next, 1) % KMSG_POOL_SIZE;
+    kmsg_pool_entry_t *e = &s_kmsg_pool[idx];
+    kmsg = (ipc_kmsg_t *)e->buffer;
+    __builtin_memset(kmsg, 0, sizeof(ipc_kmsg_t));
+    kmsg->ikm_size = KMSG_INLINE_MAX;
+  } else {
+    usize alloc_sz = sizeof(ipc_kmsg_t) + msg_size + sizeof(mach_msg_audit_trailer_t);
+    usize pages = (alloc_sz + 4095) / 4096;
+    extern xiu_paddr_t pmm_alloc_pages(usize count);
+    xiu_paddr_t paddr = pmm_alloc_pages(pages);
+    if (!paddr) {
+      xiu_panic("ipc_kmsg_alloc: out of memory for size %u\n", msg_size);
+    }
+    kmsg = (ipc_kmsg_t *)(paddr + g_hhdm_base);
+    __builtin_memset(kmsg, 0, sizeof(ipc_kmsg_t));
+    kmsg->ikm_size = msg_size;
+  }
 
-  // zero the header portion
-  __builtin_memset(kmsg, 0, sizeof(ipc_kmsg_t));
-  kmsg->ikm_size = KMSG_INLINE_MAX;
   kmsg->ikm_header_offset = 0;
   kmsg->ikm_header = (mach_msg_header_t *)kmsg->ikm_data;
   kmsg->ikm_next = nullptr;
@@ -44,8 +57,13 @@ ipc_kmsg_t *ipc_kmsg_alloc(mach_msg_size_t msg_size) {
 }
 
 void ipc_kmsg_free(ipc_kmsg_t *kmsg) {
-  // stage 1: pool entries are not freed — just poisoned
-  if (kmsg) {
+  if (!kmsg) return;
+  if (kmsg->ikm_size > KMSG_INLINE_MAX) {
+    usize alloc_sz = sizeof(ipc_kmsg_t) + kmsg->ikm_size + sizeof(mach_msg_audit_trailer_t);
+    usize pages = (alloc_sz + 4095) / 4096;
+    extern void pmm_free_contiguous(xiu_paddr_t addr, usize count);
+    pmm_free_contiguous((xiu_paddr_t)((uptr)kmsg - g_hhdm_base), pages);
+  } else {
     kmsg->ikm_header = nullptr;
   }
 }
@@ -66,17 +84,21 @@ xiu_error_t ipc_kmsg_copyin(ipc_kmsg_t *kmsg, xiu_vaddr_t user_header_va,
 
   mach_msg_header_t user_hdr;
   if (copyin((const void *)user_header_va, &user_hdr, sizeof(user_hdr)) != XIU_SUCCESS) {
+    kprintf("[IPC-ERR] copyin user_hdr failed for va=0x%llx\n", user_header_va);
     return XIU_ERR_INVALID;
   }
 
   if (user_hdr.msgh_size < MACH_MSG_HEADER_SIZE ||
       user_hdr.msgh_size > MACH_MSG_SIZE_MAX) {
+    kprintf("[IPC-ERR] invalid msgh_size=%u (min=%lu, max=%u)\n",
+            user_hdr.msgh_size, MACH_MSG_HEADER_SIZE, MACH_MSG_SIZE_MAX);
     return XIU_ERR_INVALID;
   }
 
   // ponytail: copy message safely from user space into kernel message buffer
   mach_msg_header_t *khdr = kmsg->ikm_header;
   if (copyin((const void *)user_header_va, khdr, user_hdr.msgh_size) != XIU_SUCCESS) {
+    kprintf("[IPC-ERR] copyin khdr failed for size=%u\n", user_hdr.msgh_size);
     return XIU_ERR_INVALID;
   }
 
@@ -96,8 +118,12 @@ xiu_error_t ipc_kmsg_copyin(ipc_kmsg_t *kmsg, xiu_vaddr_t user_header_va,
   }
 
   ipc_port_t *remote = ipc_port_lookup(space, rname, right);
-  if (!remote)
+  if (!remote) {
+    kprintf("[IPC-ERR] ipc_port_lookup failed for rname=0x%x (space_used=%u)\n",
+            rname, space->is_table_used);
     return XIU_ERR_PORT_DEAD;
+  }
+  ipc_port_unlock(remote);
   kmsg->ikm_remote_port = remote;
   kmsg->ikm_remote_right = right;
 
@@ -110,6 +136,7 @@ xiu_error_t ipc_kmsg_copyin(ipc_kmsg_t *kmsg, xiu_vaddr_t user_header_va,
     } else {
       ipc_port_t *local = ipc_port_lookup(space, lname, MACH_PORT_TYPE_RECEIVE);
       if (local) {
+        ipc_port_unlock(local);
         kmsg->ikm_local_port = local;
         kmsg->ikm_local_right = MACH_PORT_TYPE_RECEIVE;
       }
@@ -128,11 +155,14 @@ xiu_error_t ipc_kmsg_copyin(ipc_kmsg_t *kmsg, xiu_vaddr_t user_header_va,
       if (dtype == MACH_MSG_PORT_DESCRIPTOR) {
         mach_msg_port_descriptor_t *pdesc = (mach_msg_port_descriptor_t *)desc_ptr;
         ipc_port_t *port_obj = ipc_port_lookup(space, pdesc->name, MACH_PORT_TYPE_SEND);
+        if (!port_obj) {
+          port_obj = ipc_port_lookup(space, pdesc->name, MACH_PORT_TYPE_RECEIVE);
+        }
         if (port_obj) {
           ipc_port_unlock(port_obj);
-          pdesc->name = (mach_port_name_t)(uptr)port_obj; // temporarily hold kernel pointer in transit
+          *(ipc_port_t **)&pdesc->name = port_obj;
         } else {
-          pdesc->name = MACH_PORT_NAME_NULL;
+          *(ipc_port_t **)&pdesc->name = nullptr;
         }
         desc_ptr += sizeof(mach_msg_port_descriptor_t);
       } else if (dtype == MACH_MSG_OOL_DESCRIPTOR) {
@@ -170,40 +200,30 @@ xiu_error_t ipc_kmsg_copyout(ipc_kmsg_t *kmsg, xiu_vaddr_t user_buf_va,
   XIU_ASSERT(space != nullptr);
 
   mach_msg_header_t *khdr = kmsg->ikm_header;
-  mach_msg_size_t total_sz = khdr->msgh_size + sizeof(mach_msg_audit_trailer_t);
-  if (buf_size < total_sz)
+  if (buf_size < khdr->msgh_size)
     return XIU_ERR_OVERFLOW;
 
-  u8 temp[2048];
-  if (total_sz > sizeof(temp))
-    return XIU_ERR_OVERFLOW;
-
-  // ponytail: prepare kernel message + audit trailer in kernel stack and copyout safely
-  __builtin_memcpy(temp, khdr, khdr->msgh_size);
-
-  mach_msg_audit_trailer_t *trailer =
-      (mach_msg_audit_trailer_t *)(temp + khdr->msgh_size);
-  trailer->msgh_trailer_type = MACH_MSG_TRAILER_FORMAT_0;
-  trailer->msgh_trailer_size = sizeof(mach_msg_audit_trailer_t);
-  trailer->msgh_seqno = kmsg->ikm_seqno;
-
-  mach_msg_header_t *out_hdr = (mach_msg_header_t *)temp;
+  mach_msg_audit_trailer_t trailer;
+  __builtin_memset(&trailer, 0, sizeof(trailer));
+  trailer.msgh_trailer_type = MACH_MSG_TRAILER_FORMAT_0;
+  trailer.msgh_trailer_size = sizeof(mach_msg_audit_trailer_t);
+  trailer.msgh_seqno = kmsg->ikm_seqno;
+  trailer.msgh_sender_pid = kmsg->ikm_sender_pid;
+  trailer.msgh_sender_uid = kmsg->ikm_sender_uid;
 
   // 1. destination of reply
-  out_hdr->msgh_remote_port = ipc_port_copyout_send(space, kmsg->ikm_local_port);
+  khdr->msgh_remote_port = ipc_port_copyout_send(space, kmsg->ikm_local_port);
 
   // 2. port message was received on
   if (kmsg->ikm_remote_port && kmsg->ikm_remote_port->ip_receiver == space) {
-    out_hdr->msgh_local_port = kmsg->ikm_remote_port->ip_receiver_name;
+    khdr->msgh_local_port = kmsg->ikm_remote_port->ip_receiver_name;
   } else {
-    out_hdr->msgh_local_port = MACH_PORT_NAME_NULL;
+    khdr->msgh_local_port = MACH_PORT_NAME_NULL;
   }
-  trailer->msgh_sender_pid = kmsg->ikm_sender_pid;
-  trailer->msgh_sender_uid = kmsg->ikm_sender_uid;
 
   // complex message copy-out
-  if (out_hdr->msgh_bits & MACH_MSGH_BITS_COMPLEX) {
-    mach_msg_body_t *body = (mach_msg_body_t *)(out_hdr + 1);
+  if (khdr->msgh_bits & MACH_MSGH_BITS_COMPLEX) {
+    mach_msg_body_t *body = (mach_msg_body_t *)(khdr + 1);
     u8 *desc_ptr = (u8 *)(body + 1);
     u32 desc_count = body->msgh_descriptor_count;
     u32 ool_idx = 0;
@@ -213,7 +233,8 @@ xiu_error_t ipc_kmsg_copyout(ipc_kmsg_t *kmsg, xiu_vaddr_t user_buf_va,
       mach_msg_descriptor_type_t dtype = td->type;
       if (dtype == MACH_MSG_PORT_DESCRIPTOR) {
         mach_msg_port_descriptor_t *pdesc = (mach_msg_port_descriptor_t *)desc_ptr;
-        ipc_port_t *port_obj = (ipc_port_t *)(uptr)pdesc->name;
+        ipc_port_t *port_obj = *(ipc_port_t **)&pdesc->name;
+        pdesc->pad1 = 0;
         if (port_obj) {
           pdesc->name = ipc_port_copyout_send(space, port_obj);
         } else {
@@ -253,8 +274,19 @@ xiu_error_t ipc_kmsg_copyout(ipc_kmsg_t *kmsg, xiu_vaddr_t user_buf_va,
     }
   }
 
-  if (copyout(temp, (void *)user_buf_va, total_sz) != XIU_SUCCESS) {
+  if (copyout(khdr, (void *)user_buf_va, khdr->msgh_size) != XIU_SUCCESS) {
     return XIU_ERR_INVALID;
+  }
+
+  // copy trailer if user buffer has remaining capacity
+  if (buf_size >= khdr->msgh_size + sizeof(mach_msg_audit_trailer_t)) {
+    copyout(&trailer, (void *)(user_buf_va + khdr->msgh_size), sizeof(trailer));
+  } else if (buf_size >= khdr->msgh_size + sizeof(mach_msg_trailer_t)) {
+    mach_msg_trailer_t basic_trailer;
+    __builtin_memset(&basic_trailer, 0, sizeof(basic_trailer));
+    basic_trailer.msgh_trailer_type = MACH_MSG_TRAILER_FORMAT_0;
+    basic_trailer.msgh_trailer_size = sizeof(mach_msg_trailer_t);
+    copyout(&basic_trailer, (void *)(user_buf_va + khdr->msgh_size), sizeof(basic_trailer));
   }
 
   return XIU_SUCCESS;
@@ -304,6 +336,10 @@ xiu_error_t ipc_mqueue_send(ipc_port_t *port, ipc_kmsg_t *kmsg,
   mq->imq_messages_tail = kmsg;
   mq->imq_msgcount++;
 
+  dprintf("[IPC-DBG] mqueue_send: port=%p label=%s msgcount=%u msgh_id=%u sender_pid=%u\n",
+          (void *)port, port->ip_label ? port->ip_label : "?",
+          mq->imq_msgcount, kmsg->ikm_header->msgh_id, kmsg->ikm_sender_pid);
+
   // wake one blocked receiver
   wait_queue_wakeup_one(&mq->imq_recv_waiters);
   spinlock_unlock_irqrestore(&mq->imq_lock, f);
@@ -339,6 +375,9 @@ xiu_error_t ipc_mqueue_receive(ipc_port_t *port, ipc_kmsg_t **kmsg_out,
       return XIU_ERR_TIMEOUT;
     }
 
+    dprintf("[IPC-DBG] mqueue_receive: port=%p label=%s BLOCKING (timeout=%u)\n",
+            (void *)port, port->ip_label ? port->ip_label : "?", timeout_ms);
+
     xiu_error_t err =
         wait_queue_sleep_irqrestore(&mq->imq_recv_waiters, &mq->imq_lock, f);
     if (err != XIU_SUCCESS) {
@@ -359,6 +398,10 @@ xiu_error_t ipc_mqueue_receive(ipc_port_t *port, ipc_kmsg_t **kmsg_out,
   }
   mq->imq_msgcount--;
   kmsg->ikm_next = nullptr;
+
+  dprintf("[IPC-DBG] mqueue_receive: port=%p label=%s DEQUEUED msgh_id=%u from_pid=%u remaining=%u\n",
+          (void *)port, port->ip_label ? port->ip_label : "?",
+          kmsg->ikm_header->msgh_id, kmsg->ikm_sender_pid, mq->imq_msgcount);
   kmsg->ikm_prev = nullptr;
 
   spinlock_unlock_irqrestore(&mq->imq_lock, f);

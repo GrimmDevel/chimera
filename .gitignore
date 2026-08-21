@@ -13,6 +13,8 @@ qemu_debug.log
 # Reference sources (not project code)
 
 xnu/
+ravynos/
+OpenCorePkg/
 
 # Agent config
 .agents/*

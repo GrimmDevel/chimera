@@ -89,12 +89,23 @@ typedef struct xiu_proc {
     
     struct xiu_task    *p_task;
     xiu_uid_t           p_uid;
+    xiu_uid_t           p_euid;
     xiu_gid_t           p_gid;
-    
+    xiu_gid_t           p_egid;
+    xiu_gid_t           p_groups[16];
+    u32                 p_ngroups;
+
+    xiu_pid_t           p_pgrp;
+    xiu_pid_t           p_sid;
+    void               *p_tty;
+
+    u32                 p_umask;
+
     struct vnode       *p_text_node;
     struct vnode       *p_cwd;
 
     xiu_fileproc_t     *p_fd_table[XIU_PROC_MAX_FDS];
+    u8                  p_fd_flags[XIU_PROC_MAX_FDS];
     spinlock_t          p_fdlock;
 
     u32                 p_exit_code;

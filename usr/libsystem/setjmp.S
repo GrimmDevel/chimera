@@ -5,7 +5,15 @@
 
 .text
 .globl _setjmp
+.globl __setjmp
+.globl ___setjmp
+.globl _sigsetjmp
+.globl __sigsetjmp
 _setjmp:
+__setjmp:
+___setjmp:
+_sigsetjmp:
+__sigsetjmp:
     movq %rbx, (0*8)(%rdi)
     movq %rbp, (1*8)(%rdi)
     movq %r12, (2*8)(%rdi)
@@ -25,7 +33,15 @@ _setjmp:
     retq
 
 .globl _longjmp
+.globl __longjmp
+.globl ___longjmp
+.globl _siglongjmp
+.globl __siglongjmp
 _longjmp:
+__longjmp:
+___longjmp:
+_siglongjmp:
+__siglongjmp:
     movq %rsi, %rax
     testq %rax, %rax
     jnz 1f

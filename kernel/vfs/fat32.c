@@ -44,6 +44,9 @@ static u32 fat32_cluster_to_lba(u32 cluster) {
     return g_fat32.data_start_lba + (cluster - 2) * g_fat32.sectors_per_cluster;
 }
 
+static u32 s_cached_fat_sec = (u32)-1;
+static u8  s_cached_fat_buf[ATA_SECTOR_SIZE];
+
 static u32 fat32_get_next_cluster(u32 cluster) {
     if (cluster < 2 || cluster >= 0x0FFFFFF8) return 0x0FFFFFFF;
 
@@ -51,12 +54,14 @@ static u32 fat32_get_next_cluster(u32 cluster) {
     u32 fat_sector = g_fat32.reserved_sectors + (fat_offset_bytes / ATA_SECTOR_SIZE);
     u32 entry_offset = fat_offset_bytes % ATA_SECTOR_SIZE;
 
-    u8 buf[ATA_SECTOR_SIZE];
-    if (ata_read_sectors(fat_sector, 1, buf) != XIU_SUCCESS) {
-        return 0x0FFFFFFF;
+    if (s_cached_fat_sec != fat_sector) {
+        if (ata_read_sectors(fat_sector, 1, s_cached_fat_buf) != XIU_SUCCESS) {
+            return 0x0FFFFFFF;
+        }
+        s_cached_fat_sec = fat_sector;
     }
 
-    u32 next_cluster = *(u32 *)(buf + entry_offset) & 0x0FFFFFFF;
+    u32 next_cluster = *(u32 *)(s_cached_fat_buf + entry_offset) & 0x0FFFFFFF;
     return next_cluster;
 }
 
@@ -68,6 +73,9 @@ static xiu_error_t fat32_set_fat_entry(u32 cluster, u32 val) {
     u32 entry_offset = fat_offset_bytes % ATA_SECTOR_SIZE;
 
     u8 buf[ATA_SECTOR_SIZE];
+
+    // invalidate cached sector
+    s_cached_fat_sec = (u32)-1;
 
     // update FAT1
     u32 fat1_sec = g_fat32.reserved_sectors + fat_sector_idx;
@@ -775,9 +783,16 @@ typedef struct {
     bool valid;
 } fat32_lfn_parser_t;
 
-static void fat32_scan_directory(u32 dir_cluster, const char *parent_path) {
+static void fat32_scan_directory(u32 dir_cluster, const char *parent_path, int depth) {
+    if (depth > 12) return;
+    extern xiu_paddr_t pmm_alloc_page(void);
+    extern void pmm_release_page(xiu_paddr_t addr);
+    
+    xiu_paddr_t phys = pmm_alloc_page();
+    if (!phys || phys == (xiu_paddr_t)-1) return;
+    
+    u8 *cluster_buf = (u8 *)(phys + g_hhdm_base);
     u32 cluster = dir_cluster;
-    u8 cluster_buf[4096];
     u32 current_offset_in_dir = 0;
     fat32_lfn_parser_t lfn;
     __builtin_memset(&lfn, 0, sizeof(lfn));
@@ -785,17 +800,21 @@ static void fat32_scan_directory(u32 dir_cluster, const char *parent_path) {
     while (cluster >= 2 && cluster < 0x0FFFFFF8) {
         u32 lba = fat32_cluster_to_lba(cluster);
         u32 count = g_fat32.sectors_per_cluster;
-        if (count > (sizeof(cluster_buf) / ATA_SECTOR_SIZE)) {
-            count = sizeof(cluster_buf) / ATA_SECTOR_SIZE;
+        if (count > (4096 / ATA_SECTOR_SIZE)) {
+            count = 4096 / ATA_SECTOR_SIZE;
         }
+        u32 read_bytes = count * ATA_SECTOR_SIZE;
 
         if (ata_read_sectors(lba, count, cluster_buf) != XIU_SUCCESS) break;
 
-        for (u32 i = 0; i < g_fat32.cluster_size_bytes; i += 32) {
+        for (u32 i = 0; i < read_bytes; i += 32) {
             u8 *entry = cluster_buf + i;
             u32 entry_offset = current_offset_in_dir + i;
 
-            if (entry[0] == 0x00) return;
+            if (entry[0] == 0x00) {
+                pmm_release_page(phys);
+                return;
+            }
             if (entry[0] == 0xE5) {
                 lfn.valid = false;
                 continue;
@@ -843,6 +862,15 @@ static void fat32_scan_directory(u32 dir_cluster, const char *parent_path) {
             }
 
             u8 attr = entry[11];
+            if (attr & 0x08) {
+                lfn.valid = false;
+                continue;
+            }
+            if ((u8)entry[0] < 0x20 || (u8)entry[0] > 0x7E) {
+                lfn.valid = false;
+                continue;
+            }
+
             bool is_dir = (attr & 0x10) != 0;
             u32 start_cluster = ((u32)*(u16 *)(entry + 20) << 16) | *(u16 *)(entry + 26);
             u32 file_size = *(u32 *)(entry + 28);
@@ -866,6 +894,16 @@ static void fat32_scan_directory(u32 dir_cluster, const char *parent_path) {
                 fat32_format_name(entry, fname, sizeof(fname));
                 fat32_map_canonical_name(fname, sizeof(fname), is_dir);
             }
+
+            if (fname[0] == '\0') continue;
+            bool valid_chars = true;
+            for (const char *p = fname; *p; p++) {
+                if ((u8)*p < 0x20 || (u8)*p > 0x7E) {
+                    valid_chars = false;
+                    break;
+                }
+            }
+            if (!valid_chars) continue;
 
             char full_path[256];
             if (__builtin_strcmp(parent_path, "") == 0 || __builtin_strcmp(parent_path, "/") == 0) {
@@ -908,14 +946,26 @@ static void fat32_scan_directory(u32 dir_cluster, const char *parent_path) {
                 vfs_register(full_path, vp);
             }
 
-            if (is_dir && start_cluster >= 2) {
-                fat32_scan_directory(start_cluster, full_path);
+            if (is_dir && start_cluster >= 2 && start_cluster != dir_cluster && start_cluster != g_fat32.root_cluster) {
+                if (__builtin_strcmp(fname, ".") != 0 && __builtin_strcmp(fname, "..") != 0 && depth < 8) {
+                    bool is_cpp_tree = (full_path[0] == '/' && full_path[1] == 'u' && full_path[2] == 's' &&
+                                        full_path[3] == 'r' && full_path[4] == '/' && full_path[5] == 'i' &&
+                                        full_path[6] == 'n' && full_path[7] == 'c' && full_path[8] == 'l' &&
+                                        full_path[9] == 'u' && full_path[10] == 'd' && full_path[11] == 'e' &&
+                                        full_path[12] == '/' && full_path[13] == 'c' && full_path[14] == '+' &&
+                                        full_path[15] == '+');
+                    if (!is_cpp_tree) {
+                        fat32_scan_directory(start_cluster, full_path, depth + 1);
+                    }
+                }
             }
         }
 
         current_offset_in_dir += g_fat32.cluster_size_bytes;
         cluster = fat32_get_next_cluster(cluster);
     }
+
+    pmm_release_page(phys);
 }
 
 xiu_error_t fat32_init(void) {
@@ -966,9 +1016,10 @@ xiu_error_t fat32_init(void) {
     kprintf("[FAT32] Mounted FAT32 volume: total_sec=%u, sec/clust=%u, root_cluster=%u\n",
             g_fat32.total_sectors, g_fat32.sectors_per_cluster, g_fat32.root_cluster);
 
-    // scan and register all files and directories on disk into VFS
-    fat32_scan_directory(g_fat32.root_cluster, "");
-
     spinlock_unlock_irqrestore(&s_fat_lock, irq);
+
+    // scan and register all files and directories on disk into VFS
+    fat32_scan_directory(g_fat32.root_cluster, "", 0);
+
     return XIU_SUCCESS;
 }

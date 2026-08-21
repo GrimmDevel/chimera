@@ -145,6 +145,7 @@ xiu_error_t soshutdown(socket_t *so, int how);
 xiu_error_t soclose(socket_t *so);
 xiu_error_t sosetopt(socket_t *so, int level, int optname, const void *optval, usize optlen);
 xiu_error_t sogetopt(socket_t *so, int level, int optname, void *optval, usize *optlen);
+i16         sopoll(socket_t *so, i16 events);
 
 void        sbappend(struct sockbuf *sb, mbuf_t *m);
 void        sbflush(struct sockbuf *sb);

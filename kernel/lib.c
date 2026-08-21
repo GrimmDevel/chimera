@@ -18,6 +18,19 @@ void *memcpy(void *dest, const void *src, usize n) {
     return dest;
 }
 
+void *memmove(void *dest, const void *src, usize n) {
+    u8 *d = (u8 *)dest;
+    const u8 *s = (const u8 *)src;
+    if (d < s) {
+        while (n--) *d++ = *s++;
+    } else if (d > s) {
+        d += n;
+        s += n;
+        while (n--) *--d = *--s;
+    }
+    return dest;
+}
+
 char *strncpy(char *dest, const char *src, usize n) {
     usize i;
     for (i = 0; i < n && src[i] != '\0'; i++)
@@ -31,6 +44,14 @@ usize strlen(const char *s) {
     usize len = 0;
     while (s[len]) len++;
     return len;
+}
+
+char *strchr(const char *s, int c) {
+    while (*s) {
+        if (*s == (char)c) return (char *)s;
+        s++;
+    }
+    return (c == 0) ? (char *)s : NULL;
 }
 
 int strcmp(const char *s1, const char *s2) {

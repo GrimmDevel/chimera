@@ -34,6 +34,15 @@ void proc_init(void) {
     proc_kernel->p_signature = XIU_PROC_MAGIC;
     proc_kernel->p_pid = 0;
     proc_kernel->p_task = task_kernel;
+    proc_kernel->p_uid = 0;
+    proc_kernel->p_euid = 0;
+    proc_kernel->p_gid = 0;
+    proc_kernel->p_egid = 0;
+    proc_kernel->p_groups[0] = 0;
+    proc_kernel->p_ngroups = 1;
+    proc_kernel->p_umask = 022;
+    proc_kernel->p_pgrp = 0;
+    proc_kernel->p_sid = 0;
     __builtin_strncpy(proc_kernel->p_comm, "kernel_task", XIU_PROC_NAME_MAX);
     spinlock_init(&proc_kernel->p_lock);
     spinlock_init(&proc_kernel->p_fdlock);
@@ -64,6 +73,28 @@ xiu_error_t proc_create(xiu_proc_t *parent, const char *name, xiu_proc_t **proc_
     p->p_ppid = parent ? parent->p_pid : 0;
     p->p_parent = parent;
     p->p_state = PROC_STATE_RUNNING;
+    if (parent) {
+        p->p_uid = parent->p_uid;
+        p->p_euid = parent->p_euid;
+        p->p_gid = parent->p_gid;
+        p->p_egid = parent->p_egid;
+        p->p_ngroups = parent->p_ngroups;
+        __builtin_memcpy(p->p_groups, parent->p_groups, sizeof(p->p_groups));
+        p->p_umask = parent->p_umask;
+        p->p_pgrp = parent->p_pgrp ? parent->p_pgrp : p->p_pid;
+        p->p_sid = parent->p_sid ? parent->p_sid : p->p_pid;
+        p->p_tty = parent->p_tty;
+    } else {
+        p->p_uid = 0;
+        p->p_euid = 0;
+        p->p_gid = 0;
+        p->p_egid = 0;
+        p->p_ngroups = 1;
+        p->p_groups[0] = 0;
+        p->p_umask = 022;
+        p->p_pgrp = p->p_pid;
+        p->p_sid = p->p_pid;
+    }
     __builtin_strncpy(p->p_comm, name, XIU_PROC_NAME_MAX);
     spinlock_init(&p->p_lock);
     spinlock_init(&p->p_fdlock);
@@ -86,38 +117,40 @@ xiu_error_t proc_create(xiu_proc_t *parent, const char *name, xiu_proc_t **proc_
         }
     }
     
-    extern xiu_error_t vfs_lookup(const char *path, vnode_t **vp_out);
-    extern xiu_fileproc_t *fp_alloc(vnode_t *vp, u32 flags);
-    extern int proc_fd_install(xiu_proc_t *p, xiu_fileproc_t *fp);
-    extern void fp_release(xiu_fileproc_t *fp);
-    
-    vnode_t *dev_con = nullptr;
-    if (vfs_lookup("/dev/console", &dev_con) != XIU_SUCCESS || !dev_con) {
-        vfs_lookup("/dev/null", &dev_con);
-    }
-    if (dev_con) {
-        // fd 0: stdin
-        xiu_fileproc_t *fp0 = fp_alloc(dev_con, FP_READABLE);
-        if (fp0) {
-            proc_fd_install(p, fp0);
-            fp_release(fp0);
-        }
+    if (!parent) {
+        extern xiu_error_t vfs_lookup(const char *path, vnode_t **vp_out);
+        extern xiu_fileproc_t *fp_alloc(vnode_t *vp, u32 flags);
+        extern int proc_fd_install(xiu_proc_t *p, xiu_fileproc_t *fp);
+        extern void fp_release(xiu_fileproc_t *fp);
         
-        // fd 1: stdout
-        xiu_fileproc_t *fp1 = fp_alloc(dev_con, FP_WRITABLE);
-        if (fp1) {
-            proc_fd_install(p, fp1);
-            fp_release(fp1);
+        vnode_t *dev_con = nullptr;
+        if (vfs_lookup("/dev/console", &dev_con) != XIU_SUCCESS || !dev_con) {
+            vfs_lookup("/dev/null", &dev_con);
         }
-        
-        // fd 2: stderr
-        xiu_fileproc_t *fp2 = fp_alloc(dev_con, FP_WRITABLE);
-        if (fp2) {
-            proc_fd_install(p, fp2);
-            fp_release(fp2);
+        if (dev_con) {
+            // fd 0: stdin
+            xiu_fileproc_t *fp0 = fp_alloc(dev_con, FP_READABLE);
+            if (fp0) {
+                proc_fd_install(p, fp0);
+                fp_release(fp0);
+            }
+            
+            // fd 1: stdout
+            xiu_fileproc_t *fp1 = fp_alloc(dev_con, FP_WRITABLE);
+            if (fp1) {
+                proc_fd_install(p, fp1);
+                fp_release(fp1);
+            }
+            
+            // fd 2: stderr
+            xiu_fileproc_t *fp2 = fp_alloc(dev_con, FP_WRITABLE);
+            if (fp2) {
+                proc_fd_install(p, fp2);
+                fp_release(fp2);
+            }
+            
+            dprintf("[proc_create] Initialized stdin/stdout/stderr (/dev/console) for %s (pid=%u)\n", name, p->p_pid);
         }
-        
-        dprintf("[proc_create] Initialized stdin/stdout/stderr (/dev/console) for %s (pid=%u)\n", name, p->p_pid);
     }
     
     // inherit signal state from parent
@@ -162,43 +195,14 @@ void proc_mark_exited(xiu_proc_t *proc, u32 code) {
     proc->p_text_node = nullptr;
     proc->p_cwd = nullptr;
 
-    // 3. Reparent orphan children to launchd (PID 1)
-    irq_flags_t pool_irq = spinlock_lock_irqsave(&s_proc_pool_lock);
-    for (u32 i = 1; i < PROC_POOL_SIZE; i++) {
-        xiu_proc_t *child = &s_proc_pool[i];
-        if (child->p_signature == XIU_PROC_MAGIC &&
-            (child->p_parent == proc || child->p_ppid == proc->p_pid)) {
-            child->p_parent = proc_launchd;
-            child->p_ppid = (proc_launchd ? proc_launchd->p_pid : 1);
-        }
-    }
-    spinlock_unlock_irqrestore(&s_proc_pool_lock, pool_irq);
-
-    // 4. Set state to EXITED
-    irq_flags_t irq = spinlock_lock_irqsave(&proc->p_lock);
-    proc->p_exit_code = code;
-    proc->p_state = PROC_STATE_EXITED;
-    spinlock_unlock_irqrestore(&proc->p_lock, irq);
-
-    // 5. Send SIGCHLD to parent if present
-    if (proc->p_parent) {
-        proc_signal(proc->p_parent, 17);
-    }
-}
-
-void proc_reap(xiu_proc_t *proc) {
-    if (!proc || proc->p_state != PROC_STATE_EXITED) return;
-    irq_flags_t irq = spinlock_lock_irqsave(&proc->p_lock);
-
-    // 1. Destroy user address space and return all physical pages to PMM
-    if (proc->p_task && proc->p_task->ta_vm_map) {
-        extern void pmap_destroy_user_space(u64 pml4_phys);
-        pmap_destroy_user_space((u64)proc->p_task->ta_vm_map);
-        proc->p_task->ta_vm_map = nullptr;
-    }
-
-    // 2. Clean up task threads and IPC space
+    // 3. Destroy user address space and clean up task/threads immediately
     if (proc->p_task) {
+        if (proc->p_task->ta_vm_map) {
+            extern void pmap_destroy_user_space(u64 pml4_phys);
+            pmap_destroy_user_space((u64)proc->p_task->ta_vm_map);
+            proc->p_task->ta_vm_map = nullptr;
+        }
+
         xiu_thread_t *th = proc->p_task->ta_threads;
         while (th) {
             xiu_thread_t *next = th->th_task_next;
@@ -214,12 +218,42 @@ void proc_reap(xiu_proc_t *proc) {
             ipc_space_destroy(proc->p_task->ta_ipc_space);
             proc->p_task->ta_ipc_space = nullptr;
         }
+    }
 
+    // 4. Reparent orphan children to launchd (PID 1)
+    irq_flags_t pool_irq = spinlock_lock_irqsave(&s_proc_pool_lock);
+    for (u32 i = 1; i < PROC_POOL_SIZE; i++) {
+        xiu_proc_t *child = &s_proc_pool[i];
+        if (child->p_signature == XIU_PROC_MAGIC &&
+            (child->p_parent == proc || child->p_ppid == proc->p_pid)) {
+            child->p_parent = proc_launchd;
+            child->p_ppid = (proc_launchd ? proc_launchd->p_pid : 1);
+        }
+    }
+    spinlock_unlock_irqrestore(&s_proc_pool_lock, pool_irq);
+
+    // 5. Set state to EXITED
+    irq_flags_t irq = spinlock_lock_irqsave(&proc->p_lock);
+    proc->p_exit_code = code;
+    proc->p_state = PROC_STATE_EXITED;
+    spinlock_unlock_irqrestore(&proc->p_lock, irq);
+
+    // 6. Send SIGCHLD (20 in Darwin/BSD) to parent if present
+    if (proc->p_parent) {
+        proc_signal(proc->p_parent, 20);
+    }
+}
+
+void proc_reap(xiu_proc_t *proc) {
+    if (!proc || proc->p_state != PROC_STATE_EXITED) return;
+    irq_flags_t irq = spinlock_lock_irqsave(&proc->p_lock);
+
+    if (proc->p_task) {
         proc->p_task->ta_signature = 0;
         proc->p_task = nullptr;
     }
 
-    // 3. Clear process slot for reuse
+    // Clear process slot for reuse
     proc->p_signature = 0;
     proc->p_state = 0;
     proc->p_pid = 0;
@@ -283,24 +317,17 @@ void proc_deliver_signals(void *frame_ptr) {
             u64 handler = proc->p_sigacts[sig];
             spinlock_unlock_irqrestore(&proc->p_lock, irq);
             
-            if (handler == 1) {
+            if (handler == 1 || sig == 20 || sig == 28 || sig == 16 || sig == 29) {
                 return;
             }
             
             if (handler == 0) {
-                if (sig == 17 || sig == 28) {
-                    return;
-                }
                 kprintf("[SIGNAL] Process '%s' (PID %u) terminated by signal %d\n",
                         proc->p_comm, proc->p_pid, sig);
                 extern void sys_exit_direct(u64 code);
                 sys_exit_direct(128 + sig);
                 return;
             }
-            
-            // custom user handler
-            syscall_user_frame_alias_t *frame = (syscall_user_frame_alias_t *)frame_ptr;
-            frame->rip = handler;
             return;
         }
     }

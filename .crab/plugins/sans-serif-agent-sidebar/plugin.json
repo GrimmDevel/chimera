@@ -1,0 +1,19 @@
+{
+  "id": "sans-serif-agent-sidebar",
+  "name": "Sans-Serif Agent Sidebar",
+  "version": "1.0.0",
+  "description": "Меняет шрифт в панели чата и сайдбаре агента на sans-serif",
+  "author": "CrabCode",
+  "permissions": ["ui"],
+  "contributes": {
+    "views": {
+      "chatPanel": [
+        {
+          "id": "sans-serif-font-view",
+          "title": "Sans-Serif Font Modifier",
+          "entry": "index.tsx"
+        }
+      ]
+    }
+  }
+}

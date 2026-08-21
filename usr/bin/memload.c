@@ -10,8 +10,6 @@
 #include <sys/mman.h>
 #include <sys/syscall.h>
 
-extern long syscall(long number, ...);
-
 typedef struct {
   unsigned long total_memory;
   unsigned long free_memory;

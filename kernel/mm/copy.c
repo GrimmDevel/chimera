@@ -78,8 +78,7 @@ xiu_error_t copyout(const void *kaddr, void *uaddr, usize len) {
         u64 phys = pmap_extract(pml4_phys, curr_uaddr);
         if (!phys) {
             u64 page_vaddr = curr_uaddr & ~0xFFFULL;
-            // only demand-allocate if within valid user stack region
-            if (page_vaddr >= USER_STACK_MIN && page_vaddr <= USER_STACK_MAX) {
+            if (page_vaddr >= USER_SPACE_MIN && page_vaddr <= USER_SPACE_MAX) {
                 u64 new_paddr = pmm_alloc_page();
                 if (new_paddr == 0 || new_paddr == (xiu_paddr_t)-1)
                     return XIU_ERR_INVALID;

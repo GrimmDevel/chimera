@@ -6,8 +6,28 @@
 
 set -e
 
-ARCH=${1:-x86_64}
-DEBUG=${2:-0}
+ARCH="x86_64"
+DEBUG=0
+CMDLINE_ARG=""
+
+for arg in "$@"; do
+    case "$arg" in
+        x86_64|arm64)
+            ARCH="$arg"
+            ;;
+        1)
+            DEBUG=1
+            ;;
+        -wserver|wserver|gui|-gui|--wserver)
+            CMDLINE_ARG="-wserver"
+            ;;
+    esac
+done
+
+if [ "$WSERVER" = "1" ] || [ "$GUI" = "1" ]; then
+    CMDLINE_ARG="-wserver"
+fi
+
 KERNEL="build/${ARCH}/kernel/xiu_kernel.elf"
 
 if [ ! -f "$KERNEL" ]; then
@@ -15,6 +35,8 @@ if [ ! -f "$KERNEL" ]; then
     echo "      Please run 'make build' first."
     exit 1
 fi
+
+./scripts/make_iso.sh "$ARCH" "$CMDLINE_ARG"
 
 HOST_ARCH=$(uname -m)
 

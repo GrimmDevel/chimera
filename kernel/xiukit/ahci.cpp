@@ -328,7 +328,7 @@ private:
     u32        m_port_count;
 };
 
-static AHCIDriver s_ahci_driver(0);
+static AHCIDriver *s_ahci_driver_instance = nullptr;
 
 } // namespace XIUKit
 
@@ -336,8 +336,11 @@ extern "C" void xiukit_ahci_init(u64 abar_phys) {
     if (!abar_phys) return;
     static XIUKit::AHCIDriver s_ahci(abar_phys);
     s_ahci.init();
+    XIUKit::s_ahci_driver_instance = &s_ahci;
 }
 
 extern "C" xiu_error_t ahci_read_blocks(u32 port, u64 lba, u32 count, void *buffer) {
-    return XIUKit::s_ahci_driver.read_blocks(port, lba, count, buffer);
+    if (!XIUKit::s_ahci_driver_instance) return XIU_ERR_NOTFOUND;
+    return XIUKit::s_ahci_driver_instance->read_blocks(port, lba, count, buffer);
 }
+

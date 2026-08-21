@@ -10,12 +10,12 @@ import os
 import sys
 import struct
 
-DISK_SIZE = 64 * 1024 * 1024  # 64 MB
+DISK_SIZE = 512 * 1024 * 1024  # 512 MB
 SECTOR_SIZE = 512
 SECTORS_PER_CLUSTER = 8        # 4 KB cluster
 RESERVED_SECTORS = 32
 NUM_FATS = 2
-SECTORS_PER_FAT = 256
+SECTORS_PER_FAT = 2048
 ROOT_CLUSTER = 2
 
 TOTAL_SECTORS = DISK_SIZE // SECTOR_SIZE
@@ -112,11 +112,15 @@ class FAT32Disk:
             if self.fat[c] == 0:
                 self.fat[c] = 0x0FFFFFFF
                 self.next_free_cluster = c + 1
+                c_off = self.cluster_offset(c)
+                self.image[c_off : c_off + SECTORS_PER_CLUSTER * SECTOR_SIZE] = b"\x00" * (SECTORS_PER_CLUSTER * SECTOR_SIZE)
                 return c
         for c in range(ROOT_CLUSTER + 1, self.next_free_cluster):
             if self.fat[c] == 0:
                 self.fat[c] = 0x0FFFFFFF
                 self.next_free_cluster = c + 1
+                c_off = self.cluster_offset(c)
+                self.image[c_off : c_off + SECTORS_PER_CLUSTER * SECTOR_SIZE] = b"\x00" * (SECTORS_PER_CLUSTER * SECTOR_SIZE)
                 return c
         raise RuntimeError("FAT32 disk full")
 
@@ -325,7 +329,9 @@ def copy_include_tree(disk, base_path, src_dir):
 
 BIN_MAP = {
     # /bin (Root & POSIX essentials)
+    "zsh": "bin",
     "sh": "bin",
+    "stty": "bin",
     "dash": "bin",
     "ls": "bin",
     "cat": "bin",
@@ -350,6 +356,10 @@ BIN_MAP = {
 
     # /usr/sbin (Daemons / System servers)
     "wserver": "usr/sbin",
+    "WindowServer": "System/Library/CoreServices",
+    "SystemUIServer": "System/Library/CoreServices",
+    "Dock": "System/Library/CoreServices",
+    "Filer": "System/Library/CoreServices",
 
     # /usr/bin (Default for all other tools, compilers, apps)
 }
@@ -374,6 +384,190 @@ def discover_binaries(bin_dir: str) -> list:
             except Exception:
                 pass
     return sorted(discovered)
+
+
+def install_system_files(disk):
+    etc_files = {
+        "motd": b"Welcome to XIU Operating System!\nHybrid Mach/BSD Architecture (Darwin/XNU compatible).\n",
+        "version": b"XIU OS v1.0.0 (x86_64)\n",
+        "hosts": b"127.0.0.1\tlocalhost\n10.0.2.15\tMac\n",
+        "resolv.conf": b"nameserver 10.0.2.3\n",
+        "passwd": b"root:x:0:0:System Administrator:/Users/root:/bin/zsh\nfvr:x:501:20:fvr:/Users/fvr:/bin/zsh\nuser:x:502:20:Default User:/Users/user:/bin/zsh\n",
+        "group": b"wheel:x:0:root\nadmin:x:80:root,fvr,user\nstaff:x:20:fvr,user\n",
+        "shells": b"/bin/zsh\n/bin/sh\n",
+        "sudoers": b"root\tALL=(ALL) ALL\n%admin\tALL=(ALL) ALL\n%wheel\tALL=(ALL) ALL\n",
+        "sudo.conf": b"# sudo.conf\n",
+        "zprofile": b'export PATH="/bin:/usr/bin:/sbin:/usr/sbin:/usr/local/bin"\nexport TERM="xterm-256color"\nexport HOME="/Users/fvr"\nexport USER="fvr"\nexport LOGNAME="fvr"\nexport PROMPT="%n@%m %~ %# "\n',
+        "zshrc": b'export PATH="/bin:/usr/bin:/sbin:/usr/sbin:/usr/local/bin"\nexport TERM="xterm-256color"\nexport HOME="/Users/fvr"\nexport USER="fvr"\nexport LOGNAME="fvr"\nexport PROMPT="%n@%m %~ %# "\nunsetopt zle\n',
+        "termcap": b"xterm-256color|xterm with 256 colors:\\\n\t:am:xn:hs:co#80:li#25:colors#256:\\\n\t:cl=\\E[2J\\E[H:cd=\\E[J:ce=\\E[K:cm=\\E[%i%d;%dH:\\\n\t:up=\\E[A:do=\\E[B:le=\\E[D:nd=\\E[C:\\\n\t:so=\\E[7m:se=\\E[27m:us=\\E[4m:ue=\\E[24m:\\\n\t:md=\\E[1m:me=\\E[0m:AF=\\E[3%dm:AB=\\E[4%dm:\\\n\t:kb=\\177:kd=\\E[B:kl=\\E[D:kr=\\E[C:ku=\\E[A:\n",
+    }
+    disk.update_dir_files("private/etc", etc_files)
+
+    sysversion_content = b'''<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>BuildID</key>
+	<string>7B930DF0-XIU-2026</string>
+	<key>ProductBuildVersion</key>
+	<string>24A348</string>
+	<key>ProductCopyright</key>
+	<string>2026 XIU Project</string>
+	<key>ProductName</key>
+	<string>XIU OS</string>
+	<key>ProductUserVisibleVersion</key>
+	<string>1.0</string>
+	<key>ProductVersion</key>
+	<string>1.0.0</string>
+</dict>
+</plist>
+'''
+    serverversion_content = b'''<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>ProductName</key>
+	<string>XIU Server</string>
+	<key>ProductVersion</key>
+	<string>1.0.0</string>
+	<key>ProductBuildVersion</key>
+	<string>24A348</string>
+</dict>
+</plist>
+'''
+    coreservices_files = {
+        "SystemVersion.plist": sysversion_content,
+        "ServerVersion.plist": serverversion_content,
+    }
+    disk.update_dir_files("System/Library/CoreServices", coreservices_files)
+
+    pref_files = {
+        "com.xiu.system.plist": b'''<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Languages</key>
+	<array>
+		<string>en-US</string>
+		<string>ru-RU</string>
+	</array>
+	<key>Locale</key>
+	<string>en_US</string>
+	<key>Country</key>
+	<string>US</string>
+</dict>
+</plist>
+'''
+    }
+    disk.update_dir_files("Library/Preferences", pref_files)
+
+    calc_app_files = {
+        "Info.plist": b'''<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleExecutable</key>
+	<string>calc</string>
+	<key>CFBundleIdentifier</key>
+	<string>org.xiu.calculator</string>
+	<key>CFBundleName</key>
+	<string>Calculator</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.0</string>
+</dict>
+</plist>
+'''
+    }
+    disk.update_dir_files("Applications/Calculator.app/Contents", calc_app_files)
+
+    term_app_files = {
+        "Info.plist": b'''<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleExecutable</key>
+	<string>zsh</string>
+	<key>CFBundleIdentifier</key>
+	<string>org.xiu.terminal</string>
+	<key>CFBundleName</key>
+	<string>Terminal</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.0</string>
+</dict>
+</plist>
+'''
+    }
+    disk.update_dir_files("Applications/Terminal.app/Contents", term_app_files)
+
+    root_files = {
+        ".zshrc": b'''# ~/.zshrc for root
+export HOME=/Users/root
+export USER=root
+export LOGNAME=root
+export PATH=/bin:/usr/bin:/sbin:/usr/sbin:/usr/local/bin
+export TERM=xterm-256color
+export PROMPT='%n@%m %~ %# '
+unset RPROMPT
+unsetopt zle
+alias ls='ls'
+alias ll='ls -la'
+alias la='ls -a'
+alias clear='clear'
+alias zsh='/bin/zsh'
+alias sh='/bin/sh'
+''',
+        ".profile": b'export HOME=/Users/root\nexport USER=root\nexport LOGNAME=root\nexport PATH=/bin:/usr/bin:/sbin:/usr/sbin:/usr/local/bin\nexport TERM=xterm-256color\nexport PROMPT="%n@%m %~ %# "\n',
+        "hello.c": b'#include <stdio.h>\n\nint main() {\n    printf("Hello from self-hosted XIU C compiler!\\n");\n    return 0;\n}\n'
+    }
+    disk.update_dir_files("Users/root", root_files)
+
+    fvr_files = {
+        ".zshrc": b'''# ~/.zshrc for fvr
+export HOME=/Users/fvr
+export USER=fvr
+export LOGNAME=fvr
+export PATH=/bin:/usr/bin:/sbin:/usr/sbin:/usr/local/bin
+export TERM=xterm-256color
+export PROMPT='%n@%m %~ %# '
+unset RPROMPT
+unsetopt zle
+alias ls='ls'
+alias ll='ls -la'
+alias la='ls -a'
+alias clear='clear'
+alias zsh='/bin/zsh'
+alias sh='/bin/sh'
+''',
+        ".profile": b'export HOME=/Users/fvr\nexport USER=fvr\nexport LOGNAME=fvr\nexport PATH=/bin:/usr/bin:/sbin:/usr/sbin:/usr/local/bin\nexport TERM=xterm-256color\nexport PROMPT="%n@%m %~ %# "\n',
+        "hello.c": b'#include <stdio.h>\n\nint main() {\n    printf("Hello from self-hosted XIU C compiler!\\n");\n    return 0;\n}\n'
+    }
+    disk.update_dir_files("Users/fvr", fvr_files)
+
+    user_files = {
+        ".zshrc": b'''# ~/.zshrc for user
+export HOME=/Users/user
+export USER=user
+export LOGNAME=user
+export PATH=/bin:/usr/bin:/sbin:/usr/sbin:/usr/local/bin
+export TERM=xterm-256color
+export PROMPT='%n@%m %~ %# '
+unset RPROMPT
+unsetopt zle
+alias ls='ls'
+alias ll='ls -la'
+alias la='ls -a'
+alias clear='clear'
+alias zsh='/bin/zsh'
+alias sh='/bin/sh'
+''',
+        ".profile": b'export HOME=/Users/user\nexport USER=user\nexport LOGNAME=user\nexport PATH=/bin:/usr/bin:/sbin:/usr/sbin:/usr/local/bin\nexport TERM=xterm-256color\nexport PROMPT="%n@%m %~ %# "\n',
+    }
+    disk.update_dir_files("Users/user", user_files)
+    disk.update_dir_files("Users/Shared", {"welcome.txt": b"Hello from persistent user storage on disk0!\n"})
 
 
 def main():
@@ -412,6 +606,9 @@ def main():
         copy_include_tree(disk, "usr/include", os.path.join(workspace, "tinycc", "include"))
         copy_include_tree(disk, "usr/include/kernel", os.path.join(workspace, "kernel", "include", "kernel"))
         copy_include_tree(disk, "usr/include/net", os.path.join(workspace, "kernel", "include", "net"))
+
+        # Install system plists and configs
+        install_system_files(disk)
 
         with open(out_path, "wb") as f:
             f.write(disk.image)
@@ -471,6 +668,9 @@ def main():
     disk.find_or_create_dir("private/var/db")
     disk.find_or_create_dir("private/var/root")
     disk.find_or_create_dir("private/tmp")
+    disk.find_or_create_dir("tmp")
+    disk.find_or_create_dir("var")
+    disk.find_or_create_dir("var/tmp")
 
     disk.find_or_create_dir("cores")
     disk.find_or_create_dir("opt")

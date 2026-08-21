@@ -1,0 +1,8 @@
+#ifndef SCHED_MDH
+#define SCHED_MDH
+
+#include "zsh.mdh"
+#include "sched.epro"
+#include "sched.pro"
+
+#endif

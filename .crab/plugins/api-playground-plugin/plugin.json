@@ -1,0 +1,59 @@
+{
+  "id": "crab.plugin.crabman",
+  "name": "CrabMan API Client",
+  "version": "1.0.0",
+  "description": "Встроенный нативный Postman-клиент для тестирования HTTP/REST API в минималистичном стиле CrabCode.",
+  "author": "CrabCode",
+  "main": "main.js",
+  "permissions": [
+    "agentTools",
+    "ui",
+    "network"
+  ],
+  "contributes": {
+    "agentTools": [
+      {
+        "name": "execute_crabman_request",
+        "description": "Выполняет HTTP REST-запрос (GET, POST, PUT, DELETE) и возвращает статус, время задержки и результат.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "description": "HTTP метод (GET, POST, PUT, DELETE)"
+            },
+            "url": {
+              "type": "string",
+              "description": "Полный URL запроса"
+            },
+            "body": {
+              "type": "string",
+              "description": "JSON или текстовое тело запроса для POST/PUT"
+            }
+          },
+          "required": [
+            "method",
+            "url"
+          ]
+        }
+      }
+    ],
+    "commands": [
+      {
+        "id": "crabman.open",
+        "title": "CrabMan: Open REST Client",
+        "category": "API"
+      }
+    ],
+    "views": {
+      "sidebar": [
+        {
+          "id": "crabman-sidebar-view",
+          "title": "CrabMan API Client",
+          "icon": "send",
+          "entry": "App.tsx"
+        }
+      ]
+    }
+  }
+}

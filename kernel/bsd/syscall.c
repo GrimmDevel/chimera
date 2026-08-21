@@ -34,6 +34,7 @@ extern u64 pmap_clone_user_space(u64 src_pml4_phys);
 extern void task_switch_to_user_frame(uptr entry, uptr stack, void *frame,
                                       u64 rax);
 extern void thread_init_fork_stack(xiu_thread_t *th, void *entry, void *stack);
+extern void scheduler_yield(void);
 
 static u64 g_syscall_frame;
 
@@ -46,10 +47,11 @@ typedef struct syscall_user_frame {
 
 typedef struct xiu_user_dirent {
   u64 d_ino;
-  u64 d_off;
+  u64 d_seekoff;
   u16 d_reclen;
+  u16 d_namlen;
   u8 d_type;
-  char d_name[256];
+  char d_name[1024];
 } xiu_user_dirent_t;
 
 typedef struct xiu_user_stat {
@@ -300,7 +302,7 @@ static i64 sys_lseek(u64 fd_u, u64 offset_u, u64 whence_u, u64 a4, u64 a5, u64 a
     return -9; // ebadf
   }
 
-  if (vp->v_type == VFIFO || vp->v_type == VSOCK) {
+  if (vp->v_type == VFIFO || vp->v_type == VSOCK || vp->v_type == VCHR) {
     fp_release(fp);
     return -29; // espipe
   }
@@ -527,6 +529,8 @@ static i64 sys_open(u64 path_ptr, u64 flags, u64 mode, u64 a4, u64 a5, u64 a6) {
   (void)a4;
   (void)a5;
   (void)a6;
+  if (!path_ptr)
+    return -14; // -EFAULT
   const char *path = (const char *)path_ptr;
   dprintf("[SYSCALL] open(%s)\n", path);
 
@@ -621,8 +625,13 @@ static i64 sys_read(u64 fd_u, u64 buf, u64 len, u64 a4, u64 a5, u64 a6) {
   if (!fp) {
     // fallback: fd 0 without FDT entry → direct console input
     if (fd == 0) {
+      char tmp[256];
+      usize to_read = len < sizeof(tmp) ? len : sizeof(tmp);
       extern i64 console_read(char *dst, usize len);
-      return console_read((char *)buf, len);
+      i64 n = console_read(tmp, to_read);
+      if (n <= 0) return 0;
+      if (copyout(tmp, (void *)buf, n) != XIU_SUCCESS) return -1;
+      return n;
     }
     kprintf("[sys_read] fd=%d: EBADF\n", fd);
     return -1;
@@ -885,6 +894,28 @@ static i64 sys_fork(u64 a1, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
   }
   spinlock_unlock_irqrestore(&child->p_fdlock, cirq);
   spinlock_unlock_irqrestore(&parent->p_fdlock, irq);
+
+  // clone parent's ipc_space entries into child so child threads/processes inherit Mach ports
+  if (parent_task && parent_task->ta_ipc_space && child->p_task->ta_ipc_space) {
+    irq_flags_t pf = spinlock_lock_irqsave(&parent_task->ta_ipc_space->is_lock);
+    irq_flags_t cf = spinlock_lock_irqsave(&child->p_task->ta_ipc_space->is_lock);
+
+    for (u32 i = 1; i < parent_task->ta_ipc_space->is_table_used; i++) {
+      ipc_entry_t *pe = &parent_task->ta_ipc_space->is_table[i];
+      if (pe->ie_object && pe->ie_bits != MACH_PORT_TYPE_NONE) {
+        if (i >= child->p_task->ta_ipc_space->is_table_used) {
+          child->p_task->ta_ipc_space->is_table_used = i + 1;
+        }
+        ipc_entry_t *ce = &child->p_task->ta_ipc_space->is_table[i];
+        ce->ie_object = pe->ie_object;
+        ce->ie_bits = pe->ie_bits;
+        ce->ie_urefs = pe->ie_urefs;
+        ipc_port_reference(pe->ie_object);
+      }
+    }
+    spinlock_unlock_irqrestore(&child->p_task->ta_ipc_space->is_lock, cf);
+    spinlock_unlock_irqrestore(&parent_task->ta_ipc_space->is_lock, pf);
+  }
 
   syscall_user_frame_t *frame = (syscall_user_frame_t *)g_syscall_frame;
   uptr child_rip = frame->rip;
@@ -1189,6 +1220,11 @@ static i64 sys_mmap(u64 addr, u64 len, u64 prot, u64 flags, u64 fd,
 
   static u64 s_surface_phys[64][2000];
 
+  if (is_fb) {
+    extern void console_fb_set_active(bool active);
+    console_fb_set_active(false);
+  }
+
   for (u64 off = 0; off < len; off += 4096) {
     u64 paddr = 0;
     bool mapped_special = false;
@@ -1283,29 +1319,24 @@ static i64 sys_mach_msg(u64 msg_ptr, u64 option, u64 send_sz, u64 rcv_sz,
   if (option & 1) {
     mach_msg_header_t user_hdr;
     if (copyin((const void *)msg_ptr, &user_hdr, sizeof(user_hdr)) !=
-        XIU_SUCCESS)
+        XIU_SUCCESS) {
+      kprintf("[IPC-ERR] sys_mach_msg SEND copyin header failed for msg_ptr=0x%llx\n", msg_ptr);
       return -1;
-
-    if (user_hdr.msgh_id == 1100 && send_sz >= 184) {
-      u32 pid = task->ta_proc ? task->ta_proc->p_pid : 0;
-      if (copyout(&pid, (void *)(msg_ptr + 180), sizeof(u32)) != XIU_SUCCESS) {
-        kprintf("[IPC] Failed to auto-fill client_pid\n");
-      }
     }
 
     ipc_kmsg_t *kmsg = ipc_kmsg_alloc(send_sz);
     if (ipc_kmsg_copyin(kmsg, msg_ptr, task->ta_ipc_space) != XIU_SUCCESS) {
+      kprintf("[IPC-ERR] sys_mach_msg SEND ipc_kmsg_copyin failed for pid=%u msg_ptr=0x%llx send_sz=%llu\n",
+              task->ta_proc ? task->ta_proc->p_pid : 0, msg_ptr, send_sz);
       ipc_kmsg_free(kmsg);
       return -1;
     }
 
     ipc_port_t *port = kmsg->ikm_remote_port;
+    kprintf("[IPC] sys_mach_msg SEND: pid=%u to_port=%p msgh_id=%u\n",
+            task->ta_proc ? task->ta_proc->p_pid : 0, (void *)port,
+            ((mach_msg_header_t *)kmsg->ikm_header)->msgh_id);
     xiu_error_t err = ipc_mqueue_send(port, kmsg, (u32)timeout);
-
-    if (kmsg->ikm_remote_port)
-      ipc_port_unlock(kmsg->ikm_remote_port);
-    if (kmsg->ikm_local_port && kmsg->ikm_local_port != kmsg->ikm_remote_port)
-      ipc_port_unlock(kmsg->ikm_local_port);
 
     if (err != XIU_SUCCESS) {
       if (err != XIU_ERR_PORT_FULL)
@@ -1319,26 +1350,30 @@ static i64 sys_mach_msg(u64 msg_ptr, u64 option, u64 send_sz, u64 rcv_sz,
     ipc_port_t *port = ipc_port_lookup(
         task->ta_ipc_space, (mach_port_name_t)rcv_name, MACH_PORT_TYPE_RECEIVE);
     if (!port) {
-      kprintf("[IPC] RCV port lookup failed\n");
+      kprintf("[IPC] RCV port lookup failed for rcv_name=0x%llx (pid=%u)\n",
+              (unsigned long long)rcv_name, task->ta_proc ? task->ta_proc->p_pid : 0);
       return -1;
     }
-
-    /*
-     * IMPORTANT: ipc_port_lookup returns with port->ip_lock HELD.
-     * However, ipc_mqueue_receive may call scheduler_yield().
-     * We MUST NOT hold the port lock across a yield, otherwise
-     * a sender trying to lock the same port will deadlock the system.
-     */
-    ipc_port_unlock(port);
 
     ipc_kmsg_t *kmsg = nullptr;
     xiu_error_t err = ipc_mqueue_receive(port, &kmsg, (u32)timeout);
 
-    if (err != XIU_SUCCESS)
+    if (err != XIU_SUCCESS) {
+      if (timeout != 0) {
+        kprintf("[IPC] sys_mach_msg RCV: pid=%u port=%p err=%d\n",
+                task->ta_proc ? task->ta_proc->p_pid : 0, (void *)port, err);
+      }
       return -1;
+    }
+
+    kprintf("[IPC] sys_mach_msg RCV: pid=%u port=%p DEQUEUED msgh_id=%u\n",
+            task->ta_proc ? task->ta_proc->p_pid : 0, (void *)port,
+            ((mach_msg_header_t *)kmsg->ikm_header)->msgh_id);
 
     if (ipc_kmsg_copyout(kmsg, msg_ptr, (u32)rcv_sz, task->ta_ipc_space) !=
         XIU_SUCCESS) {
+      kprintf("[IPC-ERR] sys_mach_msg RCV copyout failed for pid=%u rcv_sz=%llu\n",
+              task->ta_proc ? task->ta_proc->p_pid : 0, rcv_sz);
       ipc_kmsg_free(kmsg);
       return -1;
     }
@@ -1348,68 +1383,6 @@ static i64 sys_mach_msg(u64 msg_ptr, u64 option, u64 send_sz, u64 rcv_sz,
   return 0;
 }
 
-// send IPC message to a specific PID's port — cross-process send
-static i64 sys_mach_msg_pid(u64 target_pid, u64 target_port, u64 msg_ptr,
-                            u64 send_sz, u64 a5, u64 a6) {
-  (void)a5;
-  (void)a6;
-
-  xiu_task_t *task = current_task();
-  if (!task) {
-    kprintf("[IPC] sys_mach_msg_pid: no current task\n");
-    return -1;
-  }
-
-  // Ищем процесс получателя по PID
-  xiu_proc_t *target_proc = proc_find_by_pid((xiu_pid_t)target_pid);
-  if (!target_proc || !target_proc->p_task ||
-      !target_proc->p_task->ta_ipc_space) {
-    kprintf("[IPC] sys_mach_msg_pid: target PID %llu not found\n", target_pid);
-    return -1;
-  }
-
-  ipc_space_t *target_space = target_proc->p_task->ta_ipc_space;
-
-  // Аллоцируем kmsg для сообщения
-  ipc_kmsg_t *kmsg = ipc_kmsg_alloc((mach_msg_size_t)send_sz);
-  if (!kmsg)
-    return -1;
-
-  /*
-   * Копируем сообщение отправителя (WindowServer) и резолвим port-name
-   * в IPC-space получателя — так мы сможем отправить сообщение в порт,
-   * который видит целевой процесс, но не видит WindowServer.
-   */
-  xiu_error_t err = ipc_kmsg_copyin(kmsg, msg_ptr, target_space);
-  if (err != XIU_SUCCESS) {
-    kprintf("[IPC] sys_mach_msg_pid: copyin failed (err=%d)\n", err);
-    ipc_kmsg_free(kmsg);
-    return -1;
-  }
-
-  // Переопределяем PID отправителя
-  kmsg->ikm_sender_pid = task->ta_proc ? task->ta_proc->p_pid : 0;
-
-  // Отправляем сообщение в целевой порт
-  ipc_port_t *port = kmsg->ikm_remote_port;
-  err = ipc_mqueue_send(port, kmsg, 5000);
-
-  // Разблокируем порты
-  if (kmsg->ikm_remote_port)
-    ipc_port_unlock(kmsg->ikm_remote_port);
-  if (kmsg->ikm_local_port && kmsg->ikm_local_port != kmsg->ikm_remote_port)
-    ipc_port_unlock(kmsg->ikm_local_port);
-
-  if (err != XIU_SUCCESS) {
-    kprintf("[IPC] sys_mach_msg_pid: mqueue_send failed (err=%d)\n", err);
-    ipc_kmsg_free(kmsg);
-    return -1;
-  }
-
-  kprintf("[IPC] sys_mach_msg_pid: delivered to PID=%llu port=%llu\n",
-          target_pid, target_port);
-  return 0;
-}
 
 static i64 sys_mach_port_allocate(u64 space_ptr, u64 right, u64 name_out_ptr,
                                   u64 a4, u64 a5, u64 a6) {
@@ -1697,8 +1670,9 @@ static i64 sys_getdents(u64 fd, u64 buf, u64 count, u64 a4, u64 a5, u64 a6) {
   xiu_user_dirent_t de;
   __builtin_memset(&de, 0, sizeof(de));
   de.d_ino = (u64)(uptr)child;
-  de.d_off = fp->fp_offset + 1;
+  de.d_seekoff = fp->fp_offset + 1;
   de.d_reclen = sizeof(de);
+  de.d_namlen = (u16)__builtin_strlen(name);
   de.d_type = vnode_dtype(child);
   __builtin_strncpy(de.d_name, name, sizeof(de.d_name) - 1);
 
@@ -1718,8 +1692,6 @@ static i64 sys_getdents(u64 fd, u64 buf, u64 count, u64 a4, u64 a5, u64 a6) {
 
 static i64 sys_wait4(u64 pid_u, u64 status_ptr, u64 options, u64 rusage, u64 a5,
                      u64 a6) {
-  (void)options;
-  (void)rusage;
   (void)a5;
   (void)a6;
   xiu_task_t *task = current_task();
@@ -1735,7 +1707,7 @@ static i64 sys_wait4(u64 pid_u, u64 status_ptr, u64 options, u64 rusage, u64 a5,
    * If no children exist, return -ECHILD immediately instead of blocking
    * forever. */
   if (!proc_has_children(proc)) {
-    return -10;
+    return -10; // ECHILD
   }
 
   for (;;) {
@@ -1747,19 +1719,26 @@ static i64 sys_wait4(u64 pid_u, u64 status_ptr, u64 options, u64 rusage, u64 a5,
       extern void proc_reap(xiu_proc_t *proc);
       proc_reap(child);
 
-      extern void console_set_raw_mode(bool raw);
-      console_set_raw_mode(false);
-
       if (status_ptr)
         copyout(&status, (void *)status_ptr, sizeof(status));
+      if (rusage) {
+        u8 zero_ru[144];
+        __builtin_memset(zero_ru, 0, sizeof(zero_ru));
+        copyout(zero_ru, (void *)rusage, sizeof(zero_ru));
+      }
 
       return child_pid;
+    }
+
+    /* WNOHANG (0x01): return 0 immediately if children exist but none have exited */
+    if (options & 0x01) {
+      return 0;
     }
 
     /* Re-check if we still have children before yielding.
      * A child might have exited and been reaped by another thread. */
     if (!proc_has_children(proc)) {
-      return -10; // echild
+      return -10; // ECHILD
     }
 
     scheduler_yield();
@@ -2313,126 +2292,992 @@ static i64 sys_getsockopt(u64 fd_u, u64 level, u64 optname, u64 optval, u64 optl
   return 0;
 }
 
-// syscall table
+// ── POSIX Access, Dup, Vector I/O, Credentials, and Sysctl ──────────────────
 
-const syscall_fn_t g_syscall_table[256] = {
-    [SYSCALL_LOG] = sys_log,
-    [253] = sys_log,
-    [SYS_chdir] = sys_chdir,
-    [12] = sys_chdir,
-    [SYS_fork] = sys_fork,
-    [2] = sys_fork,
-    [SYS_read] = sys_read,
-    [3] = sys_read,
-    [SYS_write] = sys_write,
-    [4] = sys_write,
-    [SYS_open] = sys_open,
-    [5] = sys_open,
-    [8] = sys_open,
-    [SYS_pipe] = sys_pipe,
-    [42] = sys_pipe,
-    [SYS_close] = sys_close,
-    [6] = sys_close,
-    [SYS_wait4] = sys_wait4,
-    [7] = sys_wait4,
-    [SYS_ioctl] = sys_ioctl,
-    [16] = sys_ioctl,
-    [54] = sys_ioctl,
-    [18] = sys_stat,
-    [188] = sys_stat,
-    [SYS_stat] = sys_stat,
-    [SYS_getpid] = sys_getpid,
-    [20] = sys_getpid,
+static i64 sys_access(u64 path_ptr, u64 mode, u64 a3, u64 a4, u64 a5, u64 a6) {
+  (void)a3; (void)a4; (void)a5; (void)a6;
+  xiu_task_t *task = current_task();
+  xiu_proc_t *proc = task ? task->ta_proc : nullptr;
+  if (!proc || !path_ptr) return -14; // EFAULT
 
-    [SYS_kill] = sys_kill,
-    [37] = sys_kill,
-    [62] = sys_kill,
+  char path[256];
+  if (copyin((const void *)path_ptr, path, sizeof(path)) != XIU_SUCCESS)
+    return -14;
+  path[sizeof(path) - 1] = '\0';
 
-    [SYS_sigaction] = sys_sigaction,
-    [46] = sys_sigaction,
-    [13] = sys_sigaction,
+  char norm_path[256];
+  resolve_relative_path(proc, path, norm_path, sizeof(norm_path));
 
-    [48] = sys_sigprocmask,
-    [14] = sys_sigprocmask,
+  vnode_t *vp = nullptr;
+  if (vfs_lookup(norm_path, &vp) != XIU_SUCCESS || !vp) {
+    return -2; // ENOENT
+  }
 
-    [SYS_fcntl] = sys_fcntl,
-    [92] = sys_fcntl,
-    [55] = sys_fcntl,
-    [90] = sys_dup2,
-    [33] = sys_dup2,
-    [SYS_execve] = sys_execve,
-    [59] = sys_execve,
-    [SYS_yield] = sys_yield,
-    [138] = sys_yield,
-    [248] = sys_yield,
-    [SYS_exit] = sys_exit,
-    [1] = sys_exit,
-    [60] = sys_exit,
+  if (mode == 0) {
+    return 0; // F_OK: existence verified
+  }
 
-    [SYS_getcwd] = sys_getcwd,
-    [79] = sys_getcwd,
-    [SYS_mkdir] = sys_mkdir,
-    [83] = sys_mkdir,
-    [136] = sys_mkdir,
-    [SYS_rmdir] = sys_rmdir,
-    [84] = sys_rmdir,
-    [137] = sys_rmdir,
-    [10] = sys_unlink,
-    [87] = sys_unlink,
-    [SYS_lseek] = sys_lseek,
-    [199] = sys_lseek,
-    [SYS_mmap] = sys_mmap,
-    [197] = sys_mmap,
-    [9] = sys_mmap,
-    [SYS_munmap] = sys_munmap,
-    [73] = sys_munmap,
-    [11] = sys_munmap,
-    [SYS_mach_msg] = sys_mach_msg,
-    [200] = sys_mach_msg,
-    [201] = sys_mach_port_allocate,
-    [202] = sys_mach_msg_pid,
-    [203] = sys_mach_register_service,
-    [204] = sys_mach_lookup_service,
-    [205] = sys_mach_port_deallocate,
-    [206] = sys_mach_port_type,
-    [208] = sys_task_self,
-    [SYS_getdents] = sys_getdents,
-    [217] = sys_getdents,
-    [176] = sys_getdents,
+  u32 vmode = vp->v_attr.va_mode ? vp->v_attr.va_mode : 0755;
+  if (proc->p_uid == 0) {
+    if ((mode & 1) && !(vmode & 0111) && vp->v_type != VDIR) {
+      return -13; // EACCES
+    }
+    return 0;
+  }
 
-    // bsd Darwin Sockets
-    [SYS_socket] = sys_socket,
-    [97] = sys_socket,
-    [SYS_bind] = sys_bind,
-    [104] = sys_bind,
-    [SYS_connect] = sys_connect,
-    [98] = sys_connect,
-    [SYS_listen] = sys_listen,
-    [106] = sys_listen,
-    [SYS_accept] = sys_accept,
-    [30] = sys_accept,
-    [SYS_sendto] = sys_sendto,
-    [133] = sys_sendto,
-    [SYS_recvfrom] = sys_recvfrom,
-    [29] = sys_recvfrom,
-    [SYS_shutdown] = sys_shutdown,
-    [134] = sys_shutdown,
-    [SYS_setsockopt] = sys_setsockopt,
-    [105] = sys_setsockopt,
-    [SYS_getsockopt] = sys_getsockopt,
-    [118] = sys_getsockopt,
+  u32 granted = 0;
+  if (proc->p_uid == vp->v_attr.va_uid) {
+    if (vmode & 0400) granted |= 4;
+    if (vmode & 0200) granted |= 2;
+    if (vmode & 0100) granted |= 1;
+  } else if (proc->p_gid == vp->v_attr.va_gid) {
+    if (vmode & 0040) granted |= 4;
+    if (vmode & 0020) granted |= 2;
+    if (vmode & 0010) granted |= 1;
+  } else {
+    if (vmode & 0004) granted |= 4;
+    if (vmode & 0002) granted |= 2;
+    if (vmode & 0001) granted |= 1;
+  }
 
-    [SYS_spawn] = sys_spawn,
-    [250] = sys_spawn,
-    [SYS_sysinfo] = sys_sysinfo,
-    [251] = sys_sysinfo,
-    [SYS_proclist] = sys_proclist,
-    [252] = sys_proclist,
-    [240] = sys_nanosleep,
-    [35]  = sys_nanosleep,
+  if ((mode & granted) != mode) {
+    return -13; // EACCES
+  }
+
+  return 0;
+}
+
+static i64 sys_dup(u64 fd_u, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
+  (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+  int fd = (int)fd_u;
+  xiu_task_t *task = current_task();
+  xiu_proc_t *proc = task ? task->ta_proc : nullptr;
+  if (!proc || fd < 0 || fd >= XIU_PROC_MAX_FDS) return -9; // EBADF
+
+  xiu_fileproc_t *fp = proc_fd_lookup(proc, fd);
+  if (!fp) return -9;
+
+  int newfd = proc_fd_alloc_from(proc, fp, 0);
+  fp_release(fp);
+  return (newfd >= 0) ? (i64)newfd : -24; // EMFILE
+}
+
+struct xiu_iovec {
+  u64 iov_base;
+  u64 iov_len;
 };
 
-const u32 g_syscall_count = 256;
+static i64 sys_readv(u64 fd_u, u64 iov_ptr, u64 iovcnt_u, u64 a4, u64 a5, u64 a6) {
+  (void)a4; (void)a5; (void)a6;
+  if (!iov_ptr || iovcnt_u == 0 || iovcnt_u > 1024) return -22; // EINVAL
+
+  struct xiu_iovec iov[16];
+  usize cnt = (iovcnt_u > 16) ? 16 : (usize)iovcnt_u;
+  if (copyin((const void *)iov_ptr, iov, cnt * sizeof(struct xiu_iovec)) != XIU_SUCCESS)
+    return -14;
+
+  i64 total = 0;
+  for (usize i = 0; i < cnt; i++) {
+    if (iov[i].iov_len == 0) continue;
+    i64 ret = sys_read(fd_u, iov[i].iov_base, iov[i].iov_len, 0, 0, 0);
+    if (ret < 0) {
+      if (total > 0) return total;
+      return ret;
+    }
+    total += ret;
+    if ((usize)ret < iov[i].iov_len) break;
+  }
+  return total;
+}
+
+static i64 sys_writev(u64 fd_u, u64 iov_ptr, u64 iovcnt_u, u64 a4, u64 a5, u64 a6) {
+  (void)a4; (void)a5; (void)a6;
+  if (!iov_ptr || iovcnt_u == 0 || iovcnt_u > 1024) return -22; // EINVAL
+
+  struct xiu_iovec iov[16];
+  usize cnt = (iovcnt_u > 16) ? 16 : (usize)iovcnt_u;
+  if (copyin((const void *)iov_ptr, iov, cnt * sizeof(struct xiu_iovec)) != XIU_SUCCESS)
+    return -14;
+
+  i64 total = 0;
+  for (usize i = 0; i < cnt; i++) {
+    if (iov[i].iov_len == 0) continue;
+    i64 ret = sys_write(fd_u, iov[i].iov_base, iov[i].iov_len, 0, 0, 0);
+    if (ret < 0) {
+      if (total > 0) return total;
+      return ret;
+    }
+    total += ret;
+    if ((usize)ret < iov[i].iov_len) break;
+  }
+  return total;
+}
+
+static i64 sys_pread(u64 fd_u, u64 buf, u64 len, u64 offset_u, u64 a5, u64 a6) {
+  (void)a5; (void)a6;
+  int fd = (int)fd_u;
+  xiu_task_t *task = current_task();
+  xiu_proc_t *proc = task ? task->ta_proc : nullptr;
+  if (!proc || fd < 0 || fd >= XIU_PROC_MAX_FDS) return -9;
+
+  xiu_fileproc_t *fp = proc_fd_lookup(proc, fd);
+  if (!fp) return -9;
+  vnode_t *vp = fp->fp_vnode;
+  if (!vp || !vp->v_op || !vp->v_op->vop_read) {
+    fp_release(fp);
+    return -1;
+  }
+
+  struct uio uio;
+  uio.uio_buf = (void *)buf;
+  uio.uio_resid = len;
+  uio.uio_offset = offset_u;
+  xiu_error_t err = vp->v_op->vop_read(vp, &uio, 0, nullptr);
+  fp_release(fp);
+  return (err == XIU_SUCCESS) ? (i64)(len - uio.uio_resid) : -1;
+}
+
+static i64 sys_pwrite(u64 fd_u, u64 buf, u64 len, u64 offset_u, u64 a5, u64 a6) {
+  (void)a5; (void)a6;
+  int fd = (int)fd_u;
+  xiu_task_t *task = current_task();
+  xiu_proc_t *proc = task ? task->ta_proc : nullptr;
+  if (!proc || fd < 0 || fd >= XIU_PROC_MAX_FDS) return -9;
+
+  xiu_fileproc_t *fp = proc_fd_lookup(proc, fd);
+  if (!fp) return -9;
+  vnode_t *vp = fp->fp_vnode;
+  if (!vp || !vp->v_op || !vp->v_op->vop_write) {
+    fp_release(fp);
+    return -1;
+  }
+
+  struct uio uio;
+  uio.uio_buf = (void *)buf;
+  uio.uio_resid = len;
+  uio.uio_offset = offset_u;
+  xiu_error_t err = vp->v_op->vop_write(vp, &uio, 0, nullptr);
+  fp_release(fp);
+  return (err == XIU_SUCCESS) ? (i64)(len - uio.uio_resid) : -1;
+}
+
+static i64 sys_fstat(u64 fd_u, u64 statbuf, u64 a3, u64 a4, u64 a5, u64 a6) {
+  (void)a3; (void)a4; (void)a5; (void)a6;
+  int fd = (int)fd_u;
+  xiu_task_t *task = current_task();
+  xiu_proc_t *proc = task ? task->ta_proc : nullptr;
+  if (!proc || fd < 0 || fd >= XIU_PROC_MAX_FDS || !statbuf) return -9;
+
+  xiu_fileproc_t *fp = proc_fd_lookup(proc, fd);
+  if (!fp) return -9;
+
+  xiu_user_stat_t st;
+  __builtin_memset(&st, 0, sizeof(st));
+  st.st_dev = 1;
+  st.st_ino = (u32)((uptr)fp & 0xFFFFFFFFu);
+  st.st_nlink = 1;
+  st.st_uid = 0;
+  st.st_gid = 0;
+  st.st_blksize = 4096;
+
+  if (fp->fp_type == DTYPE_SOCKET) {
+    st.st_mode = 0140666;
+  } else if (fp->fp_type == DTYPE_PIPE) {
+    st.st_mode = 0010666;
+  } else if (fp->fp_vnode) {
+    vnode_t *vp = fp->fp_vnode;
+    st.st_mode = vnode_mode(vp);
+    st.st_size = vp->v_attr.va_size;
+    st.st_blocks = (st.st_size + 511) / 512;
+  }
+
+  fp_release(fp);
+  return (copyout(&st, (void *)statbuf, sizeof(st)) == XIU_SUCCESS) ? 0 : -14;
+}
+
+static i64 sys_chmod(u64 path_ptr, u64 mode, u64 a3, u64 a4, u64 a5, u64 a6) {
+  (void)a3; (void)a4; (void)a5; (void)a6;
+  xiu_task_t *task = current_task();
+  xiu_proc_t *proc = task ? task->ta_proc : nullptr;
+  if (!proc || !path_ptr) return -14;
+  char path[256], norm[256];
+  if (copyin((const void *)path_ptr, path, sizeof(path)) != XIU_SUCCESS) return -14;
+  path[sizeof(path) - 1] = '\0';
+  resolve_relative_path(proc, path, norm, sizeof(norm));
+  vnode_t *vp = nullptr;
+  if (vfs_lookup(norm, &vp) != XIU_SUCCESS || !vp) return -2;
+  vp->v_attr.va_mode = (u16)(mode & 0777);
+  return 0;
+}
+
+static i64 sys_fchmod(u64 fd_u, u64 mode, u64 a3, u64 a4, u64 a5, u64 a6) {
+  (void)a3; (void)a4; (void)a5; (void)a6;
+  int fd = (int)fd_u;
+  xiu_task_t *task = current_task();
+  xiu_proc_t *proc = task ? task->ta_proc : nullptr;
+  if (!proc || fd < 0 || fd >= XIU_PROC_MAX_FDS) return -9;
+  xiu_fileproc_t *fp = proc_fd_lookup(proc, fd);
+  if (!fp) return -9;
+  if (fp->fp_vnode) fp->fp_vnode->v_attr.va_mode = (u16)(mode & 0777);
+  fp_release(fp);
+  return 0;
+}
+
+static i64 sys_chown(u64 path_ptr, u64 uid, u64 gid, u64 a4, u64 a5, u64 a6) {
+  (void)a4; (void)a5; (void)a6;
+  xiu_task_t *task = current_task();
+  xiu_proc_t *proc = task ? task->ta_proc : nullptr;
+  if (!proc || !path_ptr) return -14;
+  char path[256], norm[256];
+  if (copyin((const void *)path_ptr, path, sizeof(path)) != XIU_SUCCESS) return -14;
+  path[sizeof(path) - 1] = '\0';
+  resolve_relative_path(proc, path, norm, sizeof(norm));
+  vnode_t *vp = nullptr;
+  if (vfs_lookup(norm, &vp) != XIU_SUCCESS || !vp) return -2;
+  vp->v_attr.va_uid = (xiu_uid_t)uid;
+  vp->v_attr.va_gid = (xiu_gid_t)gid;
+  return 0;
+}
+
+static i64 sys_fchown(u64 fd_u, u64 uid, u64 gid, u64 a4, u64 a5, u64 a6) {
+  (void)a4; (void)a5; (void)a6;
+  int fd = (int)fd_u;
+  xiu_task_t *task = current_task();
+  xiu_proc_t *proc = task ? task->ta_proc : nullptr;
+  if (!proc || fd < 0 || fd >= XIU_PROC_MAX_FDS) return -9;
+  xiu_fileproc_t *fp = proc_fd_lookup(proc, fd);
+  if (!fp) return -9;
+  if (fp->fp_vnode) {
+    fp->fp_vnode->v_attr.va_uid = (xiu_uid_t)uid;
+    fp->fp_vnode->v_attr.va_gid = (xiu_gid_t)gid;
+  }
+  fp_release(fp);
+  return 0;
+}
+
+static i64 sys_truncate(u64 path_ptr, u64 length, u64 a3, u64 a4, u64 a5, u64 a6) {
+  (void)a3; (void)a4; (void)a5; (void)a6;
+  xiu_task_t *task = current_task();
+  xiu_proc_t *proc = task ? task->ta_proc : nullptr;
+  if (!proc || !path_ptr) return -14;
+
+  char path[256];
+  if (copyin((const void *)path_ptr, path, sizeof(path)) != XIU_SUCCESS) return -14;
+  path[sizeof(path) - 1] = '\0';
+
+  char norm_path[256];
+  resolve_relative_path(proc, path, norm_path, sizeof(norm_path));
+
+  vnode_t *vp = nullptr;
+  if (vfs_lookup(norm_path, &vp) != XIU_SUCCESS || !vp) return -2;
+
+  vp->v_attr.va_size = length;
+  return 0;
+}
+
+static i64 sys_ftruncate(u64 fd_u, u64 length, u64 a3, u64 a4, u64 a5, u64 a6) {
+  (void)a3; (void)a4; (void)a5; (void)a6;
+  int fd = (int)fd_u;
+  xiu_task_t *task = current_task();
+  xiu_proc_t *proc = task ? task->ta_proc : nullptr;
+  if (!proc || fd < 0 || fd >= XIU_PROC_MAX_FDS) return -9;
+
+  xiu_fileproc_t *fp = proc_fd_lookup(proc, fd);
+  if (!fp) return -9;
+  if (fp->fp_vnode) {
+    fp->fp_vnode->v_attr.va_size = length;
+  }
+  fp_release(fp);
+  return 0;
+}
+
+static i64 sys_rename(u64 old_ptr, u64 new_ptr, u64 a3, u64 a4, u64 a5, u64 a6) {
+  (void)a3; (void)a4; (void)a5; (void)a6;
+  xiu_task_t *task = current_task();
+  xiu_proc_t *proc = task ? task->ta_proc : nullptr;
+  if (!proc || !old_ptr || !new_ptr) return -14;
+
+  char oldpath[256], newpath[256];
+  if (copyin((const void *)old_ptr, oldpath, sizeof(oldpath)) != XIU_SUCCESS ||
+      copyin((const void *)new_ptr, newpath, sizeof(newpath)) != XIU_SUCCESS)
+    return -14;
+  oldpath[sizeof(oldpath) - 1] = '\0';
+  newpath[sizeof(newpath) - 1] = '\0';
+
+  char norm_old[256], norm_new[256];
+  resolve_relative_path(proc, oldpath, norm_old, sizeof(norm_old));
+  resolve_relative_path(proc, newpath, norm_new, sizeof(norm_new));
+
+  vnode_t *vp = nullptr;
+  if (vfs_lookup(norm_old, &vp) != XIU_SUCCESS || !vp) return -2; // ENOENT
+  return 0;
+}
+
+static i64 sys_link(u64 old_ptr, u64 new_ptr, u64 a3, u64 a4, u64 a5, u64 a6) {
+  (void)a3; (void)a4; (void)a5; (void)a6;
+  if (!old_ptr || !new_ptr) return -14; // EFAULT
+  char oldpath[256], newpath[256];
+  if (copyin((const void *)old_ptr, oldpath, sizeof(oldpath)) != XIU_SUCCESS ||
+      copyin((const void *)new_ptr, newpath, sizeof(newpath)) != XIU_SUCCESS)
+    return -14;
+  oldpath[sizeof(oldpath) - 1] = '\0';
+  newpath[sizeof(newpath) - 1] = '\0';
+
+  xiu_task_t *task = current_task();
+  xiu_proc_t *proc = task ? task->ta_proc : nullptr;
+  if (!proc) return -1;
+
+  char norm_old[256];
+  resolve_relative_path(proc, oldpath, norm_old, sizeof(norm_old));
+  vnode_t *vp = nullptr;
+  if (vfs_lookup(norm_old, &vp) != XIU_SUCCESS || !vp) return -2; // ENOENT
+
+  // FAT32 does not support hard links -> POSIX requires -EPERM or -ENOTSUP
+  return -1; // -EPERM
+}
+
+static i64 sys_mknod(u64 path_ptr, u64 mode, u64 dev, u64 a4, u64 a5, u64 a6) {
+  (void)dev; (void)a4; (void)a5; (void)a6;
+  if (!path_ptr) return -14; // EFAULT
+  char path[256];
+  if (copyin((const void *)path_ptr, path, sizeof(path)) != XIU_SUCCESS) return -14;
+  path[sizeof(path) - 1] = '\0';
+
+  xiu_task_t *task = current_task();
+  xiu_proc_t *proc = task ? task->ta_proc : nullptr;
+  if (!proc) return -1;
+
+  if (proc->p_uid != 0) return -1; // -EPERM
+
+  if ((mode & 0170000) == 0040000) return -22; // EINVAL
+
+  // FAT32 does not support creating special device/fifo nodes on disk
+  return -1; // -EPERM
+}
+
+static i64 sys_fsync(u64 fd_u, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
+  (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+  int fd = (int)fd_u;
+  xiu_task_t *task = current_task();
+  xiu_proc_t *proc = task ? task->ta_proc : nullptr;
+  if (!proc || fd < 0 || fd >= XIU_PROC_MAX_FDS) return -9; // EBADF
+
+  xiu_fileproc_t *fp = proc_fd_lookup(proc, fd);
+  if (!fp) return -9;
+
+  if (fp->fp_type == DTYPE_VNODE && fp->fp_vnode) {
+    vnode_t *vp = fp->fp_vnode;
+    if (vp->v_mount && vp->v_mount->mnt_op && vp->v_mount->mnt_op->mop_sync) {
+      vp->v_mount->mnt_op->mop_sync(vp->v_mount, 1, nullptr);
+    }
+  }
+
+  fp_release(fp);
+  return 0;
+}
+
+static i64 sys_umask(u64 newmask, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
+  (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+  xiu_task_t *t = current_task();
+  if (!t || !t->ta_proc) return 022;
+  u32 old = t->ta_proc->p_umask;
+  t->ta_proc->p_umask = (u32)(newmask & 0777);
+  return (i64)old;
+}
+
+static i64 sys_getuid(u64 a1, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
+  (void)a1; (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+  xiu_task_t *t = current_task();
+  return (t && t->ta_proc) ? (i64)t->ta_proc->p_uid : 0;
+}
+static i64 sys_geteuid(u64 a1, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
+  (void)a1; (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+  xiu_task_t *t = current_task();
+  return (t && t->ta_proc) ? (i64)t->ta_proc->p_euid : 0;
+}
+static i64 sys_setuid(u64 uid, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
+  (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+  xiu_task_t *t = current_task();
+  if (t && t->ta_proc) {
+    t->ta_proc->p_uid = (xiu_uid_t)uid;
+    t->ta_proc->p_euid = (xiu_uid_t)uid;
+    return 0;
+  }
+  return -1;
+}
+static i64 sys_seteuid(u64 euid, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
+  (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+  xiu_task_t *t = current_task();
+  if (t && t->ta_proc) {
+    t->ta_proc->p_euid = (xiu_uid_t)euid;
+    return 0;
+  }
+  return -1;
+}
+static i64 sys_getgid(u64 a1, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
+  (void)a1; (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+  xiu_task_t *t = current_task();
+  return (t && t->ta_proc) ? (i64)t->ta_proc->p_gid : 0;
+}
+static i64 sys_getegid(u64 a1, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
+  (void)a1; (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+  xiu_task_t *t = current_task();
+  return (t && t->ta_proc) ? (i64)t->ta_proc->p_egid : 0;
+}
+static i64 sys_setgid(u64 gid, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
+  (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+  xiu_task_t *t = current_task();
+  if (t && t->ta_proc) {
+    t->ta_proc->p_gid = (xiu_gid_t)gid;
+    t->ta_proc->p_egid = (xiu_gid_t)gid;
+    return 0;
+  }
+  return -1;
+}
+static i64 sys_setegid(u64 egid, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
+  (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+  xiu_task_t *t = current_task();
+  if (t && t->ta_proc) {
+    t->ta_proc->p_egid = (xiu_gid_t)egid;
+    return 0;
+  }
+  return -1;
+}
+static i64 sys_getgroups(u64 size, u64 list_ptr, u64 a3, u64 a4, u64 a5, u64 a6) {
+  (void)a3; (void)a4; (void)a5; (void)a6;
+  xiu_task_t *t = current_task();
+  if (!t || !t->ta_proc) return -1;
+  xiu_proc_t *p = t->ta_proc;
+  if (size == 0) return (i64)p->p_ngroups;
+  if (!list_ptr) return -14;
+  u32 to_copy = (p->p_ngroups < (u32)size) ? p->p_ngroups : (u32)size;
+  if (copyout(p->p_groups, (void *)list_ptr, to_copy * sizeof(xiu_gid_t)) != XIU_SUCCESS)
+    return -14;
+  return (i64)to_copy;
+}
+static i64 sys_setgroups(u64 size, u64 list_ptr, u64 a3, u64 a4, u64 a5, u64 a6) {
+  (void)a3; (void)a4; (void)a5; (void)a6;
+  xiu_task_t *t = current_task();
+  if (!t || !t->ta_proc) return -1;
+  if (size > 16) return -22;
+  if (size > 0 && !list_ptr) return -14;
+  xiu_proc_t *p = t->ta_proc;
+  p->p_ngroups = (u32)size;
+  if (size > 0) {
+    if (copyin((const void *)list_ptr, p->p_groups, size * sizeof(xiu_gid_t)) != XIU_SUCCESS)
+      return -14;
+  }
+  return 0;
+}
+static i64 sys_getppid(u64 a1, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
+  (void)a1; (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+  xiu_task_t *t = current_task();
+  return (t && t->ta_proc) ? (i64)t->ta_proc->p_ppid : 0;
+}
+static i64 sys_getpgrp(u64 a1, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
+  (void)a1; (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+  xiu_task_t *t = current_task();
+  return (t && t->ta_proc) ? (i64)t->ta_proc->p_pgrp : 0;
+}
+static i64 sys_setpgid(u64 pid_u, u64 pgrp_u, u64 a3, u64 a4, u64 a5, u64 a6) {
+  (void)a3; (void)a4; (void)a5; (void)a6;
+  xiu_task_t *t = current_task();
+  if (!t || !t->ta_proc) return -1;
+  xiu_proc_t *target = (pid_u == 0 || pid_u == t->ta_proc->p_pid) ? t->ta_proc : proc_find_by_pid((xiu_pid_t)pid_u);
+  if (!target) return -3;
+  target->p_pgrp = (pgrp_u == 0) ? target->p_pid : (xiu_pid_t)pgrp_u;
+  return 0;
+}
+static i64 sys_setsid(u64 a1, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
+  (void)a1; (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+  xiu_task_t *t = current_task();
+  if (!t || !t->ta_proc) return -1;
+  t->ta_proc->p_sid = t->ta_proc->p_pid;
+  t->ta_proc->p_pgrp = t->ta_proc->p_pid;
+  return (i64)t->ta_proc->p_pid;
+}
+
+struct xiu_timeval {
+  i64 tv_sec;
+  i64 tv_usec;
+};
+
+static i64 s_time_base_sec = 1700000000ULL;
+static i64 s_time_base_usec = 0;
+
+static i64 sys_gettimeofday(u64 tv_ptr, u64 tz_ptr, u64 a3, u64 a4, u64 a5, u64 a6) {
+  (void)tz_ptr; (void)a3; (void)a4; (void)a5; (void)a6;
+  if (!tv_ptr) return -14;
+
+  extern volatile u64 g_system_ticks;
+  u64 ticks = g_system_ticks;
+  struct xiu_timeval tv;
+  i64 total_usec = s_time_base_usec + (i64)((ticks % 100) * 10000);
+  tv.tv_sec = s_time_base_sec + (i64)(ticks / 100) + (total_usec / 1000000);
+  tv.tv_usec = total_usec % 1000000;
+
+  return (copyout(&tv, (void *)tv_ptr, sizeof(tv)) == XIU_SUCCESS) ? 0 : -14;
+}
+
+static i64 sys_settimeofday(u64 tv_ptr, u64 tz_ptr, u64 a3, u64 a4, u64 a5, u64 a6) {
+  (void)tz_ptr; (void)a3; (void)a4; (void)a5; (void)a6;
+  xiu_task_t *task = current_task();
+  xiu_proc_t *proc = task ? task->ta_proc : nullptr;
+  if (!proc || proc->p_uid != 0) return -1; // -EPERM
+
+  if (tv_ptr) {
+    struct xiu_timeval tv;
+    if (copyin((const void *)tv_ptr, &tv, sizeof(tv)) != XIU_SUCCESS) return -14;
+    extern volatile u64 g_system_ticks;
+    u64 ticks = g_system_ticks;
+    s_time_base_sec = tv.tv_sec - (i64)(ticks / 100);
+    s_time_base_usec = tv.tv_usec - (i64)((ticks % 100) * 10000);
+    while (s_time_base_usec < 0) {
+      s_time_base_usec += 1000000;
+      s_time_base_sec -= 1;
+    }
+  }
+  return 0;
+}
+
+struct xiu_pollfd {
+  i32 fd;
+  i16 events;
+  i16 revents;
+};
+
+#define XIU_POLLIN   0x0001
+#define XIU_POLLPRI  0x0002
+#define XIU_POLLOUT  0x0004
+#define XIU_POLLERR  0x0008
+#define XIU_POLLHUP  0x0010
+#define XIU_POLLNVAL 0x0020
+
+extern i16 fileproc_poll(xiu_fileproc_t *fp, i16 events);
+extern void xiukit_hid_poll(void);
+
+static i64 sys_poll(u64 fds_ptr, u64 nfds_u, u64 timeout_ms_u, u64 a4, u64 a5, u64 a6) {
+  (void)a4; (void)a5; (void)a6;
+  if (!fds_ptr && nfds_u > 0) return -14; // EFAULT
+  u32 nfds = (u32)nfds_u;
+  if (nfds > 256) return -22; // EINVAL
+
+  struct xiu_pollfd fds[32];
+  u32 count = (nfds > 32) ? 32 : nfds;
+  if (count > 0) {
+    if (copyin((const void *)fds_ptr, fds, count * sizeof(struct xiu_pollfd)) != XIU_SUCCESS)
+      return -14;
+  }
+
+  xiu_task_t *task = current_task();
+  xiu_proc_t *proc = task ? task->ta_proc : nullptr;
+  if (!proc) return -1;
+
+  extern volatile u64 g_system_ticks;
+  i32 timeout_ms = (i32)timeout_ms_u;
+  u64 start_ticks = g_system_ticks;
+  u64 max_ticks = (timeout_ms < 0) ? (u64)-1 : (((u64)timeout_ms + 9) / 10);
+
+  for (;;) {
+    if (proc->p_sigpending & ~proc->p_sigmask) {
+      return -4; // -EINTR
+    }
+
+    i32 ready_count = 0;
+    for (u32 i = 0; i < count; i++) {
+      fds[i].revents = 0;
+      if (fds[i].fd < 0) continue;
+      if (fds[i].fd >= XIU_PROC_MAX_FDS) {
+        fds[i].revents = XIU_POLLNVAL;
+        ready_count++;
+        continue;
+      }
+
+      xiu_fileproc_t *fp = proc_fd_lookup(proc, fds[i].fd);
+      if (!fp) {
+        fds[i].revents = XIU_POLLNVAL;
+        ready_count++;
+        continue;
+      }
+
+      i16 rev = fileproc_poll(fp, fds[i].events);
+      fp_release(fp);
+
+      if (rev) {
+        fds[i].revents = rev;
+        ready_count++;
+      }
+    }
+
+    if (ready_count > 0 || timeout_ms == 0) {
+      if (count > 0) {
+        copyout(fds, (void *)fds_ptr, count * sizeof(struct xiu_pollfd));
+      }
+      return ready_count;
+    }
+
+    if (timeout_ms > 0 && (g_system_ticks - start_ticks) >= max_ticks) {
+      if (count > 0) {
+        copyout(fds, (void *)fds_ptr, count * sizeof(struct xiu_pollfd));
+      }
+      return 0;
+    }
+
+    xiukit_hid_poll();
+    scheduler_yield();
+  }
+}
+
+typedef struct {
+  u32 fds_bits[8];
+} xiu_fd_set;
+
+static i64 sys_select(u64 nfds_u, u64 readfds_ptr, u64 writefds_ptr, u64 exceptfds_ptr, u64 timeout_ptr, u64 a6) {
+  (void)a6;
+  int nfds = (int)nfds_u;
+  if (nfds < 0 || nfds > XIU_PROC_MAX_FDS) return -22; // EINVAL
+
+  xiu_fd_set rfds, wfds, efds;
+  __builtin_memset(&rfds, 0, sizeof(rfds));
+  __builtin_memset(&wfds, 0, sizeof(wfds));
+  __builtin_memset(&efds, 0, sizeof(efds));
+
+  if (readfds_ptr && copyin((const void *)readfds_ptr, &rfds, sizeof(rfds)) != XIU_SUCCESS) return -14;
+  if (writefds_ptr && copyin((const void *)writefds_ptr, &wfds, sizeof(wfds)) != XIU_SUCCESS) return -14;
+  if (exceptfds_ptr && copyin((const void *)exceptfds_ptr, &efds, sizeof(efds)) != XIU_SUCCESS) return -14;
+
+  struct xiu_timeval tv;
+  i32 timeout_ms = -1;
+  if (timeout_ptr) {
+    if (copyin((const void *)timeout_ptr, &tv, sizeof(tv)) != XIU_SUCCESS) return -14;
+    timeout_ms = (i32)(tv.tv_sec * 1000 + tv.tv_usec / 1000);
+  }
+
+  xiu_task_t *task = current_task();
+  xiu_proc_t *proc = task ? task->ta_proc : nullptr;
+  if (!proc) return -1;
+
+  extern volatile u64 g_system_ticks;
+  u64 start_ticks = g_system_ticks;
+  u64 max_ticks = (timeout_ms < 0) ? (u64)-1 : (((u64)timeout_ms + 9) / 10);
+
+  for (;;) {
+    if (proc->p_sigpending & ~proc->p_sigmask) {
+      return -4; // -EINTR
+    }
+
+    xiu_fd_set out_rfds, out_wfds, out_efds;
+    __builtin_memset(&out_rfds, 0, sizeof(out_rfds));
+    __builtin_memset(&out_wfds, 0, sizeof(out_wfds));
+    __builtin_memset(&out_efds, 0, sizeof(out_efds));
+
+    int ready_count = 0;
+    for (int fd = 0; fd < nfds; fd++) {
+      int idx = fd / 32;
+      int bit = fd % 32;
+
+      i16 events = 0;
+      if (readfds_ptr && (rfds.fds_bits[idx] & (1U << bit))) events |= XIU_POLLIN;
+      if (writefds_ptr && (wfds.fds_bits[idx] & (1U << bit))) events |= XIU_POLLOUT;
+      if (exceptfds_ptr && (efds.fds_bits[idx] & (1U << bit))) events |= XIU_POLLPRI;
+
+      if (!events) continue;
+
+      xiu_fileproc_t *fp = proc_fd_lookup(proc, fd);
+      if (!fp) {
+        return -9; // EBADF
+      }
+
+      i16 rev = fileproc_poll(fp, events);
+      fp_release(fp);
+
+      if ((events & XIU_POLLIN) && (rev & (XIU_POLLIN | XIU_POLLHUP | XIU_POLLERR))) {
+        out_rfds.fds_bits[idx] |= (1U << bit);
+        ready_count++;
+      }
+      if ((events & XIU_POLLOUT) && (rev & (XIU_POLLOUT | XIU_POLLERR))) {
+        out_wfds.fds_bits[idx] |= (1U << bit);
+        ready_count++;
+      }
+      if ((events & XIU_POLLPRI) && (rev & (XIU_POLLPRI | XIU_POLLERR))) {
+        out_efds.fds_bits[idx] |= (1U << bit);
+        ready_count++;
+      }
+    }
+
+    if (ready_count > 0 || timeout_ms == 0) {
+      if (readfds_ptr) copyout(&out_rfds, (void *)readfds_ptr, sizeof(out_rfds));
+      if (writefds_ptr) copyout(&out_wfds, (void *)writefds_ptr, sizeof(out_wfds));
+      if (exceptfds_ptr) copyout(&out_efds, (void *)exceptfds_ptr, sizeof(out_efds));
+      return ready_count;
+    }
+
+    if (timeout_ms > 0 && (g_system_ticks - start_ticks) >= max_ticks) {
+      if (readfds_ptr) copyout(&out_rfds, (void *)readfds_ptr, sizeof(out_rfds));
+      if (writefds_ptr) copyout(&out_wfds, (void *)writefds_ptr, sizeof(out_wfds));
+      if (exceptfds_ptr) copyout(&out_efds, (void *)exceptfds_ptr, sizeof(out_efds));
+      return 0;
+    }
+
+    xiukit_hid_poll();
+    scheduler_yield();
+  }
+}
+
+static i64 sys_socketpair(u64 dom, u64 type, u64 proto, u64 sv_ptr, u64 a5, u64 a6) {
+  (void)dom; (void)type; (void)proto; (void)a5; (void)a6;
+  if (!sv_ptr) return -14;
+  return sys_pipe(sv_ptr, 0, 0, 0, 0, 0);
+}
+
+#define CTL_KERN 1
+#define CTL_HW   6
+
+#define KERN_OSTYPE     1
+#define KERN_OSRELEASE  2
+#define KERN_OSREV      3
+#define KERN_VERSION    4
+#define KERN_MAXVNODES  5
+#define KERN_MAXPROC    6
+#define KERN_ARGMAX     8
+#define KERN_HOSTNAME   10
+
+#define HW_MACHINE      1
+#define HW_MODEL        2
+#define HW_NCPU         3
+#define HW_BYTEORDER    4
+#define HW_PHYSMEM      5
+#define HW_USERMEM      6
+#define HW_PAGESIZE     7
+#define HW_MEMSIZE      24
+#define HW_AVAILCPU     25
+
+static i64 sys_sysctl(u64 name_ptr, u64 namelen, u64 oldp, u64 oldlenp, u64 newp, u64 newlen) {
+  (void)newp; (void)newlen;
+  if (!name_ptr || namelen < 2) return -22;
+
+  int mib[8];
+  usize mib_len = (namelen > 8) ? 8 : (usize)namelen;
+  if (copyin((const void *)name_ptr, mib, mib_len * sizeof(int)) != XIU_SUCCESS)
+    return -14;
+
+  usize oldlen = 0;
+  if (oldlenp) {
+    if (copyin((const void *)oldlenp, &oldlen, sizeof(usize)) != XIU_SUCCESS)
+      return -14;
+  }
+
+  int ctl = mib[0];
+  int sub = mib[1];
+
+  const void *res_ptr = nullptr;
+  usize res_sz = 0;
+  int int_val = 0;
+  u64 u64_val = 0;
+
+  if (ctl == CTL_KERN) {
+    if (sub == KERN_OSTYPE) {
+      res_ptr = "Darwin";
+      res_sz = 7;
+    } else if (sub == KERN_OSRELEASE) {
+      res_ptr = "24.0.0";
+      res_sz = 7;
+    } else if (sub == KERN_VERSION) {
+      res_ptr = "Darwin Kernel Version 24.0.0: XIU Hybrid x86_64";
+      res_sz = __builtin_strlen((const char *)res_ptr) + 1;
+    } else if (sub == KERN_HOSTNAME) {
+      res_ptr = "xiu-host";
+      res_sz = 9;
+    } else if (sub == KERN_MAXVNODES) {
+      int_val = 4096;
+      res_ptr = &int_val;
+      res_sz = sizeof(int);
+    } else if (sub == KERN_MAXPROC) {
+      int_val = 64;
+      res_ptr = &int_val;
+      res_sz = sizeof(int);
+    } else if (sub == KERN_ARGMAX) {
+      int_val = 65536;
+      res_ptr = &int_val;
+      res_sz = sizeof(int);
+    }
+  } else if (ctl == CTL_HW) {
+    if (sub == HW_MACHINE) {
+      res_ptr = "x86_64";
+      res_sz = 7;
+    } else if (sub == HW_MODEL) {
+      res_ptr = "XIU-x86_64";
+      res_sz = 11;
+    } else if (sub == HW_NCPU || sub == HW_AVAILCPU) {
+      extern u32 smp_get_active_cpus(void);
+      int_val = (int)smp_get_active_cpus();
+      if (int_val <= 0) int_val = 4;
+      res_ptr = &int_val;
+      res_sz = sizeof(int);
+    } else if (sub == HW_PAGESIZE) {
+      int_val = 4096;
+      res_ptr = &int_val;
+      res_sz = sizeof(int);
+    } else if (sub == HW_BYTEORDER) {
+      int_val = 1234;
+      res_ptr = &int_val;
+      res_sz = sizeof(int);
+    } else if (sub == HW_MEMSIZE || sub == HW_PHYSMEM) {
+      extern usize pmm_total_pages(void);
+      u64_val = (u64)pmm_total_pages() * 4096ULL;
+      res_ptr = &u64_val;
+      res_sz = sizeof(u64);
+    }
+  }
+
+  if (!res_ptr) return -2;
+
+  if (oldp && oldlen > 0) {
+    usize to_copy = (oldlen < res_sz) ? oldlen : res_sz;
+    if (copyout(res_ptr, (void *)oldp, to_copy) != XIU_SUCCESS) return -14;
+  }
+  if (oldlenp) {
+    if (copyout(&res_sz, (void *)oldlenp, sizeof(usize)) != XIU_SUCCESS) return -14;
+  }
+  return 0;
+}
+
+static i64 sys_sigpending(u64 set_ptr, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
+  (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+  if (!set_ptr) return -14;
+  xiu_task_t *task = current_task();
+  xiu_proc_t *proc = task ? task->ta_proc : nullptr;
+  if (!proc) return -1;
+
+  u32 pending = proc->p_sigpending;
+  return (copyout(&pending, (void *)set_ptr, sizeof(u32)) == XIU_SUCCESS) ? 0 : -14;
+}
+
+typedef struct xiu_stack {
+  u64 ss_sp;
+  u64 ss_size;
+  i32 ss_flags;
+} xiu_stack_t;
+
+static i64 sys_sigaltstack(u64 ss_ptr, u64 oss_ptr, u64 a3, u64 a4, u64 a5, u64 a6) {
+  (void)a3; (void)a4; (void)a5; (void)a6;
+  if (oss_ptr) {
+    xiu_stack_t oss;
+    __builtin_memset(&oss, 0, sizeof(oss));
+    oss.ss_flags = 2; // SS_DISABLE
+    if (copyout(&oss, (void *)oss_ptr, sizeof(oss)) != XIU_SUCCESS) return -14;
+  }
+  if (ss_ptr) {
+    xiu_stack_t ss;
+    if (copyin((const void *)ss_ptr, &ss, sizeof(ss)) != XIU_SUCCESS) return -14;
+    if (!(ss.ss_flags & 2) && ss.ss_size < 2048) return -22; // EINVAL (MINSIGSTKSZ)
+  }
+  return 0;
+}
+
+// ── Standard Apple XNU Syscall Dispatch Table ────────────────────────────────
+
+const syscall_fn_t g_syscall_table[512] = {
+    [SYS_exit]            = sys_exit,
+    [SYS_fork]            = sys_fork,
+    [SYS_read]            = sys_read,
+    [SYS_write]           = sys_write,
+    [SYS_open]            = sys_open,
+    [SYS_close]           = sys_close,
+    [SYS_wait4]           = sys_wait4,
+    [SYS_link]            = sys_link,
+    [SYS_unlink]          = sys_unlink,
+    [SYS_chdir]           = sys_chdir,
+    [SYS_fchdir]          = sys_chdir,
+    [SYS_mknod]           = sys_mknod,
+    [SYS_chmod]           = sys_chmod,
+    [SYS_chown]           = sys_chown,
+    [SYS_getpid]          = sys_getpid,
+    [SYS_setuid]          = sys_setuid,
+    [SYS_getuid]          = sys_getuid,
+    [SYS_geteuid]         = sys_geteuid,
+    [SYS_recvfrom]        = sys_recvfrom,
+    [SYS_accept]          = sys_accept,
+    [SYS_access]          = sys_access,
+    [SYS_kill]            = sys_kill,
+    [SYS_getppid]         = sys_getppid,
+    [SYS_dup]             = sys_dup,
+    [SYS_pipe]            = sys_pipe,
+    [SYS_getegid]         = sys_getegid,
+    [SYS_sigaction]       = sys_sigaction,
+    [SYS_getgid]          = sys_getgid,
+    [SYS_sigprocmask]     = sys_sigprocmask,
+    [SYS_sigpending]      = sys_sigpending,
+    [SYS_sigaltstack]     = sys_sigaltstack,
+    [SYS_ioctl]           = sys_ioctl,
+    [SYS_execve]          = sys_execve,
+    [SYS_umask]           = sys_umask,
+    [SYS_munmap]          = sys_munmap,
+    [SYS_getgroups]       = sys_getgroups,
+    [SYS_setgroups]       = sys_setgroups,
+    [SYS_getpgrp]         = sys_getpgrp,
+    [SYS_setpgid]         = sys_setpgid,
+    [SYS_dup2]            = sys_dup2,
+    [SYS_fcntl]           = sys_fcntl,
+    [SYS_select]          = sys_select,
+    [SYS_fsync]           = sys_fsync,
+    [SYS_socket]          = sys_socket,
+    [SYS_connect]         = sys_connect,
+    [SYS_bind]            = sys_bind,
+    [SYS_setsockopt]      = sys_setsockopt,
+    [SYS_listen]          = sys_listen,
+    [SYS_gettimeofday]    = sys_gettimeofday,
+    [SYS_getsockopt]      = sys_getsockopt,
+    [SYS_readv]           = sys_readv,
+    [SYS_writev]          = sys_writev,
+    [SYS_settimeofday]    = sys_settimeofday,
+    [SYS_fchown]          = sys_fchown,
+    [SYS_fchmod]          = sys_fchmod,
+    [SYS_rename]          = sys_rename,
+    [SYS_sendto]          = sys_sendto,
+    [SYS_shutdown]        = sys_shutdown,
+    [SYS_socketpair]      = sys_socketpair,
+    [SYS_mkdir]           = sys_mkdir,
+    [SYS_rmdir]           = sys_rmdir,
+    [SYS_setsid]          = sys_setsid,
+    [SYS_pread]           = sys_pread,
+    [SYS_pwrite]          = sys_pwrite,
+    [SYS_setgid]          = sys_setgid,
+    [SYS_setegid]         = sys_setegid,
+    [SYS_seteuid]         = sys_seteuid,
+    [SYS_stat]            = sys_stat,
+    [SYS_fstat]           = sys_fstat,
+    [SYS_lstat]           = sys_stat,
+    [SYS_getdirentries]   = sys_getdents,
+    [SYS_mmap]            = sys_mmap,
+    [SYS_lseek]           = sys_lseek,
+    [SYS_truncate]        = sys_truncate,
+    [SYS_ftruncate]       = sys_ftruncate,
+    [SYS_sysctl]          = sys_sysctl,
+    [SYS_poll]            = sys_poll,
+    [SYS_nanosleep]       = sys_nanosleep,
+    [SYS_posix_spawn]     = sys_spawn,
+    [SYS_sched_yield]     = sys_yield,
+    [SYS_spawn]           = sys_spawn,
+    [SYS_sysinfo]         = sys_sysinfo,
+    [SYS_proclist]        = sys_proclist,
+    [SYSCALL_LOG]         = sys_log,
+    [SYS_stat64]          = sys_stat,
+    [SYS_fstat64]         = sys_fstat,
+    [SYS_lstat64]         = sys_stat,
+    [SYS_getcwd]          = sys_getcwd,
+
+    // Mach IPC & system traps
+    [SYS_mach_msg]        = sys_mach_msg,
+    [SYS_mach_port_alloc] = sys_mach_port_allocate,
+    [SYS_mach_register]   = sys_mach_register_service,
+    [SYS_mach_lookup]     = sys_mach_lookup_service,
+    [SYS_mach_port_dealloc] = sys_mach_port_deallocate,
+    [SYS_mach_port_type]  = sys_mach_port_type,
+    [SYS_task_self]       = sys_task_self,
+};
+
+const u32 g_syscall_count = 512;
 
 // dispatcher
 
@@ -2443,7 +3288,7 @@ i64 syscall_dispatch(u64 num, u64 arg1, u64 arg2, u64 arg3, u64 arg4, u64 arg5,
   if (num >= g_syscall_count || g_syscall_table[num] == nullptr) {
     kprintf("[SYSCALL] Invalid syscall %llu\n", (unsigned long long)num);
     g_syscall_frame = 0;
-    return -1;
+    return -78; // ENOSYS
   }
 
   i64 ret = g_syscall_table[num](arg1, arg2, arg3, arg4, arg5, arg6);
@@ -2456,3 +3301,4 @@ i64 syscall_dispatch(u64 num, u64 arg1, u64 arg2, u64 arg3, u64 arg4, u64 arg5,
   g_syscall_frame = 0;
   return ret;
 }
+

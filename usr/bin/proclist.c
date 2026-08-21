@@ -3,7 +3,6 @@
 #include <unistd.h>
 #include <sys/syscall.h>
 
-extern long syscall(long number, ...);
 
 // process info structure - must match kernel definition
 typedef struct {

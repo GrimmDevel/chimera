@@ -285,3 +285,35 @@ xiu_error_t pipe_create(vnode_t **read_vp_out, vnode_t **write_vp_out) {
     *write_vp_out = &pipe->write_vn;
     return XIU_SUCCESS;
 }
+
+i16 pipe_poll(vnode_t *vp, i16 events) {
+    if (!vp || !vp->v_data) return 0x0020; // POLLNVAL
+    xiu_pipe_t *pipe = (xiu_pipe_t *)vp->v_data;
+    i16 revents = 0;
+
+    irq_flags_t irq = spinlock_lock_irqsave(&pipe->lock);
+    bool is_read = (vp->v_op == &s_pipe_read_ops);
+
+    if (is_read) {
+        if (events & 0x0001) { // POLLIN
+            if (pipe->count > 0 || pipe->writers == 0) {
+                revents |= 0x0001;
+            }
+        }
+        if (pipe->writers == 0) {
+            revents |= 0x0010; // POLLHUP
+        }
+    } else {
+        if (events & 0x0004) { // POLLOUT
+            if (pipe->readers > 0 && (PIPE_BUF_SIZE - pipe->count > 0)) {
+                revents |= 0x0004;
+            }
+        }
+        if (pipe->readers == 0) {
+            revents |= 0x0008 | 0x0010; // POLLERR | POLLHUP
+        }
+    }
+    spinlock_unlock_irqrestore(&pipe->lock, irq);
+    return revents;
+}
+

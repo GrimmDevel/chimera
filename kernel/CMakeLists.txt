@@ -2,6 +2,8 @@
 add_executable(xiu_kernel
     xiu_kernel_main.c
     console.c
+    video_console.c
+    iso_font.c
     lib.c
     kernel_stubs.c
     mach/ipc_port.c

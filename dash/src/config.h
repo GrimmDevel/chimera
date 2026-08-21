@@ -15,6 +15,7 @@
 #define HAVE_SIGNAL_H 1
 #define HAVE_SETJMP_H 1
 #define HAVE_INTTYPES_H 1
+#define HAVE_PATHS_H 1
 
 /* Memory */
 #define HAVE_MALLOC 1
@@ -44,6 +45,9 @@
 #define HAVE_STRCHR 1
 #define HAVE_STRSIGNAL 1
 #define HAVE_ISALPHA 1
+#define HAVE_ISBLANK 1
+#define HAVE_DECL_ISBLANK 1
+#define HAVE_SYSCONF 1
 
 /* Version information */
 #define PACKAGE "dash"
@@ -53,13 +57,17 @@
 #define DEFAULT_PATH "/bin:/usr/bin"
 #define DEFAULT_TERM "xiu-terminal"
 
-/* Define BSD to get sys/wait.h in some files */
+#undef BSD
 #define BSD 1
 #define HAVE_ALLOCA 1
-#define HAVE_ALLOCA_H 0
-#define USE_TEE 0
-#define HAVE_MEMFD_CREATE 1
 #define USE_MEMFD_CREATE 0
+#define HAVE_MEMFD_CREATE 0
 #define HAVE_F_DUPFD_CLOEXEC 0
+#define memfd_create(name, flags) (-1)
+#include <sys/stat.h>
+#define open64 open
+#define stat64 stat
+#define fstat64 fstat
+#define lstat64 lstat
 
 #endif

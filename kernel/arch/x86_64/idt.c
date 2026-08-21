@@ -184,6 +184,7 @@ void interrupt_handler(struct interrupt_frame *frame) {
                     void *hhdm = (void *)(new_phys + g_hhdm_base);
                     __builtin_memset(hhdm, 0, 4096);
                     pmap_map_user_page((u64)task->ta_vm_map, page_vaddr, new_phys, 0x01 | 0x02 | 0x04);
+                    __asm__ volatile("invlpg (%0)" :: "r"(cr2) : "memory");
                     return;
                 }
             }

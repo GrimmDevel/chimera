@@ -1,0 +1,22 @@
+{
+  "id": "crab.plugin.test-button",
+  "name": "Test Button Plugin",
+  "version": "1.0.0",
+  "description": "Тестовая кнопка в верхнем баре около настроек",
+  "author": "CrabCode",
+  "main": "main.js",
+  "permissions": [
+    "ui"
+  ],
+  "contributes": {
+    "views": {
+      "titlebar": [
+        {
+          "id": "test-titlebar-btn",
+          "title": "Тестовая Кнопка",
+          "entry": "App.tsx"
+        }
+      ]
+    }
+  }
+}

@@ -20,7 +20,22 @@ endif
 # CMake toolchain file mapping
 TOOLCHAIN = cmake/toolchain-$(ARCH).cmake
 
-.PHONY: all build clean qemu help debug debug-iso iso disk recreate-disk
+.PHONY: all build clean qemu help debug debug-iso iso disk recreate-disk run run-gui -wserver --wserver wserver gui -gui
+
+-wserver:
+	@:
+
+--wserver:
+	@:
+
+wserver:
+	@:
+
+gui:
+	@:
+
+-gui:
+	@:
 
 all: build
 
@@ -50,10 +65,13 @@ recreate-disk: build
 
 # ── QEMU Target ──────────────────────────────────────────────────────────────
 # Boots the kernel in QEMU
-qemu: iso disk
-	@./scripts/run_qemu.sh $(ARCH)
+qemu: build disk
+	@./scripts/run_qemu.sh $(ARCH) $(if $(filter -wserver --wserver wserver gui -gui,$(MAKECMDGOALS)),-wserver,$(WSERVER))
 
 run: qemu
+
+run-gui: build disk
+	@./scripts/run_qemu.sh $(ARCH) -wserver
 
 debug:
 	@$(MAKE) build BUILD_TYPE=Debug VERBOSE=1

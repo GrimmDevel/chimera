@@ -1,0 +1,33 @@
+{
+  "id": "crab.plugin.system-monitor",
+  "name": "System Resource Monitor",
+  "version": "1.0.0",
+  "description": "Мониторинг загрузки CPU, RAM и ресурсов системы в реальном времени",
+  "author": "CrabCode",
+  "main": "main.js",
+  "permissions": [
+    "agentTools",
+    "ui"
+  ],
+  "contributes": {
+    "agentTools": [
+      {
+        "name": "get_system_metrics",
+        "description": "Возвращает текущие показатели загрузки процессора, оперативной памяти и ресурсов ПК.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    ],
+    "views": {
+      "floating": [
+        {
+          "id": "system-monitor-hud",
+          "title": "System Resource Monitor",
+          "entry": "App.tsx"
+        }
+      ]
+    }
+  }
+}

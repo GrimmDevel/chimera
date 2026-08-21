@@ -141,17 +141,23 @@ void fp_release(xiu_fileproc_t *fp) {
  * Returns -1 if the FDT is full (XIU_PROC_MAX_FDS entries).
  * Called with proc NOT locked — we acquire p_fdlock internally.
  * ═══════════════════════════════════════════════════════════════════════════ */
-int proc_fd_install(xiu_proc_t *p, xiu_fileproc_t *fp) {
+/* ═══════════════════════════════════════════════════════════════════════════
+ * proc_fd_alloc_from — find lowest free fd >= min_fd, install fp, return fd.
+ * ═══════════════════════════════════════════════════════════════════════════ */
+int proc_fd_alloc_from(xiu_proc_t *p, xiu_fileproc_t *fp, int min_fd) {
     XIU_ASSERT(p  != nullptr);
     XIU_ASSERT(fp != nullptr);
+    if (min_fd < 0) min_fd = 0;
+    if (min_fd >= XIU_PROC_MAX_FDS) return -1;
 
     irq_flags_t irq = spinlock_lock_irqsave(&p->p_fdlock);
 
     int fd = -1;
-    for (int i = 0; i < XIU_PROC_MAX_FDS; i++) {
+    for (int i = min_fd; i < XIU_PROC_MAX_FDS; i++) {
         if (p->p_fd_table[i] == nullptr) {
-            fp_retain(fp);           // fdt holds one reference
+            fp_retain(fp);
             p->p_fd_table[i] = fp;
+            p->p_fd_flags[i] = 0;
             fd = i;
             break;
         }
@@ -160,15 +166,17 @@ int proc_fd_install(xiu_proc_t *p, xiu_fileproc_t *fp) {
     spinlock_unlock_irqrestore(&p->p_fdlock, irq);
 
     if (fd < 0)
-        kprintf("[fileproc] proc_fd_install: FDT full for pid=%u\n", p->p_pid);
+        kprintf("[fileproc] proc_fd_alloc_from: FDT full for pid=%u\n", p->p_pid);
 
     return fd;
 }
 
+int proc_fd_install(xiu_proc_t *p, xiu_fileproc_t *fp) {
+    return proc_fd_alloc_from(p, fp, 0);
+}
+
 /* ═══════════════════════════════════════════════════════════════════════════
  * proc_fd_lookup — return the fileproc for fd, or NULL if invalid.
- *
- * Bumps refcount so the caller must call fp_release() when done.
  * ═══════════════════════════════════════════════════════════════════════════ */
 xiu_fileproc_t *proc_fd_lookup(xiu_proc_t *p, int fd) {
     if (!p || fd < 0 || fd >= XIU_PROC_MAX_FDS) return nullptr;
@@ -179,6 +187,23 @@ xiu_fileproc_t *proc_fd_lookup(xiu_proc_t *p, int fd) {
     spinlock_unlock_irqrestore(&p->p_fdlock, irq);
 
     return fp;
+}
+
+u8 proc_fd_get_flags(xiu_proc_t *p, int fd) {
+    if (!p || fd < 0 || fd >= XIU_PROC_MAX_FDS) return 0;
+    irq_flags_t irq = spinlock_lock_irqsave(&p->p_fdlock);
+    u8 flags = (p->p_fd_table[fd] != nullptr) ? p->p_fd_flags[fd] : 0;
+    spinlock_unlock_irqrestore(&p->p_fdlock, irq);
+    return flags;
+}
+
+void proc_fd_set_flags(xiu_proc_t *p, int fd, u8 flags) {
+    if (!p || fd < 0 || fd >= XIU_PROC_MAX_FDS) return;
+    irq_flags_t irq = spinlock_lock_irqsave(&p->p_fdlock);
+    if (p->p_fd_table[fd] != nullptr) {
+        p->p_fd_flags[fd] = flags;
+    }
+    spinlock_unlock_irqrestore(&p->p_fdlock, irq);
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -194,8 +219,103 @@ xiu_error_t proc_fd_close(xiu_proc_t *p, int fd) {
         return XIU_ERR_INVALID;
     }
     p->p_fd_table[fd] = nullptr;
+    p->p_fd_flags[fd] = 0;
     spinlock_unlock_irqrestore(&p->p_fdlock, irq);
 
-    fp_release(fp);   // release FDT's reference
+    fp_release(fp);
     return XIU_SUCCESS;
 }
+
+void proc_fd_close_cloexec(xiu_proc_t *p) {
+    if (!p) return;
+    irq_flags_t irq = spinlock_lock_irqsave(&p->p_fdlock);
+    for (int i = 0; i < XIU_PROC_MAX_FDS; i++) {
+        if (p->p_fd_table[i] != nullptr && (p->p_fd_flags[i] & FD_CLOEXEC)) {
+            xiu_fileproc_t *fp = p->p_fd_table[i];
+            p->p_fd_table[i] = nullptr;
+            p->p_fd_flags[i] = 0;
+            fp_release(fp);
+        }
+    }
+    spinlock_unlock_irqrestore(&p->p_fdlock, irq);
+}
+
+extern bool console_has_input(void);
+extern i16 pty_master_poll(i16 events);
+extern i16 pty_slave_poll(i16 events);
+extern i16 pipe_poll(vnode_t *vp, i16 events);
+extern i16 sopoll(struct socket *so, i16 events);
+
+i16 fileproc_poll(xiu_fileproc_t *fp, i16 events) {
+    if (!fp || fp->fp_signature != XIU_FILEPROC_MAGIC) return 0x0020; // POLLNVAL
+
+    if (fp->fp_type == DTYPE_SOCKET) {
+        if (!fp->fp_socket) return 0x0020;
+        return sopoll(fp->fp_socket, events);
+    }
+
+    if (fp->fp_type == DTYPE_PIPE) {
+        if (!fp->fp_vnode) return 0x0020;
+        return pipe_poll(fp->fp_vnode, events);
+    }
+
+    if (fp->fp_type == DTYPE_VNODE && fp->fp_vnode) {
+        vnode_t *vp = fp->fp_vnode;
+        if (vp->v_type == VFIFO) {
+            return pipe_poll(vp, events);
+        }
+
+        if (vp->v_type == VCHR) {
+            if (vp->v_op && vp->v_op->vop_name) {
+                if (__builtin_strcmp(vp->v_op->vop_name, "devfs_console") == 0 ||
+                    __builtin_strcmp(vp->v_op->vop_name, "devfs_tty") == 0) {
+                    i16 rev = 0;
+                    if ((events & 0x0001) && console_has_input()) rev |= 0x0001;
+                    if (events & 0x0004) rev |= 0x0004;
+                    return rev;
+                }
+                if (__builtin_strcmp(vp->v_op->vop_name, "pty_master") == 0) {
+                    return pty_master_poll(events);
+                }
+                if (__builtin_strcmp(vp->v_op->vop_name, "pty_slave") == 0) {
+                    return pty_slave_poll(events);
+                }
+                if (__builtin_strcmp(vp->v_op->vop_name, "devfs_mouse") == 0) {
+                    extern bool xiukit_hid_has_mouse(void);
+                    i16 rev = 0;
+                    if ((events & 0x0001) && xiukit_hid_has_mouse()) rev |= 0x0001;
+                    if (events & 0x0004) rev |= 0x0004;
+                    return rev;
+                }
+                if (__builtin_strcmp(vp->v_op->vop_name, "devfs_kbd") == 0) {
+                    extern bool xiukit_hid_has_kbd(void);
+                    i16 rev = 0;
+                    if ((events & 0x0001) && xiukit_hid_has_kbd()) rev |= 0x0001;
+                    if (events & 0x0004) rev |= 0x0004;
+                    return rev;
+                }
+                if (__builtin_strcmp(vp->v_op->vop_name, "devfs_null") == 0) {
+                    i16 rev = 0;
+                    if (events & 0x0001) rev |= 0x0001; // EOF immediately readable
+                    if (events & 0x0004) rev |= 0x0004; // always writable
+                    return rev;
+                }
+            }
+            // other char devices (fb, serial, etc)
+            i16 rev = 0;
+            if (events & 0x0001) rev |= 0x0001;
+            if (events & 0x0004) rev |= 0x0004;
+            return rev;
+        }
+
+        // regular files and directories are always ready
+        i16 rev = 0;
+        if (events & 0x0001) rev |= 0x0001;
+        if (events & 0x0004) rev |= 0x0004;
+        return rev;
+    }
+
+    return 0x0020; // POLLNVAL
+}
+
+

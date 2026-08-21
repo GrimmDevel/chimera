@@ -358,3 +358,43 @@ xiu_error_t sogetopt(socket_t *so, int level, int optname, void *optval, usize *
     }
     return XIU_ERR_NOTSUP;
 }
+
+i16 sopoll(socket_t *so, i16 events) {
+    if (!so || so->so_signature != XIU_SOCKET_MAGIC) return 0x0020; // POLLNVAL
+    i16 revents = 0;
+
+    irq_flags_t flags = spinlock_lock_irqsave(&so->so_lock);
+
+    if (events & 0x0001) { // POLLIN
+        if (so->so_rcv.sb_cc > 0 ||
+            (so->so_state & SS_CANTRCVMORE) ||
+            so->so_qlen > 0 ||
+            so->so_error != 0) {
+            revents |= 0x0001;
+        }
+    }
+
+    if (events & 0x0004) { // POLLOUT
+        if (so->so_type == SOCK_DGRAM) {
+            if (!(so->so_state & SS_CANTSENDMORE)) {
+                revents |= 0x0004;
+            }
+        } else if (so->so_type == SOCK_STREAM) {
+            if ((so->so_state & SS_ISCONNECTED) && (so->so_snd.sb_cc < so->so_snd.sb_hiwat)) {
+                revents |= 0x0004;
+            }
+        }
+    }
+
+    if (so->so_error != 0) {
+        revents |= 0x0008; // POLLERR
+    }
+
+    if ((so->so_state & (SS_CANTRCVMORE | SS_CANTSENDMORE)) == (SS_CANTRCVMORE | SS_CANTSENDMORE)) {
+        revents |= 0x0010; // POLLHUP
+    }
+
+    spinlock_unlock_irqrestore(&so->so_lock, flags);
+    return revents;
+}
+

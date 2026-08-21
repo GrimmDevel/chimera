@@ -238,13 +238,13 @@ void ipc_port_destroy(ipc_port_t *port) {
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
- * ipc_port_lookup — Resolve a name in a space.  Returns with port locked.
+ * ipc_port_lookup — Resolve a name in a space safely
  * ═══════════════════════════════════════════════════════════════════════════ */
 ipc_port_t *ipc_port_lookup(ipc_space_t *space,
                              mach_port_name_t name,
                              mach_port_type_t required_right) {
     (void)required_right;
-    if (name == MACH_PORT_NAME_NULL || name == MACH_PORT_NAME_DEAD)
+    if (!space || name == MACH_PORT_NAME_NULL || name == MACH_PORT_NAME_DEAD)
         return nullptr;
 
     irq_flags_t f = spinlock_lock_irqsave(&space->is_lock);
@@ -263,18 +263,14 @@ ipc_port_t *ipc_port_lookup(ipc_space_t *space,
     ipc_port_t *port = entry->ie_object;
     spinlock_unlock_irqrestore(&space->is_lock, f);
 
-    // lock the port
-    spinlock_lock(&port->ip_lock);
-
     if (!ipc_port_is_active(port)) {
-        spinlock_unlock(&port->ip_lock);
         return nullptr;
     }
-    return port;  // returned with ip_lock held
+    return port;
 }
 
 void ipc_port_unlock(ipc_port_t *port) {
-    spinlock_unlock(&port->ip_lock);
+    (void)port;
 }
 
 // reference counting

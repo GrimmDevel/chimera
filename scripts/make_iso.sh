@@ -7,6 +7,7 @@
 set -e
 
 ARCH=${1:-x86_64}
+CMDLINE_ARG=${2:-""}
 KERNEL="build/${ARCH}/kernel/xiu_kernel.elf"
 ISO="build/xiu-${ARCH}.iso"
 ISO_ROOT="build/iso_root"
@@ -40,6 +41,12 @@ for bin_path in build/${ARCH}/usr/*; do
             wserver)
                 cp "$bin_path" "$ISO_ROOT/usr/sbin/"
                 ;;
+            WindowServer)
+                mkdir -p "$ISO_ROOT/System/Library/CoreServices"
+                cp "$bin_path" "$ISO_ROOT/System/Library/CoreServices/"
+                cp "$bin_path" "$ISO_ROOT/usr/sbin/"
+                cp "$bin_path" "$ISO_ROOT/usr/bin/"
+                ;;
             *)
                 cp "$bin_path" "$ISO_ROOT/usr/bin/"
                 ;;
@@ -52,7 +59,7 @@ printf "XIU OS v0.1.0 (Darwin 24.0.0 %s)\n" "$ARCH" > "$ISO_ROOT/private/etc/ver
 printf "127.0.0.1\tlocalhost\n10.0.2.15\txiu-mac\n" > "$ISO_ROOT/private/etc/hosts"
 
 # Generate complete limine.conf with all kernel modules
-cat << 'EOF' > "$ISO_ROOT/limine.conf"
+cat << EOF > "$ISO_ROOT/limine.conf"
 # =============================================================================
 # XIU Operating System — Limine Configuration (v8.x Format)
 # limine.conf
@@ -64,6 +71,10 @@ timeout: 0
     protocol: limine
     kernel_path: boot():/kernel.elf
 EOF
+
+if [ -n "$CMDLINE_ARG" ]; then
+    echo "    cmdline: $CMDLINE_ARG" >> "$ISO_ROOT/limine.conf"
+fi
 
 for f in $(find "$ISO_ROOT/bin" "$ISO_ROOT/sbin" "$ISO_ROOT/usr/bin" "$ISO_ROOT/usr/sbin" "$ISO_ROOT/private/etc" -type f 2>/dev/null | sort); do
     rel_path="${f#$ISO_ROOT}"

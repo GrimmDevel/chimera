@@ -262,3 +262,30 @@ void pty_init(void) {
     g_pty0.line_len = 0;
     g_pty0.line_ready = false;
 }
+
+i16 pty_master_poll(i16 events) {
+    i16 revents = 0;
+    spinlock_lock(&g_pty0.lock);
+    if ((events & 0x0001) && ring_used(g_pty0.slave_head, g_pty0.slave_tail, PTY_BUF_SIZE) > 0) {
+        revents |= 0x0001; // POLLIN
+    }
+    if (events & 0x0004) {
+        revents |= 0x0004; // POLLOUT
+    }
+    spinlock_unlock(&g_pty0.lock);
+    return revents;
+}
+
+i16 pty_slave_poll(i16 events) {
+    i16 revents = 0;
+    spinlock_lock(&g_pty0.lock);
+    if ((events & 0x0001) && ring_used(g_pty0.master_head, g_pty0.master_tail, PTY_BUF_SIZE) > 0) {
+        revents |= 0x0001; // POLLIN
+    }
+    if ((events & 0x0004) && ring_free(g_pty0.slave_head, g_pty0.slave_tail, PTY_BUF_SIZE) > 0) {
+        revents |= 0x0004; // POLLOUT
+    }
+    spinlock_unlock(&g_pty0.lock);
+    return revents;
+}
+

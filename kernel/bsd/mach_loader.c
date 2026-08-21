@@ -118,10 +118,10 @@ void mach_load_args(void *module_ptr, struct xiu_task *out_task,
     }
     *entry_point = (uintptr_t)parsed_entry;
 
-    // allocate user stack 16KB
+    // allocate user stack 8MB (2048 pages)
     u64 stack_top = 0x7FFFFFFF0000ULL;
     u64 top_actual_phys = 0;
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < 2048; i++) {
         u64 vaddr = stack_top - 4096 * (i + 1);
         u64 phys = pmm_alloc_page();
         if (!phys) {

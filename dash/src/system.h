@@ -34,6 +34,10 @@
 #include <signal.h>
 #include <stdbool.h>
 #include <sys/types.h>
+#include <dirent.h>
+#include <paths.h>
+#define dirent64 dirent
+#define readdir64 readdir
 
 #ifndef SSIZE_MAX
 #define SSIZE_MAX ((ssize_t)((size_t)-1 >> 1))

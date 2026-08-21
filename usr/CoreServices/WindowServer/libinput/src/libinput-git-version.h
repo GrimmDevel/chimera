@@ -1,0 +1,1 @@
+#define LIBINPUT_GIT_VERSION "1.25.0"

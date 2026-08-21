@@ -363,6 +363,16 @@ emit_event:
     }
     return read_count;
   }
+
+  bool has_events() {
+    handle_irq();
+    return event_queue.size() > 0;
+  }
+
+  bool has_mouse_events() {
+    handle_irq();
+    return mouse_queue.size() > 0;
+  }
 };
 
 static HIDDriver s_hid;
@@ -394,4 +404,19 @@ extern "C" void xiukit_hid_push_mouse_event(i32 dx, i32 dy, i32 dz, u32 buttons)
 extern "C" size_t xiukit_hid_read_mouse(xiu_event_t *buf, size_t count) {
   xiukit_xhci_poll();
   return XIUKit::s_hid.read_mouse_events(buf, count);
+}
+
+extern "C" size_t xiukit_hid_read_kbd(xiu_event_t *buf, size_t count) {
+  xiukit_xhci_poll();
+  return XIUKit::s_hid.read_events(buf, count);
+}
+
+extern "C" bool xiukit_hid_has_mouse(void) {
+  xiukit_xhci_poll();
+  return XIUKit::s_hid.has_mouse_events();
+}
+
+extern "C" bool xiukit_hid_has_kbd(void) {
+  xiukit_xhci_poll();
+  return XIUKit::s_hid.has_events();
 }

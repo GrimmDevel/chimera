@@ -1,0 +1,7 @@
+/* Generated automatically */
+#ifndef have_Src_modentry_globals
+#define have_Src_modentry_globals
+
+extern int modentry _((int boot,Module m,void*ptr));
+
+#endif /* !have_Src_modentry_globals */

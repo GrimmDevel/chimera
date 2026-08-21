@@ -97,13 +97,9 @@ struct DriverPersonality {
 static const DriverPersonality s_registered_drivers[] = {
     { "AppleIntel8254XEthernet", "Ethernet Controller",     0x8086, 0x10d3, 0x02, 0x00 },
     { "AppleIntel8254XEthernet", "Ethernet Controller",     0x8086, 0x100e, 0x02, 0x00 },
-    { "AppleUSBxHCI",            "USB 3.0 Host Controller", 0x1b36, 0x000d, 0x0c, 0x03 },
-    { "AppleIntelPIIXATA",       "IDE/ATA Controller",      0x8086, 0x7010, 0x01, 0x01 },
+    { "AppleUSBxHCI",            "USB 3.0 Host Controller", 0,      0,      0x0c, 0x03 },
     { "AppleVGAFramebuffer",     "Display Controller",      0x1234, 0x1111, 0x03, 0x00 },
-    { "AppleHostBridge",         "Host Bridge",             0x8086, 0x29c0, 0x06, 0x00 },
-    { "AppleLPCBridge",          "ISA/LPC Bridge",          0x8086, 0x2918, 0x06, 0x01 },
     { "AppleSATAController",     "AHCI/SATA Controller",    0x8086, 0x2922, 0x01, 0x06 },
-    { "AppleSMBusController",    "SMBus Controller",        0x8086, 0x2930, 0x0c, 0x05 },
 };
 
 void PCIManager::probeAll() {

@@ -69,14 +69,19 @@ void vfs_normalize_path(const char *in, char *out, usize cap) {
   }
 
   const char *p = in;
-  for (const char *c = in; *c != '\0'; c++) {
-    if (*c == ':') {
-      p = c + 1;
-      break;
+  const char *colon = __builtin_strchr(p, ':');
+  if (colon) {
+    p = colon + 1;
+  }
+  if (p[0] == '(') {
+    const char *close_paren = __builtin_strchr(p, ')');
+    if (close_paren) {
+      p = close_paren + 1;
     }
   }
-
   while (*p == ' ')
+    p++;
+  while (*p == '/' && *(p + 1) == '/')
     p++;
 
   char temp[256];

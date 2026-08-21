@@ -15,6 +15,8 @@ add_compile_options(
     -msse -msse2
     -DXIU_ARCH_x86_64=1
     -DXIU_PAGE_SIZE=4096
+    -D_FORTIFY_SOURCE=0
+    -DOS_OBJECT_USE_OBJC=0
 )
 
 # Custom link command for static Mach-O executables via Clang / Apple ld
@@ -28,25 +30,376 @@ add_library(xiu_crt0 OBJECT
 
 add_library(system_xiu STATIC
     libsystem/libsystem_xiu.c
+    libsystem/libinput_xiu.c
+    libsystem/plist.c
     libsystem/gui.c
+    libsystem/blocks/data.c
+    libsystem/blocks/runtime.c
     libsystem/syscalls.S
     libsystem/setjmp.S
+)
+
+set(LIBOBJC_SRCS
+    libobjc/objc_runtime_xiu.c
+    libobjc/objc_msgSend_x86_64.S
+)
+
+add_library(objc OBJECT ${LIBOBJC_SRCS})
+target_include_directories(objc PUBLIC
+    ${CMAKE_SOURCE_DIR}/usr/libsystem/include
+    ${CMAKE_SOURCE_DIR}/usr/libobjc
+    ${CMAKE_SOURCE_DIR}/usr/libobjc/runtime
+)
+target_compile_options(objc PUBLIC
+    -nostdinc
+    -isystem ${CMAKE_SOURCE_DIR}/usr/libsystem/include
+    -I${CMAKE_SOURCE_DIR}/usr/libobjc
+    -I${CMAKE_SOURCE_DIR}/usr/libobjc/runtime
+    -D__RAVYNOS__ -D__MACH__ -D__XIU__
+    -DTARGET_OS_OSX=1 -DTARGET_OS_IOSMAC=0 -DTARGET_OS_MAC=1 -DTARGET_OS_IPHONE=0
+    -Wno-error -Wno-undef-prefix -Wno-deprecated-declarations -Wno-unused-variable -Wno-macro-redefined
+)
+
+# -----------------------------------------------------------------------------
+# Foundation Framework
+# -----------------------------------------------------------------------------
+set(FOUNDATION_SRCS
+    Frameworks/Foundation/NSObject/NSObject.m
+    Frameworks/Foundation/NSString/NSString.m
+    Frameworks/Foundation/NSString/NSCFString.m
+    Frameworks/Foundation/NSString/NSStringUTF8.m
+    Frameworks/Foundation/NSArray/NSArray.m
+    Frameworks/Foundation/NSArray/NSArray_concrete.m
+    Frameworks/Foundation/NSArray/NSMutableArray.m
+    Frameworks/Foundation/NSArray/NSMutableArray_concrete.m
+    Frameworks/Foundation/NSDictionary/NSDictionary.m
+    Frameworks/Foundation/NSDictionary/NSMutableDictionary.m
+    Frameworks/Foundation/NSData/NSData.m
+    Frameworks/Foundation/NSData/NSData_concrete.m
+    Frameworks/Foundation/NSData/NSMutableData.m
+    Frameworks/Foundation/NSData/NSMutableData_concrete.m
+    Frameworks/Foundation/NSAutoreleasePool/NSAutoreleasePool.m
+    Frameworks/Foundation/NSDate/NSDate.m
+    Frameworks/Foundation/NSDate/NSDate_timeInterval.m
+    Frameworks/Foundation/NSDate/NSDateFormatter.m
+    Frameworks/Foundation/NSBundle.m
+    Frameworks/Foundation/NSNotificationCenter/NSNotificationCenter.m
+    Frameworks/Foundation/NSProcessInfo.m
+    Frameworks/Foundation/NSUserDefaults/NSUserDefaults.m
+    Frameworks/Foundation/NSError.m
+    Frameworks/Foundation/NSException/NSException.m
+    Frameworks/Foundation/NSException/NSRaise.m
+    Frameworks/Foundation/NSValue/NSValue.m
+    Frameworks/Foundation/NSNumber/NSNumber.m
+    Frameworks/Foundation/NSRange.m
+    Frameworks/Foundation/NSThread/NSThread.m
+    Frameworks/Foundation/NSRunLoop/NSRunLoop.m
+    Frameworks/Foundation/NSTimer/NSTimer.m
+    Frameworks/Foundation/NSURL/NSURL.m
+    Frameworks/Foundation/NSGeometry.m
+    Frameworks/Foundation/NSString/NSString_cString.m
+    Frameworks/Foundation/NSString/NSString_unicode.m
+    Frameworks/Foundation/NSString/NSString_unicodePtr.m
+    Frameworks/Foundation/NSString/NSStringFormatter.m
+    Frameworks/Foundation/NSString/NSStringSymbol.m
+    Frameworks/Foundation/NSString/NSUnicodeCaseMapping.m
+    Frameworks/Foundation/NSString/NSMutableString.m
+    Frameworks/Foundation/NSString/NSMutableString_unicodePtr.m
+    Frameworks/Foundation/NSString/NSPathUtilities.m
+    Frameworks/Foundation/NSValue/NSValue_concrete.m
+    Frameworks/Foundation/NSValue/NSValue_nonRetainedObject.m
+    Frameworks/Foundation/NSValue/NSValue_pointer.m
+    Frameworks/Foundation/NSURL/NSURLError.m
+    Frameworks/Foundation/platform_posix/NSPlatform_posix.m
+    Frameworks/Foundation/platform_posix/NSMemoryFunctions_posix.m
+    Frameworks/Foundation/platform_posix/NSString_defaultEncoding_posix.m
+    Frameworks/Foundation/NSNumber/NSNumber_char.m
+    Frameworks/Foundation/NSNumber/NSNumber_double.m
+    Frameworks/Foundation/NSNumber/NSNumber_float.m
+    Frameworks/Foundation/NSNumber/NSNumber_int.m
+    Frameworks/Foundation/NSNumber/NSNumber_long.m
+    Frameworks/Foundation/NSNumber/NSNumber_longLong.m
+    Frameworks/Foundation/NSNumber/NSNumber_short.m
+    Frameworks/Foundation/NSNumber/NSNumber_unsignedChar.m
+    Frameworks/Foundation/NSNumber/NSNumber_unsignedInt.m
+    Frameworks/Foundation/NSNumber/NSNumber_unsignedLong.m
+    Frameworks/Foundation/NSNumber/NSNumber_unsignedLongLong.m
+    Frameworks/Foundation/NSNumber/NSNumber_unsignedShort.m
+    Frameworks/Foundation/NSNumber/NSNumber_BOOL.m
+    Frameworks/Foundation/NSNumber/NSNumber_placeholder.m
+    Frameworks/Foundation/NSNumber/NSNumber_CF.m
+    Frameworks/Foundation/NSMapTable.m
+    Frameworks/Foundation/NSObjCRuntime.m
+    Frameworks/Foundation/NSPlatform.m
+    Frameworks/Foundation/NSLocale.m
+    Frameworks/Foundation/NSNotification/NSNotification.m
+    Frameworks/Foundation/NSNotification/NSNotification_concrete.m
+    Frameworks/Foundation/NSEnumerator.m
+    Frameworks/Foundation/NSString/NSString_isoLatin1.m
+    Frameworks/Foundation/NSString/NSString_isoLatin2.m
+    Frameworks/Foundation/NSString/NSString_macOSRoman.m
+    Frameworks/Foundation/NSString/NSString_nextstep.m
+    Frameworks/Foundation/NSString/NSString_win1252.m
+    Frameworks/Foundation/NSAttributedString/NSAttributedString.m
+    Frameworks/Foundation/NSAttributedString/NSMutableAttributedString.m
+    Frameworks/Foundation/NSAttributedString/NSMutableAttributedString_concrete.m
+    Frameworks/Foundation/NSAttributedString/NSAttributedString_placeholder.m
+    Frameworks/Foundation/NSAttributedString/NSAttributedString_oneAttribute.m
+    Frameworks/Foundation/NSAttributedString/NSAttributedString_manyAttributes.m
+    Frameworks/Foundation/NSAttributedString/NSAttributedString_nilAttributes.m
+    Frameworks/Foundation/NSAttributedString/NSRangeEntries.m
+    Frameworks/Foundation/NSArray/NSEnumerator_array.m
+    Frameworks/Foundation/NSArray/NSEnumerator_arrayReverse.m
+    Frameworks/Foundation/NSArray/NSArray_placeholder.m
+    Frameworks/Foundation/NSDictionary/NSEnumerator_dictionaryKeys.m
+    Frameworks/Foundation/NSDictionary/NSEnumerator_dictionaryObjects.m
+    Frameworks/Foundation/NSDictionary/NSDictionary_mapTable.m
+    Frameworks/Foundation/NSDictionary/NSMutableDictionary_mapTable.m
+    Frameworks/Foundation/NSString/NSString_nextstepCString.m
+    Frameworks/Foundation/NSString/NSStringEncoder.m
+    Frameworks/Foundation/NSString/NSStringFileIO.m
+    Frameworks/Foundation/NSFormatter.m
+    Frameworks/Foundation/NSZone/NSVirtualMemory.m
+    Frameworks/Foundation/NSZone/NSZone.m
+)
+
+add_library(Foundation OBJECT ${FOUNDATION_SRCS})
+target_include_directories(Foundation PUBLIC
+    ${CMAKE_SOURCE_DIR}/usr/libsystem/include
+    ${CMAKE_SOURCE_DIR}/usr/libobjc
+    ${CMAKE_SOURCE_DIR}/usr/libobjc/runtime
+    ${CMAKE_SOURCE_DIR}/usr/Frameworks
+    ${CMAKE_SOURCE_DIR}/usr/Frameworks/Foundation
+    ${CMAKE_SOURCE_DIR}/usr/Frameworks/Foundation/Headers
+    ${CMAKE_SOURCE_DIR}/usr/Frameworks/Foundation/NSString
+    ${CMAKE_SOURCE_DIR}/usr/Frameworks/Foundation/NSArray
+    ${CMAKE_SOURCE_DIR}/usr/Frameworks/Foundation/NSDictionary
+    ${CMAKE_SOURCE_DIR}/usr/Frameworks/Foundation/NSData
+    ${CMAKE_SOURCE_DIR}/usr/Frameworks/Foundation/NSDate
+    ${CMAKE_SOURCE_DIR}/usr/Frameworks/Foundation/NSException
+    ${CMAKE_SOURCE_DIR}/usr/Frameworks/Foundation/NSValue
+    ${CMAKE_SOURCE_DIR}/usr/Frameworks/Foundation/NSNumber
+    ${CMAKE_SOURCE_DIR}/usr/Frameworks/Foundation/NSUserDefaults
+    ${CMAKE_SOURCE_DIR}/usr/Frameworks/CoreFoundation/Headers
+)
+target_compile_options(Foundation PUBLIC
+    -x objective-c
+    -nostdinc -isystem ${CMAKE_SOURCE_DIR}/usr/libsystem/include
+    -I${CMAKE_SOURCE_DIR}/usr/libobjc
+    -I${CMAKE_SOURCE_DIR}/usr/libobjc/runtime
+    -I${CMAKE_SOURCE_DIR}/usr/Frameworks
+    -I${CMAKE_SOURCE_DIR}/usr/Frameworks/Foundation
+    -I${CMAKE_SOURCE_DIR}/usr/Frameworks/Foundation/Headers
+    -I${CMAKE_SOURCE_DIR}/usr/Frameworks/Foundation/NSString
+    -I${CMAKE_SOURCE_DIR}/usr/Frameworks/Foundation/NSArray
+    -I${CMAKE_SOURCE_DIR}/usr/Frameworks/Foundation/NSDictionary
+    -I${CMAKE_SOURCE_DIR}/usr/Frameworks/Foundation/NSData
+    -I${CMAKE_SOURCE_DIR}/usr/Frameworks/Foundation/NSDate
+    -I${CMAKE_SOURCE_DIR}/usr/Frameworks/Foundation/NSException
+    -I${CMAKE_SOURCE_DIR}/usr/Frameworks/Foundation/NSValue
+    -I${CMAKE_SOURCE_DIR}/usr/Frameworks/Foundation/NSNumber
+    -I${CMAKE_SOURCE_DIR}/usr/Frameworks/Foundation/NSUserDefaults
+    -I${CMAKE_SOURCE_DIR}/usr/Frameworks/CoreFoundation/Headers
+    -D__RAVYNOS__ -D__MACH__ -D__XIU__ -DPLATFORM_IS_POSIX=1
+    -DTARGET_OS_OSX=1 -DTARGET_OS_IOSMAC=0 -DTARGET_OS_MAC=1 -DTARGET_OS_IPHONE=0
+    -Wno-error -Wno-undef-prefix -Wno-deprecated-declarations -Wno-unused-variable -Wno-macro-redefined
+    -Wno-incompatible-pointer-types -Wno-implicit-function-declaration
+)
+
+# -----------------------------------------------------------------------------
+# Onyx2D Graphics Framework (Quartz 2D)
+# -----------------------------------------------------------------------------
+set(ONYX2D_SRCS
+    Frameworks/Onyx2D/O2AffineTransform.m
+    Frameworks/Onyx2D/O2BitmapContext.m
+    Frameworks/Onyx2D/O2ClipMask.m
+    Frameworks/Onyx2D/O2ClipPhase.m
+    Frameworks/Onyx2D/O2ClipState.m
+    Frameworks/Onyx2D/O2Color.m
+    Frameworks/Onyx2D/O2ColorSpace.m
+    Frameworks/Onyx2D/O2Context.m
+    Frameworks/Onyx2D/O2Context_builtin.m
+    Frameworks/Onyx2D/O2DataConsumer.m
+    Frameworks/Onyx2D/O2DataProvider.m
+    Frameworks/Onyx2D/O2Encoding.m
+    Frameworks/Onyx2D/O2Font.m
+    Frameworks/Onyx2D/O2Geometry.m
+    Frameworks/Onyx2D/O2GraphicsState.m
+    Frameworks/Onyx2D/O2Image.m
+    Frameworks/Onyx2D/O2Layer.m
+    Frameworks/Onyx2D/O2MutablePath.m
+    Frameworks/Onyx2D/O2Path.m
+    Frameworks/Onyx2D/O2Pattern.m
+    Frameworks/Onyx2D/O2Surface.m
+    Frameworks/Onyx2D/VGPath.m
+    Frameworks/Onyx2D/O2Paint.m
+    Frameworks/Onyx2D/O2Paint_axialGradient.m
+    Frameworks/Onyx2D/O2Paint_color.m
+    Frameworks/Onyx2D/O2Paint_image.m
+    Frameworks/Onyx2D/O2Paint_pattern.m
+    Frameworks/Onyx2D/O2Paint_radialGradient.m
+    Frameworks/Onyx2D/O2Paint_ramp.m
+    Frameworks/Onyx2D/O2argb8u.m
+    Frameworks/Onyx2D/O2argb32f.m
+    Frameworks/Onyx2D/O2GlyphStencil.m
+    Frameworks/Onyx2D/O2Function.m
+)
+
+add_library(Onyx2D OBJECT ${ONYX2D_SRCS})
+target_include_directories(Onyx2D PUBLIC
+    ${CMAKE_SOURCE_DIR}/usr/libsystem/include
+    ${CMAKE_SOURCE_DIR}/usr/libobjc
+    ${CMAKE_SOURCE_DIR}/usr/libobjc/runtime
+    ${CMAKE_SOURCE_DIR}/usr/Frameworks
+    ${CMAKE_SOURCE_DIR}/usr/Frameworks/Foundation/Headers
+    ${CMAKE_SOURCE_DIR}/usr/Frameworks/Onyx2D
+)
+target_compile_options(Onyx2D PUBLIC
+    -x objective-c
+    -nostdinc -isystem ${CMAKE_SOURCE_DIR}/usr/libsystem/include
+    -I${CMAKE_SOURCE_DIR}/usr/libobjc
+    -I${CMAKE_SOURCE_DIR}/usr/libobjc/runtime
+    -I${CMAKE_SOURCE_DIR}/usr/Frameworks
+    -I${CMAKE_SOURCE_DIR}/usr/Frameworks/Foundation/Headers
+    -I${CMAKE_SOURCE_DIR}/usr/Frameworks/Onyx2D
+    -D__RAVYNOS__ -D__MACH__ -D__XIU__
+    -DTARGET_OS_OSX=1 -DTARGET_OS_IOSMAC=0 -DTARGET_OS_MAC=1 -DTARGET_OS_IPHONE=0
+    -Wno-error -Wno-undef-prefix -Wno-deprecated-declarations -Wno-unused-variable -Wno-macro-redefined
+    -Wno-incompatible-pointer-types -Wno-implicit-function-declaration
+)
+
+# -----------------------------------------------------------------------------
+# CoreGraphics Framework
+# -----------------------------------------------------------------------------
+set(COREGRAPHICS_SRCS
+    Frameworks/CoreGraphics/CGAffineTransform.m
+    Frameworks/CoreGraphics/CGBitmapContext.m
+    Frameworks/CoreGraphics/CGColor.m
+    Frameworks/CoreGraphics/CGColorSpace.m
+    Frameworks/CoreGraphics/CGContext.m
+    Frameworks/CoreGraphics/CGDataConsumer.m
+    Frameworks/CoreGraphics/CGDataProvider.m
+    Frameworks/CoreGraphics/CGDirectDisplay.m
+    Frameworks/CoreGraphics/CGEvent.m
+    Frameworks/CoreGraphics/CGFont.m
+    Frameworks/CoreGraphics/CGFunction.m
+    Frameworks/CoreGraphics/CGGeometry.m
+    Frameworks/CoreGraphics/CGGradient.m
+    Frameworks/CoreGraphics/CGImage.m
+    Frameworks/CoreGraphics/CGLayer.m
+    Frameworks/CoreGraphics/CGPath.m
+    Frameworks/CoreGraphics/CGPattern.m
+    Frameworks/CoreGraphics/CGWindow.m
+)
+
+add_library(CoreGraphics OBJECT ${COREGRAPHICS_SRCS})
+target_include_directories(CoreGraphics PUBLIC
+    ${CMAKE_SOURCE_DIR}/usr/libsystem/include
+    ${CMAKE_SOURCE_DIR}/usr/libobjc
+    ${CMAKE_SOURCE_DIR}/usr/libobjc/runtime
+    ${CMAKE_SOURCE_DIR}/usr/CoreServices
+    ${CMAKE_SOURCE_DIR}/usr/Frameworks
+    ${CMAKE_SOURCE_DIR}/usr/Frameworks/Foundation/Headers
+    ${CMAKE_SOURCE_DIR}/usr/Frameworks/Onyx2D
+    ${CMAKE_SOURCE_DIR}/usr/Frameworks/CoreGraphics
+)
+target_compile_options(CoreGraphics PUBLIC
+    -x objective-c
+    -nostdinc -isystem ${CMAKE_SOURCE_DIR}/usr/libsystem/include
+    -I${CMAKE_SOURCE_DIR}/usr/libobjc
+    -I${CMAKE_SOURCE_DIR}/usr/libobjc/runtime
+    -I${CMAKE_SOURCE_DIR}/usr/CoreServices
+    -I${CMAKE_SOURCE_DIR}/usr/Frameworks
+    -I${CMAKE_SOURCE_DIR}/usr/Frameworks/Foundation/Headers
+    -I${CMAKE_SOURCE_DIR}/usr/Frameworks/Onyx2D
+    -I${CMAKE_SOURCE_DIR}/usr/Frameworks/CoreGraphics
+    -D__RAVYNOS__ -D__MACH__ -D__XIU__
+    -DTARGET_OS_OSX=1 -DTARGET_OS_IOSMAC=0 -DTARGET_OS_MAC=1 -DTARGET_OS_IPHONE=0
+    -Wno-error -Wno-undef-prefix -Wno-deprecated-declarations -Wno-unused-variable -Wno-macro-redefined
+    -Wno-incompatible-pointer-types -Wno-implicit-function-declaration
+)
+
+# -----------------------------------------------------------------------------
+# AppKit Framework
+# -----------------------------------------------------------------------------
+set(APPKIT_SRCS
+    Frameworks/AppKit/NSResponder.m
+    Frameworks/AppKit/NSApplication.m
+    Frameworks/AppKit/NSDisplay.m
+    Frameworks/AppKit/NSWindow.m
+    Frameworks/AppKit/NSWindow-Drag.m
+    Frameworks/AppKit/NSView.m
+    Frameworks/AppKit/NSMenu.subproj/NSMenu.m
+    Frameworks/AppKit/NSMenu.subproj/NSMenuItem.m
+    Frameworks/AppKit/NSScreen.m
+    Frameworks/AppKit/NSColor.subproj/NSColor.m
+    Frameworks/AppKit/NSFont.m
+    Frameworks/AppKit/NSBezierPath.m
+    Frameworks/AppKit/NSEvent.subproj/NSEvent.m
+    Frameworks/AppKit/NSThemeFrame.m
+    Frameworks/AppKit/NSGraphics.m
+    Frameworks/AppKit/NSGraphicsContext.m
+    Frameworks/AppKit/NSCell.m
+    Frameworks/AppKit/NSActionCell.m
+    Frameworks/AppKit/NSButtonCell.m
+    Frameworks/AppKit/NSButton.m
+    Frameworks/AppKit/NSControl.m
+    Frameworks/AppKit/NSTextField.m
+    Frameworks/AppKit/NSTextFieldCell.m
+    Frameworks/AppKit/NSImage.m
+    Frameworks/AppKit/NSImageRep.m
+    Frameworks/AppKit/NSBitmapImageRep.m
+    Frameworks/AppKit/NSPanel.m
+    Frameworks/AppKit/NSWorkspace.m
+    Frameworks/AppKit/NSSheetContext.m
+    Frameworks/AppKit/NSPasteboard.m
+    Frameworks/AppKit/NSStatusBar.m
+    Frameworks/AppKit/NSStatusItem.m
+    Frameworks/AppKit/NSDockTile.m
+    Frameworks/AppKit/NSController/NSController.m
+)
+
+add_library(AppKit OBJECT ${APPKIT_SRCS})
+target_include_directories(AppKit PUBLIC
+    ${CMAKE_SOURCE_DIR}/usr/libsystem/include
+    ${CMAKE_SOURCE_DIR}/usr/libobjc
+    ${CMAKE_SOURCE_DIR}/usr/libobjc/runtime
+    ${CMAKE_SOURCE_DIR}/usr/CoreServices
+    ${CMAKE_SOURCE_DIR}/usr/Frameworks
+    ${CMAKE_SOURCE_DIR}/usr/Frameworks/Foundation/Headers
+    ${CMAKE_SOURCE_DIR}/usr/Frameworks/Onyx2D
+    ${CMAKE_SOURCE_DIR}/usr/Frameworks/CoreGraphics
+    ${CMAKE_SOURCE_DIR}/usr/Frameworks/AppKit
+)
+target_compile_options(AppKit PUBLIC
+    -x objective-c
+    -nostdinc -isystem ${CMAKE_SOURCE_DIR}/usr/libsystem/include
+    -I${CMAKE_SOURCE_DIR}/usr/libobjc
+    -I${CMAKE_SOURCE_DIR}/usr/libobjc/runtime
+    -I${CMAKE_SOURCE_DIR}/usr/CoreServices
+    -I${CMAKE_SOURCE_DIR}/usr/Frameworks
+    -I${CMAKE_SOURCE_DIR}/usr/Frameworks/Foundation/Headers
+    -I${CMAKE_SOURCE_DIR}/usr/Frameworks/Onyx2D
+    -I${CMAKE_SOURCE_DIR}/usr/Frameworks/CoreGraphics
+    -I${CMAKE_SOURCE_DIR}/usr/Frameworks/AppKit
+    -D__RAVYNOS__ -D__MACH__ -D__XIU__
+    -DTARGET_OS_OSX=1 -DTARGET_OS_IOSMAC=0 -DTARGET_OS_MAC=1 -DTARGET_OS_IPHONE=0
+    -Wno-error -Wno-undef-prefix -Wno-deprecated-declarations -Wno-unused-variable -Wno-macro-redefined
+    -Wno-deprecated-objc-isa-usage -Wno-incompatible-pointer-types -Wno-implicit-function-declaration
 )
 
 target_include_directories(system_xiu PUBLIC
     ${CMAKE_SOURCE_DIR}/kernel/include
     ${CMAKE_SOURCE_DIR}/usr/libsystem
     ${CMAKE_SOURCE_DIR}/usr/libsystem/include
+    ${CMAKE_SOURCE_DIR}/usr/libsystem/blocks
 )
 
 function(xiu_add_user_crt target)
     target_sources(${target} PRIVATE $<TARGET_OBJECTS:xiu_crt0>)
 endfunction()
 
-# 2. Shell (sh)
-add_executable(sh bin/sh.c)
-xiu_add_user_crt(sh)
-target_link_libraries(sh system_xiu)
+
 
 # 3. Core Utilities
 add_executable(ls bin/ls.c)
@@ -109,17 +462,151 @@ add_executable(smpdemo bin/smp_demo.c)
 xiu_add_user_crt(smpdemo)
 target_link_libraries(smpdemo system_xiu)
 
-add_executable(wserver bin/wserver.c)
-xiu_add_user_crt(wserver)
-target_link_libraries(wserver system_xiu)
+set(XKBCOMMON_SRCS
+    CoreServices/WindowServer/libxkbcommon/src/keysym.c
+    CoreServices/WindowServer/libxkbcommon/src/context.c
+    CoreServices/WindowServer/libxkbcommon/src/utils.c
+    CoreServices/WindowServer/libxkbcommon/src/state.c
+    CoreServices/WindowServer/libxkbcommon/src/keymap.c
+    CoreServices/WindowServer/libxkbcommon/src/compose/paths.c
+    CoreServices/WindowServer/libxkbcommon/src/compose/table.c
+    CoreServices/WindowServer/libxkbcommon/src/compose/parser.c
+    CoreServices/WindowServer/libxkbcommon/src/compose/state.c
+    CoreServices/WindowServer/libxkbcommon/src/utf8.c
+    CoreServices/WindowServer/libxkbcommon/src/context-priv.c
+    CoreServices/WindowServer/libxkbcommon/src/keysym-utf.c
+    CoreServices/WindowServer/libxkbcommon/src/atom.c
+    CoreServices/WindowServer/libxkbcommon/src/util-list.c
+    CoreServices/WindowServer/libxkbcommon/src/keymap-priv.c
+    CoreServices/WindowServer/libxkbcommon/src/xkbcomp/parser.c
+    CoreServices/WindowServer/libxkbcommon/src/xkbcomp/symbols.c
+    CoreServices/WindowServer/libxkbcommon/src/xkbcomp/ast-build.c
+    CoreServices/WindowServer/libxkbcommon/src/xkbcomp/action.c
+    CoreServices/WindowServer/libxkbcommon/src/xkbcomp/xkbcomp.c
+    CoreServices/WindowServer/libxkbcommon/src/xkbcomp/keymap.c
+    CoreServices/WindowServer/libxkbcommon/src/xkbcomp/keycodes.c
+    CoreServices/WindowServer/libxkbcommon/src/xkbcomp/types.c
+    CoreServices/WindowServer/libxkbcommon/src/xkbcomp/keywords.c
+    CoreServices/WindowServer/libxkbcommon/src/xkbcomp/rules.c
+    CoreServices/WindowServer/libxkbcommon/src/xkbcomp/scanner.c
+    CoreServices/WindowServer/libxkbcommon/src/xkbcomp/keymap-dump.c
+    CoreServices/WindowServer/libxkbcommon/src/xkbcomp/include.c
+    CoreServices/WindowServer/libxkbcommon/src/xkbcomp/expr.c
+    CoreServices/WindowServer/libxkbcommon/src/xkbcomp/compat.c
+    CoreServices/WindowServer/libxkbcommon/src/xkbcomp/vmod.c
+    CoreServices/WindowServer/libxkbcommon/src/text.c
+)
+
+add_library(xkbcommon STATIC ${XKBCOMMON_SRCS})
+target_compile_options(xkbcommon PRIVATE
+    -nostdinc -isystem ${CMAKE_SOURCE_DIR}/usr/libsystem/include
+    -I${CMAKE_SOURCE_DIR}/usr/CoreServices/WindowServer/libxkbcommon/include
+    -I${CMAKE_SOURCE_DIR}/usr/CoreServices/WindowServer/libxkbcommon/src
+    -I${CMAKE_SOURCE_DIR}/usr/CoreServices/WindowServer/libxkbcommon/src/xkbcomp
+    -I${CMAKE_SOURCE_DIR}/usr/CoreServices/WindowServer/libxkbcommon/src/compose
+    -DHAVE_STRNDUP -DHAVE_UNISTD_H -DHAVE_ASPRINTF -DHAVE_SYS_SYSCTL_H -D_GNU_SOURCE
+    -DDFLT_XKB_CONFIG_ROOT=\"/System/Library/KeyboardLayout\"
+    -DDFLT_XKB_CONFIG_EXTRA_PATH=\"/Library/KeyboardLayout\"
+    -DXLOCALEDIR=\"/System/Library/Locale\"
+    -DDEFAULT_XKB_RULES=\"evdev\"
+    -Wno-macro-redefined -Wno-unused-variable -Wno-incompatible-pointer-types
+)
+target_compile_definitions(xkbcommon PRIVATE
+    DEFAULT_XKB_MODEL="pc105"
+    DEFAULT_XKB_LAYOUT="us"
+    DEFAULT_XKB_VARIANT=NULL
+    DEFAULT_XKB_OPTIONS=NULL
+)
+
+set_source_files_properties(
+    CoreServices/WindowServer/main.m
+    CoreServices/WindowServer/WindowServer.m
+    CoreServices/WindowServer/BSDFramebuffer.m
+    CoreServices/WindowServer/WSDisplay.m
+    CoreServices/WindowServer/WSWindowRecord.m
+    CoreServices/WindowServer/WSAppRecord.m
+    CoreServices/WindowServer/WSInput.m
+    CoreServices/WindowServer/SystemUIServer/SystemUIServer.m
+    CoreServices/WindowServer/SystemUIServer/AppDelegate.m
+    CoreServices/WindowServer/SystemUIServer/ClockView.m
+    CoreServices/WindowServer/SystemUIServer/MenuView.m
+    CoreServices/WindowServer/SystemUIServer/ExtrasView.m
+    CoreServices/WindowServer/SystemUIServer/MenuBarWindow.m
+    CoreServices/WindowServer/SystemUIServer/NSMenuWindow.m
+    CoreServices/WindowServer/SystemUIServer/NSMainMenuView.m
+    CoreServices/WindowServer/SystemUIServer/SubmenuView.m
+    CoreServices/WindowServer/SystemUIServer/Label.m
+    CoreServices/WindowServer/SystemUIServer/AboutWindow.m
+    CoreServices/Dock/main.m
+    CoreServices/Dock/Dock.m
+    CoreServices/Dock/DockItem.m
+    CoreServices/Dock/DesktopWindow.m
+    CoreServices/Dock/DockTileData.m
+    CoreServices/Filer/FilerMain.m
+    PROPERTIES
+    LANGUAGE C
+    COMPILE_FLAGS "-x objective-c -D__RAVYNOS__ -D__MACH__ -D__WSRPC -D__XIU__ -DRELEASE_LOGO=@\\\"ravynos-mark-64.png\\\" -nostdinc -isystem ${CMAKE_SOURCE_DIR}/usr/libsystem/include -I${CMAKE_SOURCE_DIR}/usr/CoreServices -I${CMAKE_SOURCE_DIR}/usr/CoreServices/WindowServer -I${CMAKE_SOURCE_DIR}/usr/CoreServices/WindowServer/SystemUIServer -I${CMAKE_SOURCE_DIR}/usr/CoreServices/Dock -I${CMAKE_SOURCE_DIR}/usr/CoreServices/WindowServer/libxkbcommon/include -I${CMAKE_SOURCE_DIR}/usr/Frameworks -I${CMAKE_SOURCE_DIR}/usr/Frameworks/Foundation/Headers -I${CMAKE_SOURCE_DIR}/usr/Frameworks/AppKit -I${CMAKE_SOURCE_DIR}/usr/Frameworks/CoreGraphics -I${CMAKE_SOURCE_DIR}/usr/Frameworks/Onyx2D -Wno-incompatible-pointer-types -Wno-int-conversion -Wno-implicit-function-declaration -Wno-visibility -Wno-deprecated-declarations"
+)
+
+add_executable(WindowServer
+    CoreServices/WindowServer/main.m
+    CoreServices/WindowServer/WindowServer.m
+    CoreServices/WindowServer/BSDFramebuffer.m
+    CoreServices/WindowServer/WSDisplay.m
+    CoreServices/WindowServer/WSWindowRecord.m
+    CoreServices/WindowServer/WSAppRecord.m
+    CoreServices/WindowServer/WSInput.m
+)
+xiu_add_user_crt(WindowServer)
+target_link_libraries(WindowServer xkbcommon AppKit CoreGraphics Onyx2D Foundation objc system_xiu)
+
+add_executable(SystemUIServer
+    CoreServices/WindowServer/SystemUIServer/SystemUIServer.m
+    CoreServices/WindowServer/SystemUIServer/AppDelegate.m
+    CoreServices/WindowServer/SystemUIServer/ClockView.m
+    CoreServices/WindowServer/SystemUIServer/MenuView.m
+    CoreServices/WindowServer/SystemUIServer/ExtrasView.m
+    CoreServices/WindowServer/SystemUIServer/MenuBarWindow.m
+    CoreServices/WindowServer/SystemUIServer/NSMenuWindow.m
+    CoreServices/WindowServer/SystemUIServer/NSMainMenuView.m
+    CoreServices/WindowServer/SystemUIServer/SubmenuView.m
+    CoreServices/WindowServer/SystemUIServer/Label.m
+    CoreServices/WindowServer/SystemUIServer/AboutWindow.m
+)
+xiu_add_user_crt(SystemUIServer)
+target_link_libraries(SystemUIServer AppKit CoreGraphics Onyx2D Foundation objc system_xiu)
+
+add_executable(Dock
+    CoreServices/Dock/main.m
+    CoreServices/Dock/Dock.m
+    CoreServices/Dock/DockItem.m
+    CoreServices/Dock/DesktopWindow.m
+    CoreServices/Dock/DockTileData.m
+)
+xiu_add_user_crt(Dock)
+target_link_libraries(Dock AppKit CoreGraphics Onyx2D Foundation objc system_xiu)
+
+add_executable(Filer
+    CoreServices/Filer/FilerMain.m
+)
+xiu_add_user_crt(Filer)
+target_link_libraries(Filer AppKit CoreGraphics Onyx2D Foundation objc system_xiu)
 
 add_executable(guiapp bin/guiapp.c)
 xiu_add_user_crt(guiapp)
-target_link_libraries(guiapp system_xiu)
+target_link_libraries(guiapp AppKit CoreGraphics Onyx2D Foundation objc system_xiu)
 
 add_executable(calc bin/calc.c)
 xiu_add_user_crt(calc)
-target_link_libraries(calc system_xiu)
+target_link_libraries(calc AppKit CoreGraphics Onyx2D Foundation objc system_xiu)
+
+add_executable(plutil bin/plutil.c)
+xiu_add_user_crt(plutil)
+target_link_libraries(plutil system_xiu)
+
+add_executable(defaults bin/defaults.c)
+xiu_add_user_crt(defaults)
+target_link_libraries(defaults system_xiu)
 
 add_executable(cp bin/cp.c)
 xiu_add_user_crt(cp)
@@ -229,31 +716,119 @@ add_executable(memload bin/memload.c)
 xiu_add_user_crt(memload)
 target_link_libraries(memload system_xiu)
 
-# 4. dash Shell Port
-set(DASH_SRC_DIR ${CMAKE_SOURCE_DIR}/dash/src)
-file(GLOB DASH_SOURCES ${DASH_SRC_DIR}/*.c)
-
-list(REMOVE_ITEM DASH_SOURCES 
-    ${DASH_SRC_DIR}/mkinit.c 
-    ${DASH_SRC_DIR}/mknodes.c 
-    ${DASH_SRC_DIR}/mksignames.c 
-    ${DASH_SRC_DIR}/mksyntax.c
+# 4. FreeBSD / ravynOS BSD sh Port
+set(SH_SRC_DIR ${CMAKE_SOURCE_DIR}/sh)
+set(SH_SOURCES
+    ${SH_SRC_DIR}/bltin/echo.c
+    ${SH_SRC_DIR}/alias.c
+    ${SH_SRC_DIR}/arith_yacc.c
+    ${SH_SRC_DIR}/arith_yylex.c
+    ${SH_SRC_DIR}/cd.c
+    ${SH_SRC_DIR}/error.c
+    ${SH_SRC_DIR}/eval.c
+    ${SH_SRC_DIR}/exec.c
+    ${SH_SRC_DIR}/expand.c
+    ${SH_SRC_DIR}/histedit.c
+    ${SH_SRC_DIR}/input.c
+    ${SH_SRC_DIR}/jobs.c
+    ${SH_SRC_DIR}/mail.c
+    ${SH_SRC_DIR}/main.c
+    ${SH_SRC_DIR}/memalloc.c
+    ${SH_SRC_DIR}/miscbltin.c
+    ${SH_SRC_DIR}/mystring.c
+    ${SH_SRC_DIR}/options.c
+    ${SH_SRC_DIR}/output.c
+    ${SH_SRC_DIR}/parser.c
+    ${SH_SRC_DIR}/redir.c
+    ${SH_SRC_DIR}/show.c
+    ${SH_SRC_DIR}/trap.c
+    ${SH_SRC_DIR}/var.c
+    ${SH_SRC_DIR}/builtins.c
+    ${SH_SRC_DIR}/nodes.c
+    ${SH_SRC_DIR}/syntax.c
+    ${SH_SRC_DIR}/shims.c
 )
 
-add_executable(dash ${DASH_SOURCES}
-    ${DASH_SRC_DIR}/builtins.c
-    ${DASH_SRC_DIR}/nodes.c
-    ${DASH_SRC_DIR}/syntax.c
-    ${DASH_SRC_DIR}/signames.c
-    ${DASH_SRC_DIR}/init.c
-    ${DASH_SRC_DIR}/bltin/printf.c
-    ${DASH_SRC_DIR}/bltin/test.c
-    ${DASH_SRC_DIR}/bltin/times.c
+add_executable(sh ${SH_SOURCES})
+xiu_add_user_crt(sh)
+target_link_libraries(sh system_xiu)
+target_include_directories(sh PRIVATE ${SH_SRC_DIR} ${CMAKE_SOURCE_DIR}/usr/libsystem/include)
+target_compile_definitions(sh PRIVATE -DHAVE_CONFIG_H -DBSD=1 -D_GNU_SOURCE -DUSE_TEE=0 -DHAVE_KILLPG=1 -DSHELL -DHAVE_BSEARCH=1 -DHAVE_STRTOD=1 -DNO_HISTORY=1)
+target_compile_options(sh PRIVATE -Wno-int-conversion -Wno-implicit-function-declaration -Wno-unused-variable -Wno-nullability-completeness -Wno-everything)
+
+# 5. Zsh Shell Port (ravynOS / Darwin)
+set(ZSH_SRC_DIR ${CMAKE_SOURCE_DIR}/zsh/Src)
+set(ZSH_SOURCES
+    ${ZSH_SRC_DIR}/main.c
+    ${ZSH_SRC_DIR}/init.c
+    ${ZSH_SRC_DIR}/builtin.c
+    ${ZSH_SRC_DIR}/compat.c
+    ${ZSH_SRC_DIR}/cond.c
+    ${ZSH_SRC_DIR}/context.c
+    ${ZSH_SRC_DIR}/exec.c
+    ${ZSH_SRC_DIR}/glob.c
+    ${ZSH_SRC_DIR}/hashnameddir.c
+    ${ZSH_SRC_DIR}/hashtable.c
+    ${ZSH_SRC_DIR}/hist.c
+    ${ZSH_SRC_DIR}/input.c
+    ${ZSH_SRC_DIR}/jobs.c
+    ${ZSH_SRC_DIR}/lex.c
+    ${ZSH_SRC_DIR}/linklist.c
+    ${ZSH_SRC_DIR}/loop.c
+    ${ZSH_SRC_DIR}/math.c
+    ${ZSH_SRC_DIR}/mem.c
+    ${ZSH_SRC_DIR}/module.c
+    ${ZSH_SRC_DIR}/options.c
+    ${ZSH_SRC_DIR}/params.c
+    ${ZSH_SRC_DIR}/parse.c
+    ${ZSH_SRC_DIR}/pattern.c
+    ${ZSH_SRC_DIR}/prompt.c
+    ${ZSH_SRC_DIR}/signals.c
+    ${ZSH_SRC_DIR}/signames.c
+    ${ZSH_SRC_DIR}/sort.c
+    ${ZSH_SRC_DIR}/string.c
+    ${ZSH_SRC_DIR}/subst.c
+    ${ZSH_SRC_DIR}/text.c
+    ${ZSH_SRC_DIR}/utils.c
 )
-xiu_add_user_crt(dash)
-target_link_libraries(dash system_xiu)
-target_include_directories(dash PRIVATE ${DASH_SRC_DIR})
-target_compile_definitions(dash PRIVATE -DHAVE_CONFIG_H -DBSD -D_GNU_SOURCE -DUSE_TEE=0 -DHAVE_KILLPG=1 -DSHELL -DHAVE_BSEARCH=1 -DHAVE_STRTOD=1)
+
+add_executable(zsh ${ZSH_SOURCES})
+xiu_add_user_crt(zsh)
+target_link_libraries(zsh system_xiu)
+target_include_directories(zsh PRIVATE
+    ${CMAKE_SOURCE_DIR}/zsh
+    ${ZSH_SRC_DIR}
+    ${ZSH_SRC_DIR}/Builtins
+    ${CMAKE_SOURCE_DIR}/usr/libsystem/include
+)
+target_compile_definitions(zsh PRIVATE
+    -DHAVE_CONFIG_H=1
+    -DZSH_STATIC=1
+    -D__MACH__=1
+    -D__XIU__=1
+    -D__APPLE__=1
+)
+target_compile_options(zsh PRIVATE
+    -Wno-everything
+)
+
+# 6. stty Terminal Utility (ravynOS / BSD)
+set(STTY_SRC_DIR ${CMAKE_SOURCE_DIR}/usr/bin/stty)
+add_executable(stty
+    ${STTY_SRC_DIR}/stty.c
+    ${STTY_SRC_DIR}/cchar.c
+    ${STTY_SRC_DIR}/gfmt.c
+    ${STTY_SRC_DIR}/key.c
+    ${STTY_SRC_DIR}/modes.c
+    ${STTY_SRC_DIR}/print.c
+    ${STTY_SRC_DIR}/util.c
+)
+xiu_add_user_crt(stty)
+target_link_libraries(stty system_xiu)
+target_include_directories(stty PRIVATE ${STTY_SRC_DIR} ${CMAKE_SOURCE_DIR}/usr/libsystem/include)
+target_compile_definitions(stty PRIVATE -D__XIU__=1)
+target_compile_options(stty PRIVATE -Wno-everything)
+
 
 # 5. Tiny C Compiler (tcc) Port
 set(TCC_SRC_DIR ${CMAKE_SOURCE_DIR}/tinycc)
@@ -278,3 +853,93 @@ target_compile_definitions(tcc PRIVATE
     -DCONFIG_TCC_SYSINCLUDEPATHS=\"/usr/include\"
     -DTCC_VERSION=\"0.9.27\"
 )
+
+# 7. Sudo Command (ravynOS / BSD Port)
+set(SUDO_DIR ${CMAKE_SOURCE_DIR}/usr/sudo)
+add_executable(sudo
+    ${SUDO_DIR}/src/sudo.c
+    ${SUDO_DIR}/src/parse_args.c
+    ${SUDO_DIR}/src/conversation.c
+    ${SUDO_DIR}/src/exec.c
+    ${SUDO_DIR}/src/exec_common.c
+    ${SUDO_DIR}/src/exec_nopty.c
+    ${SUDO_DIR}/src/exec_pty.c
+    ${SUDO_DIR}/src/get_pty.c
+    ${SUDO_DIR}/src/hooks.c
+    ${SUDO_DIR}/src/limits.c
+    ${SUDO_DIR}/src/load_plugins.c
+    ${SUDO_DIR}/src/net_ifs.c
+    ${SUDO_DIR}/src/preserve_fds.c
+    ${SUDO_DIR}/src/signal.c
+    ${SUDO_DIR}/src/sudo_edit.c
+    ${SUDO_DIR}/src/edit_open.c
+    ${SUDO_DIR}/src/copy_file.c
+    ${SUDO_DIR}/src/openbsd.c
+    ${SUDO_DIR}/src/exec_iolog.c
+    ${SUDO_DIR}/src/exec_intercept.c
+    ${SUDO_DIR}/src/exec_monitor.c
+    ${SUDO_DIR}/src/exec_ptrace.c
+    ${SUDO_DIR}/src/suspend_parent.c
+    ${SUDO_DIR}/src/tgetpass.c
+    ${SUDO_DIR}/src/ttyname.c
+    ${SUDO_DIR}/src/utmp.c
+    ${SUDO_DIR}/lib/util/sudo_conf.c
+    ${SUDO_DIR}/lib/util/sudo_debug.c
+    ${SUDO_DIR}/lib/util/sudo_dso.c
+    ${SUDO_DIR}/lib/util/event.c
+    ${SUDO_DIR}/lib/util/event_select.c
+    ${SUDO_DIR}/lib/util/fatal.c
+    ${SUDO_DIR}/lib/util/getgrouplist.c
+    ${SUDO_DIR}/lib/util/gethostname.c
+    ${SUDO_DIR}/lib/util/gettime.c
+    ${SUDO_DIR}/lib/util/basename.c
+    ${SUDO_DIR}/lib/util/inet_ntop.c
+    ${SUDO_DIR}/lib/util/memrchr.c
+    ${SUDO_DIR}/lib/util/mktemp.c
+    ${SUDO_DIR}/lib/util/pipe2.c
+    ${SUDO_DIR}/lib/util/dup3.c
+    ${SUDO_DIR}/lib/util/roundup.c
+    ${SUDO_DIR}/lib/util/reallocarray.c
+    ${SUDO_DIR}/lib/util/setgroups.c
+    ${SUDO_DIR}/lib/util/sig2str.c
+    ${SUDO_DIR}/lib/util/strtobool.c
+    ${SUDO_DIR}/lib/util/term.c
+    ${SUDO_DIR}/lib/util/arc4random.c
+    ${SUDO_DIR}/lib/util/cfmakeraw.c
+    ${SUDO_DIR}/lib/util/mkdirat.c
+    ${SUDO_DIR}/lib/util/openat.c
+    ${SUDO_DIR}/lib/util/getopt_long.c
+    ${SUDO_DIR}/lib/util/getdelim.c
+    ${SUDO_DIR}/lib/util/key_val.c
+    ${SUDO_DIR}/lib/util/parseln.c
+    ${SUDO_DIR}/lib/util/progname.c
+    ${SUDO_DIR}/lib/util/strsplit.c
+    ${SUDO_DIR}/lib/util/strtoid.c
+    ${SUDO_DIR}/lib/util/strtomode.c
+    ${SUDO_DIR}/lib/util/strtonum.c
+    ${SUDO_DIR}/lib/util/ttysize.c
+    ${SUDO_DIR}/lib/util/secure_path.c
+    ${SUDO_DIR}/lib/util/lbuf.c
+    ${SUDO_DIR}/lib/util/gidlist.c
+    ${SUDO_DIR}/lib/util/locking.c
+    ${SUDO_DIR}/lib/util/pw_dup.c
+    ${SUDO_DIR}/lib/util/rcstr.c
+)
+xiu_add_user_crt(sudo)
+target_link_libraries(sudo system_xiu)
+target_include_directories(sudo PRIVATE
+    ${SUDO_DIR}
+    ${SUDO_DIR}/include
+    ${SUDO_DIR}/src
+    ${CMAKE_SOURCE_DIR}/usr/libsystem/include
+)
+target_compile_definitions(sudo PRIVATE
+    -DHAVE_CONFIG_H=1
+    -D_PATH_SUDO_CONF=\"/etc/sudo.conf\"
+    -DLOCALEDIR=\"/usr/share/locale\"
+    -D__MACH__=1
+    -D__XIU__=1
+    -D__APPLE__=1
+)
+target_compile_options(sudo PRIVATE -Wno-everything)
+

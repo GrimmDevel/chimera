@@ -6,8 +6,8 @@
 #include <kernel/xiu_types.h>
 #include <kernel/ipc_port.h>
 
-#define MACH_MSG_SIZE_MAX       (64 * 1024)
-#define MACH_MSG_HEADER_SIZE    32
+#define MACH_MSG_SIZE_MAX       (1024 * 1024)
+#define MACH_MSG_HEADER_SIZE    24
 #define MACH_MSG_TRAILER_SIZE   8
 #define MACH_MSG_OOL_MAX        (4 * 1024 * 1024)
 
@@ -42,12 +42,10 @@ typedef struct XIU_PACKED mach_msg_header {
     mach_port_name_t    msgh_local_port;
     mach_port_name_t    msgh_voucher_port;
     mach_msg_id_t       msgh_id;
-    u32                 msgh_reserved1;
-    u32                 msgh_reserved2;
 } mach_msg_header_t;
 
 XIU_STATIC_ASSERT(sizeof(mach_msg_header_t) == MACH_MSG_HEADER_SIZE,
-                  "mach_msg_header_t size must be 32 bytes");
+                  "mach_msg_header_t size must be 24 bytes");
 
 typedef struct mach_msg_body {
     u32 msgh_descriptor_count;
@@ -65,7 +63,6 @@ typedef struct XIU_PACKED mach_msg_type_descriptor {
     u16                         pad3;
     u8                          pad4;
     mach_msg_descriptor_type_t  type;
-    u32                         pad_end;
 } mach_msg_type_descriptor_t;
 
 typedef struct XIU_PACKED mach_msg_port_descriptor {
@@ -74,7 +71,6 @@ typedef struct XIU_PACKED mach_msg_port_descriptor {
     u16                         pad2;
     u8                          disposition;
     mach_msg_descriptor_type_t  type;
-    u32                         pad_end;
 } mach_msg_port_descriptor_t;
 
 typedef struct XIU_PACKED mach_msg_ool_descriptor {
@@ -86,7 +82,8 @@ typedef struct XIU_PACKED mach_msg_ool_descriptor {
     mach_msg_size_t             size;
 } mach_msg_ool_descriptor_t;
 
-XIU_STATIC_ASSERT(sizeof(mach_msg_port_descriptor_t) == 16, "port desc size 16");
+XIU_STATIC_ASSERT(sizeof(mach_msg_type_descriptor_t) == 12, "type desc size 12");
+XIU_STATIC_ASSERT(sizeof(mach_msg_port_descriptor_t) == 12, "port desc size 12");
 XIU_STATIC_ASSERT(sizeof(mach_msg_ool_descriptor_t) == 16, "ool desc size 16");
 
 typedef u32 mach_msg_trailer_type_t;

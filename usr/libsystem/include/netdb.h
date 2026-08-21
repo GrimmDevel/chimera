@@ -21,6 +21,7 @@ extern "C" {
 #endif
 
 struct hostent *gethostbyname(const char *name);
+struct hostent *gethostbyaddr(const void *addr, socklen_t len, int type);
 
 #ifdef __cplusplus
 }

@@ -14,10 +14,27 @@
 #include "include/sys/times.h"
 #include "include/sys/time.h"
 #include "include/time.h"
+#include "include/locale.h"
+#include "include/sched.h"
 
 #ifndef NULL
 #define NULL ((void *)0)
 #endif
+
+#include "include/sys/select.h"
+#include "include/sys/poll.h"
+#include "include/sys/sysctl.h"
+#include "include/sys/uio.h"
+#include "include/sys/mman.h"
+#include "include/sys/event.h"
+#include "include/sys/shm.h"
+#include "include/sys/ipc.h"
+#include "include/fcntl.h"
+#include "include/pwd.h"
+#include "include/grp.h"
+#include "include/sys/utsname.h"
+#include "include/kvm.h"
+#include "include/errno.h"
 
 // prototypes for assembly stubs
 extern i64 xiu_exit(u64 code);
@@ -36,13 +53,50 @@ extern i64 xiu_mach_msg(void *msg, u32 option, u32 send_sz, u32 rcv_sz,
                         u32 rcv_name, u32 timeout);
 extern i64 xiu_getdents(int fd, void *buf, usize count);
 extern i64 xiu_stat(const char *path, struct stat *buf);
+extern i64 xiu_fstat(int fd, struct stat *buf);
+extern i64 xiu_lstat(const char *path, struct stat *buf);
 extern i64 xiu_mkdir(const char *path, u32 mode);
+extern i64 xiu_rmdir(u64 path);
+extern i64 xiu_unlink(u64 path);
+extern i64 xiu_access(const char *path, int mode);
+extern i64 xiu_chmod(const char *path, mode_t mode);
+extern i64 xiu_fchmod(int fd, mode_t mode);
+extern i64 xiu_chown(const char *path, uid_t owner, gid_t group);
+extern i64 xiu_fchown(int fd, uid_t owner, gid_t group);
+extern i64 xiu_truncate(const char *path, off_t length);
+extern i64 xiu_ftruncate(int fd, off_t length);
+extern i64 xiu_rename(const char *oldpath, const char *newpath);
+extern i64 xiu_umask(int mask);
 extern i64 xiu_ioctl(int fd, u64 cmd, void *arg);
 extern i64 xiu_fcntl(int fd, int cmd, u64 arg);
 extern i64 xiu_lseek(int fd, i64 offset, int whence);
 extern i64 xiu_getcwd(char *buf, usize size);
 extern i64 xiu_pipe(int pipefd[2]);
+extern i64 xiu_dup(int oldfd);
 extern i64 xiu_dup2(int oldfd, int newfd);
+extern i64 xiu_readv(int fd, const struct iovec *iov, int iovcnt);
+extern i64 xiu_writev(int fd, const struct iovec *iov, int iovcnt);
+extern i64 xiu_pread(int fd, void *buf, usize count, off_t offset);
+extern i64 xiu_pwrite(int fd, const void *buf, usize count, off_t offset);
+extern i64 xiu_getuid(void);
+extern i64 xiu_geteuid(void);
+extern i64 xiu_setuid(uid_t uid);
+extern i64 xiu_seteuid(uid_t euid);
+extern i64 xiu_getgid(void);
+extern i64 xiu_getegid(void);
+extern i64 xiu_setgid(gid_t gid);
+extern i64 xiu_setegid(gid_t egid);
+extern i64 xiu_getgroups(int size, gid_t list[]);
+extern i64 xiu_setgroups(int size, const gid_t *list);
+extern i64 xiu_getppid(void);
+extern i64 xiu_getpgrp(void);
+extern i64 xiu_setpgid(pid_t pid, pid_t pgid);
+extern i64 xiu_setsid(void);
+extern i64 xiu_poll(struct pollfd *fds, unsigned int nfds, int timeout);
+extern i64 xiu_select(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds, struct timeval *timeout);
+extern i64 xiu_sysctl(int *name, unsigned int namelen, void *oldp, size_t *oldlenp, void *newp, size_t newlen);
+extern i64 xiu_gettimeofday(struct timeval *tv, void *tz);
+extern i64 xiu_settimeofday(const struct timeval *tv, const void *tz);
 extern i64 xiu_kill(int pid, int sig);
 extern i64 xiu_sigaction(int sig, const struct sigaction *act, struct sigaction *oldact);
 extern i64 xiu_sigprocmask(int how, const sigset_t *set, sigset_t *oldset);
@@ -63,6 +117,12 @@ static char *s_default_environ[] = {
 char **environ = s_default_environ;
 static int s_environ_allocated = 0;
 static usize s_environ_capacity = 64;
+static int s_xiu_errno = 0;
+
+int *__error(void) {
+    return &s_xiu_errno;
+}
+#undef errno
 int errno = 0;
 
 char ***_NSGetEnviron(void) {
@@ -93,16 +153,28 @@ void exit(int code) {
     ;
 }
 
-i64 write(int fd, const void *buf, usize len) {
+ssize_t write(int fd, const void *buf, size_t len) {
   return xiu_write(fd, buf, len);
 }
 
-i64 read(int fd, void *buf, usize len) {
+ssize_t read(int fd, void *buf, size_t len) {
   return xiu_read(fd, buf, len);
 }
 
-int open(const char *path, int flags, int mode) {
-  return (int)xiu_open(path, flags, mode);
+int open(const char *path, int flags, ...) {
+    mode_t mode = 0;
+    if (flags & O_CREAT) {
+        va_list ap;
+        va_start(ap, flags);
+        mode = (mode_t)va_arg(ap, int);
+        va_end(ap);
+    }
+    i64 ret = xiu_open(path, flags, mode);
+    if (ret < 0) {
+        errno = (int)-ret;
+        return -1;
+    }
+    return (int)ret;
 }
 
 int close(int fd) { return (int)xiu_close(fd); }
@@ -111,7 +183,7 @@ int stat(const char *path, struct stat *buf) {
   return (int)xiu_stat(path, buf);
 }
 
-int mkdir(const char *path, u32 mode) { return (int)xiu_mkdir(path, mode); }
+int mkdir(const char *path, mode_t mode) { return (int)xiu_mkdir(path, mode); }
 
 int ioctl(int fd, u64 cmd, void *arg) { return (int)xiu_ioctl(fd, cmd, arg); }
 
@@ -144,30 +216,40 @@ int memfd_create(const char *name, unsigned int flags) { return -1; }
 
 // directory enumeration
 
+struct __xiu_dir_stream {
+  DIR dir;
+  struct dirent entry;
+};
+
 DIR *opendir(const char *name) {
   int fd = open(name, 0, 0);
   if (fd < 0)
     return NULL;
 
-  DIR *dir = (DIR *)malloc(sizeof(DIR));
-  if (!dir) {
+  struct __xiu_dir_stream *xdir = (struct __xiu_dir_stream *)malloc(sizeof(struct __xiu_dir_stream));
+  if (!xdir) {
     close(fd);
     return NULL;
   }
-  dir->fd = fd;
-  return dir;
+  memset(xdir, 0, sizeof(*xdir));
+  xdir->dir.__dd_fd = fd;
+  return (DIR *)xdir;
 }
 
 struct dirent *readdir(DIR *dirp) {
-  if (xiu_getdents(dirp->fd, &dirp->entry, sizeof(struct dirent)) <= 0) {
+  if (!dirp) return NULL;
+  struct __xiu_dir_stream *xdir = (struct __xiu_dir_stream *)dirp;
+  if (xiu_getdents(xdir->dir.__dd_fd, &xdir->entry, sizeof(struct dirent)) <= 0) {
     return NULL;
   }
-  return &dirp->entry;
+  return &xdir->entry;
 }
 
 int closedir(DIR *dirp) {
-  int fd = dirp->fd;
-  free(dirp);
+  if (!dirp) return -1;
+  struct __xiu_dir_stream *xdir = (struct __xiu_dir_stream *)dirp;
+  int fd = xdir->dir.__dd_fd;
+  free(xdir);
   return close(fd);
 }
 
@@ -176,28 +258,15 @@ int closedir(DIR *dirp) {
  * ═══════════════════════════════════════════════════════════════════════════
  */
 
-typedef struct {
-  u32 msgh_bits;
-  u32 msgh_size;
-  u32 msgh_remote_port;
-  u32 msgh_local_port;
-  u32 msgh_voucher_port;
-  u32 msgh_id;
-  u32 msgh_reserved1;
-  u32 msgh_reserved2;
-} xiu_msg_header_t;
-typedef xiu_msg_header_t mach_msg_header_t;
+#include "include/mach/mach.h"
+#include "include/servers/bootstrap.h"
 
-typedef u32 ipc_space_t;
-typedef u32 mach_port_right_t;
-typedef u32 mach_port_name_t;
-
-#define MACH_PORT_RIGHT_RECEIVE 1
-#define MACH_PORT_NULL 0
-#define MACH_PORT_NAME_NULL 0
+typedef mach_msg_header_t xiu_msg_header_t;
 
 extern i64 xiu_mach_port_allocate(ipc_space_t space, mach_port_right_t right,
                                   mach_port_name_t *name);
+extern i64 xiu_mach_port_deallocate(u64 space, u64 name);
+extern i64 xiu_mach_port_type(u64 space, u64 name, u64 ptype_out);
 extern i64 xiu_mach_lookup_service(const char *name,
                                    mach_port_name_t *port_out);
 extern i64 xiu_mach_msg(void *msg, u32 option, u32 send_sz, u32 rcv_sz,
@@ -253,17 +322,26 @@ i64 XIUPortSendMessage(u32 port, void *msg, u32 size) {
 pid_t fork(void) { return (pid_t)xiu_fork(); }
 
 pid_t waitpid(pid_t pid, int *status, int options) {
-    return (pid_t)xiu_wait4(pid, status, options, NULL);
+    i64 ret = xiu_wait4(pid, status, options, NULL);
+    if (ret < 0) {
+        errno = (int)(-ret);
+        return -1;
+    }
+    return (pid_t)ret;
+}
+
+pid_t wait4(pid_t pid, int *status, int options, struct rusage *rusage) {
+    i64 ret = xiu_wait4(pid, status, options, rusage);
+    if (ret < 0) {
+        errno = (int)(-ret);
+        return -1;
+    }
+    return (pid_t)ret;
 }
 
 pid_t getpid(void) { return (pid_t)xiu_getpid(); }
-pid_t getppid(void) { return 0; }
-uid_t getuid(void) { return 0; }
-uid_t geteuid(void) { return 0; }
-gid_t getgid(void) { return 0; }
-gid_t getegid(void) { return 0; }
-int tcsetpgrp(int fd, pid_t pgrp) { return 0; }
-int dup(int oldfd) { return dup2(oldfd, oldfd); }
+int tcsetpgrp(int fd, pid_t pgrp) { return ioctl(fd, 0x5410, &pgrp); }
+int tcgetpgrp(int fd) { int pgrp = 0; if (ioctl(fd, 0x540F, &pgrp) < 0) return -1; return pgrp; }
 int pipe(int pipefd[2]) { return (int)xiu_pipe(pipefd); }
 i64 lseek(int fd, i64 offset, int whence) { return xiu_lseek(fd, offset, whence); }
 int fcntl(int fd, int cmd, ...) {
@@ -284,25 +362,344 @@ extern i64 xiu_rmdir(u64 path);
 
 int unlink(const char *path) {
   if (!path) return -1;
-  return (int)xiu_unlink((u64)path);
+  i64 ret = xiu_unlink((u64)path);
+  if (ret < 0) { errno = (int)-ret; return -1; }
+  return 0;
 }
 
 int rmdir(const char *path) {
   if (!path) return -1;
-  return (int)xiu_rmdir((u64)path);
+  i64 ret = xiu_rmdir((u64)path);
+  if (ret < 0) { errno = (int)-ret; return -1; }
+  return 0;
 }
 
 int mkstemp(char *tmpl) { return -1; }
-int access(const char *path, int mode) { return 0; }
-int umask(int mask) { return 022; }
+
+int access(const char *path, int mode) {
+  if (!path) { errno = EFAULT; return -1; }
+  i64 ret = xiu_access(path, mode);
+  if (ret < 0) { errno = (int)-ret; return -1; }
+  return 0;
+}
+
+mode_t umask(mode_t mask) {
+  return (mode_t)xiu_umask(mask);
+}
+
+int chmod(const char *path, mode_t mode) {
+  i64 ret = xiu_chmod(path, mode);
+  if (ret < 0) { errno = (int)-ret; return -1; }
+  return 0;
+}
+
+int fchmod(int fd, mode_t mode) {
+  i64 ret = xiu_fchmod(fd, mode);
+  if (ret < 0) { errno = (int)-ret; return -1; }
+  return 0;
+}
+
+int chown(const char *path, uid_t owner, gid_t group) {
+  i64 ret = xiu_chown(path, owner, group);
+  if (ret < 0) { errno = (int)-ret; return -1; }
+  return 0;
+}
+
+int fchown(int fd, uid_t owner, gid_t group) {
+  i64 ret = xiu_fchown(fd, owner, group);
+  if (ret < 0) { errno = (int)-ret; return -1; }
+  return 0;
+}
+
+int truncate(const char *path, off_t length) {
+  i64 ret = xiu_truncate(path, length);
+  if (ret < 0) { errno = (int)-ret; return -1; }
+  return 0;
+}
+
+int ftruncate(int fd, off_t length) {
+  i64 ret = xiu_ftruncate(fd, length);
+  if (ret < 0) { errno = (int)-ret; return -1; }
+  return 0;
+}
+
+int rename(const char *oldpath, const char *newpath) {
+  i64 ret = xiu_rename(oldpath, newpath);
+  if (ret < 0) { errno = (int)-ret; return -1; }
+  return 0;
+}
+
+int dup(int oldfd) {
+  i64 ret = xiu_dup(oldfd);
+  if (ret < 0) { errno = (int)-ret; return -1; }
+  return (int)ret;
+}
+
+int dup2(int oldfd, int newfd) {
+  i64 ret = xiu_dup2(oldfd, newfd);
+  if (ret < 0) { errno = (int)-ret; return -1; }
+  return (int)ret;
+}
+
+ssize_t readv(int fd, const struct iovec *iov, int iovcnt) {
+  i64 ret = xiu_readv(fd, iov, iovcnt);
+  if (ret < 0) { errno = (int)-ret; return -1; }
+  return (ssize_t)ret;
+}
+
+ssize_t writev(int fd, const struct iovec *iov, int iovcnt) {
+  i64 ret = xiu_writev(fd, iov, iovcnt);
+  if (ret < 0) { errno = (int)-ret; return -1; }
+  return (ssize_t)ret;
+}
+
+ssize_t pread(int fd, void *buf, size_t count, off_t offset) {
+  i64 ret = xiu_pread(fd, buf, count, offset);
+  if (ret < 0) { errno = (int)-ret; return -1; }
+  return (ssize_t)ret;
+}
+
+ssize_t pwrite(int fd, const void *buf, size_t count, off_t offset) {
+  i64 ret = xiu_pwrite(fd, buf, count, offset);
+  if (ret < 0) { errno = (int)-ret; return -1; }
+  return (ssize_t)ret;
+}
+
+uid_t getuid(void) { return (uid_t)xiu_getuid(); }
+uid_t geteuid(void) { return (uid_t)xiu_geteuid(); }
+int setuid(uid_t uid) {
+  i64 ret = xiu_setuid(uid);
+  if (ret < 0) { errno = (int)-ret; return -1; }
+  return 0;
+}
+int seteuid(uid_t euid) {
+  i64 ret = xiu_seteuid(euid);
+  if (ret < 0) { errno = (int)-ret; return -1; }
+  return 0;
+}
+gid_t getgid(void) { return (gid_t)xiu_getgid(); }
+gid_t getegid(void) { return (gid_t)xiu_getegid(); }
+int setgid(gid_t gid) {
+  i64 ret = xiu_setgid(gid);
+  if (ret < 0) { errno = (int)-ret; return -1; }
+  return 0;
+}
+int setegid(gid_t egid) {
+  i64 ret = xiu_setegid(egid);
+  if (ret < 0) { errno = (int)-ret; return -1; }
+  return 0;
+}
+int getgroups(int size, gid_t list[]) {
+  i64 ret = xiu_getgroups(size, list);
+  if (ret < 0) { errno = (int)-ret; return -1; }
+  return (int)ret;
+}
+int setgroups(int size, const gid_t *list) {
+  i64 ret = xiu_setgroups(size, list);
+  if (ret < 0) { errno = (int)-ret; return -1; }
+  return 0;
+}
+pid_t getppid(void) { return (pid_t)xiu_getppid(); }
+pid_t getpgrp(void) { return (pid_t)xiu_getpgrp(); }
+int setpgid(pid_t pid, pid_t pgid) {
+  i64 ret = xiu_setpgid(pid, pgid);
+  if (ret < 0) { errno = (int)-ret; return -1; }
+  return 0;
+}
+pid_t setsid(void) {
+  i64 ret = xiu_setsid();
+  if (ret < 0) { errno = (int)-ret; return -1; }
+  return (pid_t)ret;
+}
+
+int poll(struct pollfd *fds, nfds_t nfds, int timeout) {
+  i64 ret = xiu_poll(fds, nfds, timeout);
+  if (ret < 0) { errno = (int)-ret; return -1; }
+  return (int)ret;
+}
+
+int select(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds, struct timeval *timeout) {
+  i64 ret = xiu_select(nfds, readfds, writefds, exceptfds, timeout);
+  return (int)ret;
+}
+
+static unsigned long _next_rand = 1;
+
+void srandom(unsigned int seed) {
+  _next_rand = seed;
+}
+
+void srandomdev(void) {
+  srandom((unsigned int)time(NULL));
+}
+
+long random(void) {
+  _next_rand = _next_rand * 1103515245 + 12345;
+  return (long)((unsigned long)(_next_rand / 65536) % 0x80000000);
+}
+
+char *initstate(unsigned seed, char *state, size_t n) {
+  (void)n;
+  srandom(seed);
+  return state;
+}
+
+char *setstate(const char *state) {
+  return (char *)state;
+}
+
+int gettimeofday(struct timeval *tv, void *tz) {
+  i64 ret = xiu_gettimeofday(tv, tz);
+  if (ret < 0) { errno = (int)-ret; return -1; }
+  return 0;
+}
+
+int settimeofday(const struct timeval *tv, const struct timezone *tz) {
+  i64 ret = xiu_settimeofday(tv, (const void *)tz);
+  if (ret < 0) { errno = (int)-ret; return -1; }
+  return 0;
+}
+
+int sysctl(int *name, unsigned int namelen, void *oldp, size_t *oldlenp, void *newp, size_t newlen) {
+  i64 ret = xiu_sysctl(name, namelen, oldp, oldlenp, newp, newlen);
+  if (ret < 0) { errno = (int)-ret; return -1; }
+  return 0;
+}
+
+int sysctlbyname(const char *name, void *oldp, size_t *oldlenp, void *newp, size_t newlen) {
+  if (!name) { errno = EFAULT; return -1; }
+  int mib[2];
+  if (strcmp(name, "kern.ostype") == 0) {
+    mib[0] = CTL_KERN; mib[1] = KERN_OSTYPE;
+  } else if (strcmp(name, "kern.osrelease") == 0) {
+    mib[0] = CTL_KERN; mib[1] = KERN_OSRELEASE;
+  } else if (strcmp(name, "kern.version") == 0) {
+    mib[0] = CTL_KERN; mib[1] = KERN_VERSION;
+  } else if (strcmp(name, "kern.hostname") == 0) {
+    mib[0] = CTL_KERN; mib[1] = KERN_HOSTNAME;
+  } else if (strcmp(name, "kern.maxvnodes") == 0) {
+    mib[0] = CTL_KERN; mib[1] = KERN_MAXVNODES;
+  } else if (strcmp(name, "kern.maxproc") == 0) {
+    mib[0] = CTL_KERN; mib[1] = KERN_MAXPROC;
+  } else if (strcmp(name, "hw.machine") == 0) {
+    mib[0] = CTL_HW; mib[1] = HW_MACHINE;
+  } else if (strcmp(name, "hw.model") == 0) {
+    mib[0] = CTL_HW; mib[1] = HW_MODEL;
+  } else if (strcmp(name, "hw.ncpu") == 0 || strcmp(name, "hw.activecpu") == 0) {
+    mib[0] = CTL_HW; mib[1] = HW_NCPU;
+  } else if (strcmp(name, "hw.pagesize") == 0) {
+    mib[0] = CTL_HW; mib[1] = HW_PAGESIZE;
+  } else if (strcmp(name, "hw.memsize") == 0 || strcmp(name, "hw.physmem") == 0) {
+    mib[0] = CTL_HW; mib[1] = HW_MEMSIZE;
+  } else if (strcmp(name, "hw.byteorder") == 0) {
+    mib[0] = CTL_HW; mib[1] = HW_BYTEORDER;
+  } else {
+    errno = ENOENT;
+    return -1;
+  }
+  return sysctl(mib, 2, oldp, oldlenp, newp, newlen);
+}
+
+// Darwin Rune Locale & Character Tables
+#include <runetype.h>
+
+_RuneLocale _DefaultRuneLocale = {
+    _RUNE_MAGIC_A,
+    "NONE",
+    NULL,
+    NULL,
+    0xFFFD,
+    {
+        /* 00-1F */
+        _CTYPE_C, _CTYPE_C, _CTYPE_C, _CTYPE_C, _CTYPE_C, _CTYPE_C, _CTYPE_C, _CTYPE_C,
+        _CTYPE_C, _CTYPE_C|_CTYPE_S|_CTYPE_B, _CTYPE_C|_CTYPE_S, _CTYPE_C|_CTYPE_S,
+        _CTYPE_C|_CTYPE_S, _CTYPE_C|_CTYPE_S, _CTYPE_C, _CTYPE_C,
+        _CTYPE_C, _CTYPE_C, _CTYPE_C, _CTYPE_C, _CTYPE_C, _CTYPE_C, _CTYPE_C, _CTYPE_C,
+        _CTYPE_C, _CTYPE_C, _CTYPE_C, _CTYPE_C, _CTYPE_C, _CTYPE_C, _CTYPE_C, _CTYPE_C,
+        /* 20-2F */
+        _CTYPE_S|_CTYPE_B|_CTYPE_R, _CTYPE_P|_CTYPE_R|_CTYPE_G, _CTYPE_P|_CTYPE_R|_CTYPE_G, _CTYPE_P|_CTYPE_R|_CTYPE_G,
+        _CTYPE_P|_CTYPE_R|_CTYPE_G, _CTYPE_P|_CTYPE_R|_CTYPE_G, _CTYPE_P|_CTYPE_R|_CTYPE_G, _CTYPE_P|_CTYPE_R|_CTYPE_G,
+        _CTYPE_P|_CTYPE_R|_CTYPE_G, _CTYPE_P|_CTYPE_R|_CTYPE_G, _CTYPE_P|_CTYPE_R|_CTYPE_G, _CTYPE_P|_CTYPE_R|_CTYPE_G,
+        _CTYPE_P|_CTYPE_R|_CTYPE_G, _CTYPE_P|_CTYPE_R|_CTYPE_G, _CTYPE_P|_CTYPE_R|_CTYPE_G, _CTYPE_P|_CTYPE_R|_CTYPE_G,
+        /* 30-39 (0-9) */
+        _CTYPE_D|_CTYPE_R|_CTYPE_G|_CTYPE_X|0, _CTYPE_D|_CTYPE_R|_CTYPE_G|_CTYPE_X|1,
+        _CTYPE_D|_CTYPE_R|_CTYPE_G|_CTYPE_X|2, _CTYPE_D|_CTYPE_R|_CTYPE_G|_CTYPE_X|3,
+        _CTYPE_D|_CTYPE_R|_CTYPE_G|_CTYPE_X|4, _CTYPE_D|_CTYPE_R|_CTYPE_G|_CTYPE_X|5,
+        _CTYPE_D|_CTYPE_R|_CTYPE_G|_CTYPE_X|6, _CTYPE_D|_CTYPE_R|_CTYPE_G|_CTYPE_X|7,
+        _CTYPE_D|_CTYPE_R|_CTYPE_G|_CTYPE_X|8, _CTYPE_D|_CTYPE_R|_CTYPE_G|_CTYPE_X|9,
+        /* 3A-40 */
+        _CTYPE_P|_CTYPE_R|_CTYPE_G, _CTYPE_P|_CTYPE_R|_CTYPE_G, _CTYPE_P|_CTYPE_R|_CTYPE_G,
+        _CTYPE_P|_CTYPE_R|_CTYPE_G, _CTYPE_P|_CTYPE_R|_CTYPE_G, _CTYPE_P|_CTYPE_R|_CTYPE_G, _CTYPE_P|_CTYPE_R|_CTYPE_G,
+        /* 41-5A (A-Z) */
+        _CTYPE_U|_CTYPE_X|_CTYPE_R|_CTYPE_G|_CTYPE_A|10, _CTYPE_U|_CTYPE_X|_CTYPE_R|_CTYPE_G|_CTYPE_A|11,
+        _CTYPE_U|_CTYPE_X|_CTYPE_R|_CTYPE_G|_CTYPE_A|12, _CTYPE_U|_CTYPE_X|_CTYPE_R|_CTYPE_G|_CTYPE_A|13,
+        _CTYPE_U|_CTYPE_X|_CTYPE_R|_CTYPE_G|_CTYPE_A|14, _CTYPE_U|_CTYPE_X|_CTYPE_R|_CTYPE_G|_CTYPE_A|15,
+        _CTYPE_U|_CTYPE_R|_CTYPE_G|_CTYPE_A, _CTYPE_U|_CTYPE_R|_CTYPE_G|_CTYPE_A,
+        _CTYPE_U|_CTYPE_R|_CTYPE_G|_CTYPE_A, _CTYPE_U|_CTYPE_R|_CTYPE_G|_CTYPE_A,
+        _CTYPE_U|_CTYPE_R|_CTYPE_G|_CTYPE_A, _CTYPE_U|_CTYPE_R|_CTYPE_G|_CTYPE_A,
+        _CTYPE_U|_CTYPE_R|_CTYPE_G|_CTYPE_A, _CTYPE_U|_CTYPE_R|_CTYPE_G|_CTYPE_A,
+        _CTYPE_U|_CTYPE_R|_CTYPE_G|_CTYPE_A, _CTYPE_U|_CTYPE_R|_CTYPE_G|_CTYPE_A,
+        _CTYPE_U|_CTYPE_R|_CTYPE_G|_CTYPE_A, _CTYPE_U|_CTYPE_R|_CTYPE_G|_CTYPE_A,
+        _CTYPE_U|_CTYPE_R|_CTYPE_G|_CTYPE_A, _CTYPE_U|_CTYPE_R|_CTYPE_G|_CTYPE_A,
+        _CTYPE_U|_CTYPE_R|_CTYPE_G|_CTYPE_A, _CTYPE_U|_CTYPE_R|_CTYPE_G|_CTYPE_A,
+        _CTYPE_U|_CTYPE_R|_CTYPE_G|_CTYPE_A, _CTYPE_U|_CTYPE_R|_CTYPE_G|_CTYPE_A,
+        _CTYPE_U|_CTYPE_R|_CTYPE_G|_CTYPE_A, _CTYPE_U|_CTYPE_R|_CTYPE_G|_CTYPE_A,
+        /* 5B-60 */
+        _CTYPE_P|_CTYPE_R|_CTYPE_G, _CTYPE_P|_CTYPE_R|_CTYPE_G, _CTYPE_P|_CTYPE_R|_CTYPE_G,
+        _CTYPE_P|_CTYPE_R|_CTYPE_G, _CTYPE_P|_CTYPE_R|_CTYPE_G, _CTYPE_P|_CTYPE_R|_CTYPE_G,
+        /* 61-7A (a-z) */
+        _CTYPE_L|_CTYPE_X|_CTYPE_R|_CTYPE_G|_CTYPE_A|10, _CTYPE_L|_CTYPE_X|_CTYPE_R|_CTYPE_G|_CTYPE_A|11,
+        _CTYPE_L|_CTYPE_X|_CTYPE_R|_CTYPE_G|_CTYPE_A|12, _CTYPE_L|_CTYPE_X|_CTYPE_R|_CTYPE_G|_CTYPE_A|13,
+        _CTYPE_L|_CTYPE_X|_CTYPE_R|_CTYPE_G|_CTYPE_A|14, _CTYPE_L|_CTYPE_X|_CTYPE_R|_CTYPE_G|_CTYPE_A|15,
+        _CTYPE_L|_CTYPE_R|_CTYPE_G|_CTYPE_A, _CTYPE_L|_CTYPE_R|_CTYPE_G|_CTYPE_A,
+        _CTYPE_L|_CTYPE_R|_CTYPE_G|_CTYPE_A, _CTYPE_L|_CTYPE_R|_CTYPE_G|_CTYPE_A,
+        _CTYPE_L|_CTYPE_R|_CTYPE_G|_CTYPE_A, _CTYPE_L|_CTYPE_R|_CTYPE_G|_CTYPE_A,
+        _CTYPE_L|_CTYPE_R|_CTYPE_G|_CTYPE_A, _CTYPE_L|_CTYPE_R|_CTYPE_G|_CTYPE_A,
+        _CTYPE_L|_CTYPE_R|_CTYPE_G|_CTYPE_A, _CTYPE_L|_CTYPE_R|_CTYPE_G|_CTYPE_A,
+        _CTYPE_L|_CTYPE_R|_CTYPE_G|_CTYPE_A, _CTYPE_L|_CTYPE_R|_CTYPE_G|_CTYPE_A,
+        _CTYPE_L|_CTYPE_R|_CTYPE_G|_CTYPE_A, _CTYPE_L|_CTYPE_R|_CTYPE_G|_CTYPE_A,
+        _CTYPE_L|_CTYPE_R|_CTYPE_G|_CTYPE_A, _CTYPE_L|_CTYPE_R|_CTYPE_G|_CTYPE_A,
+        _CTYPE_L|_CTYPE_R|_CTYPE_G|_CTYPE_A, _CTYPE_L|_CTYPE_R|_CTYPE_G|_CTYPE_A,
+        _CTYPE_L|_CTYPE_R|_CTYPE_G|_CTYPE_A, _CTYPE_L|_CTYPE_R|_CTYPE_G|_CTYPE_A,
+        /* 7B-7F */
+        _CTYPE_P|_CTYPE_R|_CTYPE_G, _CTYPE_P|_CTYPE_R|_CTYPE_G, _CTYPE_P|_CTYPE_R|_CTYPE_G,
+        _CTYPE_P|_CTYPE_R|_CTYPE_G, _CTYPE_C,
+    },
+};
+_RuneLocale *_CurrentRuneLocale = &_DefaultRuneLocale;
+
+int __maskrune(ct_rune_t c, unsigned long f) {
+    if (c < 0 || c == -1) return 0;
+    return (_DefaultRuneLocale.__runetype[c & 0xff] & f) != 0;
+}
+
+unsigned long __runetype(ct_rune_t c) {
+    if (c < 0 || c == -1) return 0;
+    return _DefaultRuneLocale.__runetype[c & 0xff];
+}
+
+int __tolower(ct_rune_t c) {
+    if (c >= 'A' && c <= 'Z') return c + ('a' - 'A');
+    return c;
+}
+
+int __toupper(ct_rune_t c) {
+    if (c >= 'a' && c <= 'z') return c - ('a' - 'A');
+    return c;
+}
 
 #include "include/termios.h"
 
-int sigemptyset(sigset_t *set) { *set = 0; return 0; }
-int sigfillset(sigset_t *set) { *set = 0xFFFFFFFF; return 0; }
-int sigaddset(sigset_t *set, int signum) { *set |= (1 << (signum - 1)); return 0; }
-int sigdelset(sigset_t *set, int signum) { *set &= ~(1 << (signum - 1)); return 0; }
-int sigismember(const sigset_t *set, int signum) { return (*set & (1 << (signum - 1))) != 0; }
+#undef sigemptyset
+#undef sigfillset
+#undef sigaddset
+#undef sigdelset
+#undef sigismember
+int sigemptyset(sigset_t *set) { if (set) *set = 0; return 0; }
+int sigfillset(sigset_t *set) { if (set) *set = ~(sigset_t)0; return 0; }
+int sigaddset(sigset_t *set, int signum) { if (set) *set |= (1U << (signum - 1)); return 0; }
+int sigdelset(sigset_t *set, int signum) { if (set) *set &= ~(1U << (signum - 1)); return 0; }
+int sigismember(const sigset_t *set, int signum) { if (!set) return 0; return (*set & (1U << (signum - 1))) != 0; }
 
 int tcgetattr(int fd, struct termios *termios_p) {
     if (!termios_p) return -1;
@@ -316,6 +713,27 @@ int tcsetattr(int fd, int optional_actions, const struct termios *termios_p) {
 }
 
 // string Utilities
+
+#undef strlen
+#undef strcpy
+#undef strncpy
+#undef strcmp
+#undef strncmp
+#undef strcat
+#undef strncat
+#undef strchr
+#undef strrchr
+#undef strstr
+#undef strdup
+#undef memcpy
+#undef memset
+#undef memmove
+#undef memcmp
+#undef bzero
+#undef __bzero
+#undef sprintf
+#undef snprintf
+#undef vsnprintf
 
 usize strlen(const char *s) {
   usize len = 0;
@@ -526,7 +944,7 @@ int vsnprintf(char *buf, usize n, const char *fmt, __builtin_va_list args) {
 
     if (spec == 's') {
       char *s = __builtin_va_arg(args, char *);
-      if (!s) s = "(null)";
+      if (!s || (uptr)s < 0x1000 || (uptr)s >= 0x0000800000000000ULL) s = "(null)";
       usize slen = 0;
       while (s[slen] && (precision < 0 || (int)slen < precision)) slen++;
 
@@ -538,6 +956,11 @@ int vsnprintf(char *buf, usize n, const char *fmt, __builtin_va_list args) {
       if (left_align && width > (int)slen) {
         for (int p = 0; p < width - (int)slen; p++) format_putc(buf, n, &pos, ' ');
       }
+    } else if (spec == 'm') {
+      const char *s = strerror(errno);
+      if (!s) s = "Unknown error";
+      usize slen = strlen(s);
+      for (usize p = 0; p < slen; p++) format_putc(buf, n, &pos, s[p]);
     } else if (spec == 'c') {
       char c = (char)__builtin_va_arg(args, int);
       format_putc(buf, n, &pos, c);
@@ -553,6 +976,12 @@ int vsnprintf(char *buf, usize n, const char *fmt, __builtin_va_list args) {
       else if (long_count == 1) val = __builtin_va_arg(args, unsigned long);
       else val = __builtin_va_arg(args, unsigned int);
       format_unsigned(buf, n, &pos, val, 10);
+    } else if (spec == 'o') {
+      u64 val;
+      if (long_count > 1) val = __builtin_va_arg(args, unsigned long long);
+      else if (long_count == 1) val = __builtin_va_arg(args, unsigned long);
+      else val = __builtin_va_arg(args, unsigned int);
+      format_unsigned(buf, n, &pos, val, 8);
     } else if (spec == 'x' || spec == 'X') {
       u64 val;
       if (long_count > 1) val = __builtin_va_arg(args, unsigned long long);
@@ -628,8 +1057,20 @@ struct malloc_chunk {
 
 static struct malloc_chunk *g_malloc_list = NULL;
 
+static void split_chunk(struct malloc_chunk *chunk, usize size) {
+  if (chunk->size >= size + sizeof(struct malloc_chunk) + 16) {
+    struct malloc_chunk *new_chunk = (struct malloc_chunk *)((u8 *)(chunk + 1) + size);
+    new_chunk->size = chunk->size - size - sizeof(struct malloc_chunk);
+    new_chunk->free = 1;
+    new_chunk->next = chunk->next;
+    chunk->size = size;
+    chunk->next = new_chunk;
+  }
+}
+
 void *malloc(usize size) {
-  if (size == 0) return NULL;
+  if (size == 0) size = 16;
+  if (size > 0x40000000ULL) return NULL;
   
   // align to 16 bytes
   size = (size + 15) & ~15;
@@ -637,15 +1078,17 @@ void *malloc(usize size) {
   struct malloc_chunk *curr = g_malloc_list;
   while (curr) {
     if (curr->free && curr->size >= size) {
+      split_chunk(curr, size);
       curr->free = 0;
       return (void *)(curr + 1);
     }
     curr = curr->next;
   }
 
-  // allocate new pages
+  // allocate new pages (minimum 64KB)
   usize alloc_size = size + sizeof(struct malloc_chunk);
   if (alloc_size < 65536) alloc_size = 65536;
+  alloc_size = (alloc_size + 4095) & ~4095;
   
   void *ptr = mmap(NULL, alloc_size, 3, 0x22, -1, 0);
   if (ptr == (void *)-1) return NULL;
@@ -656,6 +1099,7 @@ void *malloc(usize size) {
   chunk->next = g_malloc_list;
   g_malloc_list = chunk;
 
+  split_chunk(chunk, size);
   return (void *)(chunk + 1);
 }
 
@@ -699,11 +1143,16 @@ void *memmove(void *dest, const void *src, usize n) {
 
 void free(void *ptr) {
   if (!ptr) return;
+  struct malloc_chunk *chunk = (struct malloc_chunk *)ptr - 1;
+  chunk->free = 1;
+
+  // coalesce adjacent free chunks
   struct malloc_chunk *curr = g_malloc_list;
   while (curr) {
-    if ((void *)(curr + 1) == ptr) {
-      curr->free = 1;
-      return;
+    while (curr->free && curr->next && curr->next->free &&
+           (u8 *)(curr + 1) + curr->size == (u8 *)curr->next) {
+      curr->size += sizeof(struct malloc_chunk) + curr->next->size;
+      curr->next = curr->next->next;
     }
     curr = curr->next;
   }
@@ -711,8 +1160,17 @@ void free(void *ptr) {
 
 
 int fstat(int fd, struct stat *buf) {
-  return 0; // stub
+  i64 ret = xiu_fstat(fd, buf);
+  if (ret < 0) { errno = (int)-ret; return -1; }
+  return 0;
 }
+
+int lstat(const char *path, struct stat *buf) {
+  i64 ret = xiu_lstat(path, buf);
+  if (ret < 0) { errno = (int)-ret; return -1; }
+  return 0;
+}
+
 
 int sched_yield(void) {
     xiu_yield();
@@ -776,9 +1234,9 @@ void perror(const char *s) {
     else printf("error\n");
 }
 
-i64 getline(char **lineptr, usize *n, FILE *stream) {
+ssize_t getline(char **lineptr, size_t *n, FILE *stream) {
     if (!lineptr || !n) return -1;
-    int fd = stream ? (((uptr)stream <= 2) ? (int)(uptr)stream : stream->fd) : 0;
+    int fd = stream ? (((uptr)stream <= 2) ? (int)(uptr)stream : stream->_file) : 0;
     if (!*lineptr) {
         *n = 128;
         *lineptr = malloc(*n);
@@ -797,11 +1255,6 @@ i64 getline(char **lineptr, usize *n, FILE *stream) {
     if (pos == 0) return -1;
     (*lineptr)[pos] = '\0';
     return (i64)pos;
-}
-
-int ftruncate(int fd, i64 length) {
-    (void)fd; (void)length;
-    return 0;
 }
 
 time_t time(time_t *tloc) {
@@ -902,7 +1355,7 @@ int fprintf(FILE *f, const char *fmt, ...) {
   __builtin_va_start(args, fmt);
   int res = vsnprintf(buf, sizeof(buf), fmt, args);
   __builtin_va_end(args);
-  int fd = ((uptr)f <= 2) ? (int)(uptr)f : (f ? f->fd : 1);
+  int fd = ((uptr)f <= 2) ? (int)(uptr)f : (f ? f->_file : 1);
   write(fd, buf, res);
   return res;
 }
@@ -910,9 +1363,13 @@ int fprintf(FILE *f, const char *fmt, ...) {
 int vfprintf(FILE *f, const char *fmt, __builtin_va_list args) {
   char buf[2048];
   int res = vsnprintf(buf, sizeof(buf), fmt, args);
-  int fd = ((uptr)f <= 2) ? (int)(uptr)f : (f ? f->fd : 1);
+  int fd = ((uptr)f <= 2) ? (int)(uptr)f : (f ? f->_file : 1);
   write(fd, buf, res);
   return res;
+}
+
+int vprintf(const char *fmt, __builtin_va_list args) {
+  return vfprintf(stdout, fmt, args);
 }
 
 FILE *fopen(const char *path, const char *mode) {
@@ -931,7 +1388,8 @@ FILE *fopen(const char *path, const char *mode) {
     errno = 12; // enomem
     return NULL;
   }
-  f->fd = fd;
+  memset(f, 0, sizeof(*f));
+  f->_file = fd;
   return f;
 }
 
@@ -944,17 +1402,52 @@ FILE *fdopen(int fd, const char *mode) {
   (void)mode;
   FILE *f = (FILE *)malloc(sizeof(FILE));
   if (!f) return NULL;
-  f->fd = fd;
+  memset(f, 0, sizeof(*f));
+  f->_file = fd;
   return f;
 }
 int fclose(FILE *f) {
   if (!f) return -1;
   if ((uptr)f > 2) {
-    close(f->fd);
+    close(f->_file);
     free(f);
   }
   return 0;
 }
+
+static FILE __sF_stdin  = { ._file = 0, ._flags = 0x0001 };
+static FILE __sF_stdout = { ._file = 1, ._flags = 0x0002 };
+static FILE __sF_stderr = { ._file = 2, ._flags = 0x0002 };
+
+FILE *__stdinp  = &__sF_stdin;
+FILE *__stdoutp = &__sF_stdout;
+FILE *__stderrp = &__sF_stderr;
+
+FILE *fopen$DARWIN_EXTSN(const char *path, const char *mode) {
+  return fopen(path, mode);
+}
+
+FILE *fdopen$DARWIN_EXTSN(int fd, const char *mode) {
+  return fdopen(fd, mode);
+}
+
+long sysconf(int name) {
+  switch (name) {
+  case 1: return 262144;
+  case 2: return 64;
+  case 3: return 100;
+  case 4: return 16;
+  case 5: return 256;
+  case 29: return 4096;
+  case 58: return 1;
+  default: return -1;
+  }
+}
+
+void *dlopen(const char *filename, int flag) { (void)filename; (void)flag; return (void *)0; }
+int dlclose(void *handle) { (void)handle; return 0; }
+void *dlsym(void *handle, const char *symbol) { (void)handle; (void)symbol; return (void *)0; }
+char *dlerror(void) { return "Dynamic linking not supported"; }
 
 int mprotect(void *addr, usize len, int prot) {
   (void)addr; (void)len; (void)prot;
@@ -982,8 +1475,164 @@ struct tm *localtime(const time_t *timer) {
   return &s_tm_buf;
 }
 
+struct tm *localtime_r(const time_t *timer, struct tm *result) {
+  if (!result) return NULL;
+  struct tm *t = localtime(timer);
+  if (t) *result = *t;
+  return result;
+}
+
 struct tm *gmtime(const time_t *timer) {
   return localtime(timer);
+}
+
+struct tm *gmtime_r(const time_t *timer, struct tm *result) {
+  return localtime_r(timer, result);
+}
+
+void tzset(void) {}
+
+int setpriority(int which, id_t who, int prio) {
+  (void)which; (void)who; (void)prio;
+  return 0;
+}
+
+int socketpair(int domain, int type, int protocol, int sv[2]) {
+  (void)domain; (void)type; (void)protocol;
+  return pipe(sv);
+}
+
+int utimensat(int fd, const char *path, const struct timespec times[2], int flag) {
+  (void)fd; (void)path; (void)times; (void)flag;
+  return 0;
+}
+
+char *strtok_r(char *str, const char *delim, char **saveptr) {
+  char *s;
+  if (str) s = str;
+  else if (saveptr && *saveptr) s = *saveptr;
+  else return NULL;
+
+  while (*s && strchr(delim, *s)) s++;
+  if (*s == '\0') {
+    if (saveptr) *saveptr = NULL;
+    return NULL;
+  }
+  char *token = s;
+  while (*s && !strchr(delim, *s)) s++;
+  if (*s) {
+    *s = '\0';
+    if (saveptr) *saveptr = s + 1;
+  } else {
+    if (saveptr) *saveptr = NULL;
+  }
+  return token;
+}
+
+int getentropy(void *buf, size_t buflen) {
+  if (!buf || buflen > 256) return -1;
+  int fd = open("/dev/urandom", O_RDONLY);
+  if (fd >= 0) {
+    read(fd, buf, buflen);
+    close(fd);
+  } else {
+    unsigned char *p = (unsigned char *)buf;
+    static unsigned long seed = 0x123456789abcdef0;
+    for (size_t i = 0; i < buflen; i++) {
+      seed = seed * 6364136223846793005ULL + 1;
+      p[i] = (unsigned char)(seed >> 32);
+    }
+  }
+  return 0;
+}
+
+int fchdir(int fd) {
+  (void)fd;
+  return 0;
+}
+
+ssize_t getdelim(char **lineptr, size_t *n, int delim, FILE *stream) {
+  if (!lineptr || !n || !stream) return -1;
+  if (!*lineptr || *n == 0) {
+    *n = 128;
+    *lineptr = (char *)malloc(*n);
+    if (!*lineptr) return -1;
+  }
+  size_t idx = 0;
+  int c;
+  while ((c = fgetc(stream)) != EOF) {
+    if (idx + 2 >= *n) {
+      size_t new_n = *n * 2;
+      char *new_ptr = (char *)realloc(*lineptr, new_n);
+      if (!new_ptr) return -1;
+      *lineptr = new_ptr;
+      *n = new_n;
+    }
+    (*lineptr)[idx++] = (char)c;
+    if (c == delim) break;
+  }
+  if (idx == 0 && c == EOF) return -1;
+  (*lineptr)[idx] = '\0';
+  return (ssize_t)idx;
+}
+
+int chroot(const char *dirname) {
+  (void)dirname;
+  return 0;
+}
+
+void closefrom(int lowfd) {
+  for (int fd = lowfd; fd < 256; fd++) {
+    close(fd);
+  }
+}
+
+void explicit_bzero(void *b, size_t len) {
+  volatile unsigned char *p = (volatile unsigned char *)b;
+  while (len--) *p++ = 0;
+}
+
+void freezero(void *ptr, size_t size) {
+  if (ptr) {
+    explicit_bzero(ptr, size);
+    free(ptr);
+  }
+}
+
+int futimens(int fd, const struct timespec times[2]) {
+  (void)fd; (void)times;
+  return 0;
+}
+
+pid_t getpgid(pid_t pid) {
+  return pid ? pid : getpgrp();
+}
+
+pid_t getsid(pid_t pid) {
+  return pid ? pid : getpgrp();
+}
+
+int getgrouplist(const char *name, int basegid, int *groups, int *ngroups) {
+  (void)name;
+  if (!groups || !ngroups || *ngroups < 1) {
+    if (ngroups) *ngroups = 1;
+    return -1;
+  }
+  groups[0] = basegid;
+  *ngroups = 1;
+  return 1;
+}
+
+const char *const sudo_sys_signame[32] = {
+    "ZERO", "HUP", "INT", "QUIT", "ILL", "TRAP", "ABRT", "EMT",
+    "FPE", "KILL", "BUS", "SEGV", "SYS", "PIPE", "ALRM", "TERM",
+    "URG", "STOP", "TSTP", "CONT", "CHLD", "TTIN", "TTOU", "IO",
+    "XCPU", "XFSZ", "VTALRM", "PROF", "WINCH", "INFO", "USR1", "USR2"
+};
+
+const char *sudo_gai_strerror(int ecode) {
+  (void)ecode;
+  return "Unknown error";
 }
 
 char *getenv(const char *name) {
@@ -1068,7 +1717,7 @@ int unsetenv(const char *name) {
 
 usize fread(void *ptr, usize size, usize n, FILE *f) {
   if (!f || !ptr || size == 0 || n == 0) return 0;
-  int fd = ((uptr)f <= 2) ? (int)(uptr)f : f->fd;
+  int fd = ((uptr)f <= 2) ? (int)(uptr)f : f->_file;
   i64 res = read(fd, ptr, size * n);
   if (res <= 0) return 0;
   return (usize)res / size;
@@ -1076,7 +1725,7 @@ usize fread(void *ptr, usize size, usize n, FILE *f) {
 
 usize fwrite(const void *ptr, usize size, usize n, FILE *f) {
   if (!f || !ptr || size == 0 || n == 0) return 0;
-  int fd = ((uptr)f <= 2) ? (int)(uptr)f : f->fd;
+  int fd = ((uptr)f <= 2) ? (int)(uptr)f : f->_file;
   i64 res = write(fd, ptr, size * n);
   if (res <= 0) return 0;
   return (usize)res / size;
@@ -1084,27 +1733,27 @@ usize fwrite(const void *ptr, usize size, usize n, FILE *f) {
 
 int fputc(int c, FILE *f) {
   char ch = (char)c;
-  int fd = ((uptr)f <= 2) ? (int)(uptr)f : (f ? f->fd : 1);
+  int fd = ((uptr)f <= 2) ? (int)(uptr)f : (f ? f->_file : 1);
   write(fd, &ch, 1);
   return c;
 }
 
 int fputs(const char *s, FILE *f) {
   if (!s) return 0;
-  int fd = ((uptr)f <= 2) ? (int)(uptr)f : (f ? f->fd : 1);
+  int fd = ((uptr)f <= 2) ? (int)(uptr)f : (f ? f->_file : 1);
   return (int)write(fd, s, strlen(s));
 }
 
 int fseek(FILE *f, long offset, int whence) {
   if (!f) return -1;
-  int fd = ((uptr)f <= 2) ? (int)(uptr)f : f->fd;
+  int fd = ((uptr)f <= 2) ? (int)(uptr)f : f->_file;
   i64 res = lseek(fd, (i64)offset, whence);
   return (res >= 0) ? 0 : -1;
 }
 
 long ftell(FILE *f) {
   if (!f) return -1;
-  int fd = ((uptr)f <= 2) ? (int)(uptr)f : f->fd;
+  int fd = ((uptr)f <= 2) ? (int)(uptr)f : f->_file;
   return (long)lseek(fd, 0, 1);
 }
 
@@ -1323,15 +1972,6 @@ int execvp(const char *file, char *const argv[]) {
   return -1;
 }
 
-int gettimeofday(struct timeval *tv, void *tz) {
-  (void)tz;
-  if (tv) {
-    tv->tv_sec = 1755567890;
-    tv->tv_usec = 0;
-  }
-  return 0;
-}
-
 char *stpncpy(char *dest, const char *src, usize n) {
   usize i;
   for (i = 0; i < n && src[i] != '\0'; i++) dest[i] = src[i];
@@ -1342,9 +1982,6 @@ char *stpncpy(char *dest, const char *src, usize n) {
 
 int killpg(pid_t pgrp, int sig) { return kill(-pgrp, sig); }
 int isatty(int fd) { return fd < 3; }
-int tcgetpgrp(int fd) { return 0; }
-int setpgid(pid_t pid, pid_t pgid) { return 0; }
-pid_t getpgrp(void) { return 0; }
 char *setlocale(int category, const char *locale) { return "C"; }
 int strcoll(const char *s1, const char *s2) { return strcmp(s1, s2); }
 int strcasecmp(const char *s1, const char *s2) {
@@ -1403,7 +2040,7 @@ int sigaction(int signum, const struct sigaction *act, struct sigaction *oldact)
     return (int)xiu_sigaction(signum, act, oldact);
 }
 
-sighandler_t signal(int signum, sighandler_t handler) {
+sig_t signal(int signum, sig_t handler) {
     struct sigaction act, oldact;
     act.sa_handler = handler;
     act.sa_flags = 0;
@@ -1426,11 +2063,7 @@ int sigprocmask(int how, const sigset_t *set, sigset_t *oldset) {
     return (int)xiu_sigprocmask(how, set, oldset);
 }
 
-int dup2(int oldfd, int newfd) {
-    return (int)xiu_dup2(oldfd, newfd);
-}
-
-const char *sys_siglist[NSIG] = {
+const char *const sys_siglist[NSIG] = {
     [0] = "Signal 0", [SIGHUP] = "Hangup", [SIGINT] = "Interrupt", [SIGQUIT] = "Quit",
     [SIGILL] = "Illegal instruction", [SIGTRAP] = "Trace/breakpoint trap", [SIGABRT] = "Aborted",
     [SIGFPE] = "Floating point exception", [SIGKILL] = "Killed", [SIGUSR1] = "User defined signal 1",
@@ -1447,7 +2080,6 @@ char *strsignal(int sig) {
     return "Unknown signal";
 }
 
-int getgroups(int size, gid_t list[]) { return 0; }
 clock_t times(struct tms *buffer) { return 0; }
 
 int chdir(const char *path) { return (int)xiu_chdir(path); }
@@ -1517,7 +2149,7 @@ wchar_t *wcschr(const wchar_t *s, wchar_t c) { return NULL; }
 // generic syscall wrapper for variadic syscalls
 extern i64 xiu_syscall(u64 num, u64 arg1, u64 arg2, u64 arg3, u64 arg4, u64 arg5, u64 arg6);
 
-long syscall(long number, ...) {
+int syscall(int number, ...) {
     __builtin_va_list ap;
     __builtin_va_start(ap, number);
     
@@ -1533,21 +2165,20 @@ long syscall(long number, ...) {
     return (long)xiu_syscall((u64)number, arg1, arg2, arg3, arg4, arg5, arg6);
 }
 
-// darwin mach ipc apis
+mach_port_t mach_task_self_ = 1;
 
-extern i64 xiu_mach_port_deallocate(u64 space, u64 name);
-extern i64 xiu_mach_port_type(u64 space, u64 name, u64 ptype_out);
-extern i64 xiu_task_self(void);
-
-mach_port_name_t mach_task_self(void) {
-    return (mach_port_name_t)xiu_task_self();
+#undef mach_task_self
+mach_port_t mach_task_self(void) {
+    return mach_task_self_;
 }
 
-int mach_msg_trap(void *msg, int option, unsigned int send_size, unsigned int rcv_size,
-                  unsigned int rcv_name, unsigned int timeout, unsigned int notify) {
+mach_msg_return_t mach_msg_trap(mach_msg_header_t *msg, mach_msg_option_t option,
+                                mach_msg_size_t send_size, mach_msg_size_t rcv_size,
+                                mach_port_name_t rcv_name, mach_msg_timeout_t timeout,
+                                mach_port_name_t notify) {
     (void)notify;
-    return (int)xiu_mach_msg(msg, (u32)option, (u32)send_size, (u32)rcv_size,
-                            (u32)rcv_name, (u32)timeout);
+    return (mach_msg_return_t)xiu_mach_msg(msg, (u32)option, (u32)send_size, (u32)rcv_size,
+                                          (u32)rcv_name, (u32)timeout);
 }
 
 int mach_port_allocate(unsigned int task, unsigned int right, unsigned int *name) {
@@ -1591,7 +2222,7 @@ int mach_vm_allocate(unsigned int target, unsigned long long *address, unsigned 
     req.size = size;
     req.flags = (unsigned int)flags;
 
-    int rc = mach_msg_trap(&req, 1, sizeof(req), 0, 0, 1000, 0);
+    int rc = mach_msg_trap((mach_msg_header_t *)&req, 1, sizeof(req), 0, 0, 1000, 0);
     if (rc != 0) {
         mach_port_deallocate(mach_task_self(), reply_port);
         return rc;
@@ -1599,7 +2230,7 @@ int mach_vm_allocate(unsigned int target, unsigned long long *address, unsigned 
 
     rep_t rep;
     __builtin_memset(&rep, 0, sizeof(rep));
-    rc = mach_msg_trap(&rep, 2, 0, sizeof(rep) + 64, reply_port, 1000, 0);
+    rc = mach_msg_trap((mach_msg_header_t *)&rep, 2, 0, sizeof(rep) + 64, reply_port, 1000, 0);
     mach_port_deallocate(mach_task_self(), reply_port);
     if (rc != 0) return rc;
 
@@ -1631,7 +2262,7 @@ int mach_vm_deallocate(unsigned int target, unsigned long long address, unsigned
     req.address = address;
     req.size = size;
 
-    int rc = mach_msg_trap(&req, 1, sizeof(req), 0, 0, 1000, 0);
+    int rc = mach_msg_trap((mach_msg_header_t *)&req, 1, sizeof(req), 0, 0, 1000, 0);
     if (rc != 0) {
         mach_port_deallocate(mach_task_self(), reply_port);
         return rc;
@@ -1639,7 +2270,7 @@ int mach_vm_deallocate(unsigned int target, unsigned long long address, unsigned
 
     rep_t rep;
     __builtin_memset(&rep, 0, sizeof(rep));
-    rc = mach_msg_trap(&rep, 2, 0, sizeof(rep) + 64, reply_port, 1000, 0);
+    rc = mach_msg_trap((mach_msg_header_t *)&rep, 2, 0, sizeof(rep) + 64, reply_port, 1000, 0);
     mach_port_deallocate(mach_task_self(), reply_port);
     if (rc != 0) return rc;
     return (int)rep.ret_code;
@@ -1647,28 +2278,36 @@ int mach_vm_deallocate(unsigned int target, unsigned long long address, unsigned
 
 // darwin mach bootstrap server apis
 
-#include <bootstrap.h>
-
 mach_port_t bootstrap_port = 1; // default root bootstrap port
 
 extern i64 xiu_mach_register_service(const char *name, mach_port_name_t port_name);
 extern i64 xiu_mach_lookup_service(const char *name, mach_port_name_t *port_out);
 
-kern_return_t bootstrap_register(mach_port_t bp, const char *service_name, mach_port_t sp) {
+kern_return_t bootstrap_register(mach_port_t bp, name_t service_name, mach_port_t sp) {
     (void)bp;
     if (!service_name) return BOOTSTRAP_UNKNOWN_SERVICE;
     return (xiu_mach_register_service(service_name, (mach_port_name_t)sp) == 0) ? BOOTSTRAP_SUCCESS : BOOTSTRAP_NO_MEMORY;
 }
 
-kern_return_t bootstrap_look_up(mach_port_t bp, const char *service_name, mach_port_t *sp) {
+kern_return_t bootstrap_look_up(mach_port_t bp, const name_t service_name, mach_port_t *sp) {
     (void)bp;
     if (!service_name || !sp) return BOOTSTRAP_UNKNOWN_SERVICE;
     mach_port_name_t p = 0;
-    if (xiu_mach_lookup_service(service_name, &p) != 0 || p == 0) {
-        return BOOTSTRAP_UNKNOWN_SERVICE;
+    if (xiu_mach_lookup_service(service_name, &p) == 0 && p != 0) {
+        *sp = (mach_port_t)p;
+        return BOOTSTRAP_SUCCESS;
     }
-    *sp = (mach_port_t)p;
-    return BOOTSTRAP_SUCCESS;
+    if (strstr(service_name, "WindowServer")) {
+        if (xiu_mach_lookup_service("com.ravynos.WindowServer", &p) == 0 && p != 0) {
+            *sp = (mach_port_t)p;
+            return BOOTSTRAP_SUCCESS;
+        }
+        if (xiu_mach_lookup_service("com.apple.WindowServer", &p) == 0 && p != 0) {
+            *sp = (mach_port_t)p;
+            return BOOTSTRAP_SUCCESS;
+        }
+    }
+    return BOOTSTRAP_UNKNOWN_SERVICE;
 }
 
 extern i64 xiu_sysinfo(void *info);
@@ -1744,6 +2383,11 @@ int getsockopt(int socket, int level, int option_name, void *option_value, sockl
 }
 
 // endianness conversions
+
+#undef htons
+#undef ntohs
+#undef htonl
+#undef ntohl
 
 uint16_t htons(uint16_t v) { return (uint16_t)(((v & 0xFF) << 8) | ((v >> 8) & 0xFF)); }
 uint16_t ntohs(uint16_t v) { return htons(v); }
@@ -1956,21 +2600,1072 @@ struct hostent *gethostbyname(const char *name) {
     return NULL;
 }
 
-int rename(const char *oldpath, const char *newpath) {
-    (void)oldpath;
-    (void)newpath;
-    return -1;
-}
-
-int chmod(const char *path, mode_t mode) {
-    (void)path;
-    (void)mode;
-    return 0;
-}
-
 int getpagesize(void) {
     return 4096;
 }
+
+int vasprintf(char **ret, const char *format, va_list ap) {
+    va_list ap_copy;
+    va_copy(ap_copy, ap);
+    int len = vsnprintf(NULL, 0, format, ap_copy);
+    va_end(ap_copy);
+    if (len < 0) {
+        *ret = NULL;
+        return -1;
+    }
+    *ret = (char *)malloc(len + 1);
+    if (!*ret) return -1;
+    return vsnprintf(*ret, len + 1, format, ap);
+}
+
+int asprintf(char **ret, const char *format, ...) {
+    va_list ap;
+    va_start(ap, format);
+    int res = vasprintf(ret, format, ap);
+    va_end(ap);
+    return res;
+}
+
+char *crypt(const char *key, const char *salt) {
+    (void)salt;
+    return (char *)key;
+}
+
+static struct passwd g_root_pw = {
+    .pw_name = "root",
+    .pw_passwd = "*",
+    .pw_uid = 0,
+    .pw_gid = 0,
+    .pw_change = 0,
+    .pw_class = "",
+    .pw_gecos = "Root User",
+    .pw_dir = "/Users/root",
+    .pw_shell = "/bin/zsh",
+    .pw_expire = 0,
+};
+
+static struct passwd g_fvr_pw = {
+    .pw_name = "fvr",
+    .pw_passwd = "*",
+    .pw_uid = 501,
+    .pw_gid = 20,
+    .pw_change = 0,
+    .pw_class = "",
+    .pw_gecos = "fvr",
+    .pw_dir = "/Users/fvr",
+    .pw_shell = "/bin/zsh",
+    .pw_expire = 0,
+};
+
+static struct passwd g_user_pw = {
+    .pw_name = "user",
+    .pw_passwd = "*",
+    .pw_uid = 502,
+    .pw_gid = 20,
+    .pw_change = 0,
+    .pw_class = "",
+    .pw_gecos = "XIU User",
+    .pw_dir = "/Users/user",
+    .pw_shell = "/bin/zsh",
+    .pw_expire = 0,
+};
+
+struct passwd *getpwnam(const char *name) {
+    if (!name) return NULL;
+    if (strcmp(name, "root") == 0) return &g_root_pw;
+    if (strcmp(name, "fvr") == 0) return &g_fvr_pw;
+    return &g_user_pw;
+}
+
+struct passwd *getpwuid(uid_t uid) {
+    if (uid == 0) {
+        char *u = getenv("USER");
+        if (u && strcmp(u, "root") == 0) return &g_root_pw;
+        return &g_fvr_pw;
+    }
+    if (uid == 501) return &g_fvr_pw;
+    return &g_user_pw;
+}
+
+int setlogin(const char *name) {
+    (void)name;
+    return 0;
+}
+
+int kqueue(void) {
+    return dup(0);
+}
+
+int kevent(int kq, const struct kevent *changelist, int nchanges, struct kevent *eventlist, int nevents, const struct timespec *timeout) {
+    (void)kq; (void)changelist; (void)nchanges; (void)eventlist; (void)nevents; (void)timeout;
+    return 0;
+}
+
+kvm_t *kvm_open(const char *execfile, const char *corefile, const char *swapfile, int flags, const char *errstr) {
+    (void)execfile; (void)corefile; (void)swapfile; (void)flags; (void)errstr;
+    static int dummy_kd = 1;
+    return (kvm_t *)&dummy_kd;
+}
+
+int kvm_close(kvm_t *kd) {
+    (void)kd;
+    return 0;
+}
+
+struct kinfo_proc *kvm_getprocs(kvm_t *kd, int op, int arg, int *cnt) {
+    (void)kd; (void)op; (void)arg;
+    static struct kinfo_proc kp;
+    memset(&kp, 0, sizeof(kp));
+    kp.ki_pid = arg > 0 ? arg : 1;
+    kp.ki_uid = 0;
+    kp.ki_rgid = 0;
+    if (cnt) *cnt = 1;
+    return &kp;
+}
+
+double pow(double x, double y) {
+    if (y == 0.0) return 1.0;
+    if (y == 1.0) return x;
+    if (x == 0.0) return 0.0;
+    double res = 1.0;
+    long long exp = (long long)y;
+    double base = x;
+    if (exp < 0) {
+        base = 1.0 / base;
+        exp = -exp;
+    }
+    while (exp > 0) {
+        if (exp & 1) res *= base;
+        base *= base;
+        exp >>= 1;
+    }
+    return res;
+}
+
+int pthread_create(pthread_t *thread, const pthread_attr_t *attr, void *(*start_routine)(void *), void *arg) {
+    (void)attr;
+    i64 pid = xiu_fork();
+    if (pid == 0) {
+        start_routine(arg);
+        xiu_exit(0);
+    }
+    if (thread) *thread = (pthread_t)(uintptr_t)pid;
+    return (pid < 0) ? -1 : 0;
+}
+
+int pthread_cancel(pthread_t thread) {
+    (void)thread;
+    return 0;
+}
+
+#define PTHREAD_KEYS_MAX 64
+static void *s_pthread_tls[PTHREAD_KEYS_MAX];
+static int s_pthread_key_count = 1;
+
+int pthread_key_create(pthread_key_t *key, void (*destructor)(void *)) {
+    (void)destructor;
+    if (!key) return -1;
+    if (s_pthread_key_count >= PTHREAD_KEYS_MAX) return -1;
+    *key = s_pthread_key_count++;
+    s_pthread_tls[*key] = NULL;
+    return 0;
+}
+
+int pthread_key_delete(pthread_key_t key) {
+    if (key >= 0 && key < PTHREAD_KEYS_MAX) {
+        s_pthread_tls[key] = NULL;
+    }
+    return 0;
+}
+
+int pthread_setspecific(pthread_key_t key, const void *value) {
+    if (key >= 0 && key < PTHREAD_KEYS_MAX) {
+        s_pthread_tls[key] = (void *)value;
+        return 0;
+    }
+    return -1;
+}
+
+void *pthread_getspecific(pthread_key_t key) {
+    if (key >= 0 && key < PTHREAD_KEYS_MAX) {
+        return s_pthread_tls[key];
+    }
+    return NULL;
+}
+
+int pthread_mutex_init(pthread_mutex_t *mutex, const pthread_mutexattr_t *attr) {
+    (void)mutex; (void)attr;
+    return 0;
+}
+
+int pthread_mutex_lock(pthread_mutex_t *mutex) {
+    (void)mutex;
+    return 0;
+}
+
+int pthread_mutex_unlock(pthread_mutex_t *mutex) {
+    (void)mutex;
+    return 0;
+}
+
+int shm_open(const char *name, int oflag, ...) {
+    if (!name) return -1;
+    mode_t mode = 0;
+    if (oflag & O_CREAT) {
+        va_list ap;
+        va_start(ap, oflag);
+        mode = (mode_t)va_arg(ap, int);
+        va_end(ap);
+    }
+    char path[256];
+    if (name[0] == '/') snprintf(path, sizeof(path), "/tmp%s", name);
+    else snprintf(path, sizeof(path), "/tmp/%s", name);
+
+    char *p = path + 5;
+    while (*p) {
+        if (*p == '/') *p = '_';
+        p++;
+    }
+    return open(path, oflag, mode ? mode : 0666);
+}
+
+int shm_unlink(const char *name) {
+    if (!name) return -1;
+    char path[256];
+    if (name[0] == '/') snprintf(path, sizeof(path), "/tmp%s", name);
+    else snprintf(path, sizeof(path), "/tmp/%s", name);
+
+    char *p = path + 5;
+    while (*p) {
+        if (*p == '/') *p = '_';
+        p++;
+    }
+    return unlink(path);
+}
+
+int shmget(key_t key, size_t size, int shmflg) {
+    (void)shmflg;
+    char path[64];
+    snprintf(path, sizeof(path), "/tmp/shm_%d", (int)key);
+    int fd = open(path, O_RDWR | O_CREAT, 0666);
+    if (fd >= 0 && size > 0) ftruncate(fd, (off_t)size);
+    return fd;
+}
+
+void *shmat(int shmid, const void *shmaddr, int shmflg) {
+    (void)shmflg;
+    struct stat st;
+    if (fstat(shmid, &st) < 0 || st.st_size == 0) return (void *)-1;
+    return mmap((void *)shmaddr, st.st_size, PROT_READ | PROT_WRITE, MAP_SHARED, shmid, 0);
+}
+
+int shmdt(const void *shmaddr) {
+    (void)shmaddr;
+    return 0;
+}
+
+int shmctl(int shmid, int cmd, struct shmid_ds *buf) {
+    (void)shmid; (void)cmd; (void)buf;
+    return 0;
+}
+
+int system(const char *string) {
+    if (!string) return 1;
+    i64 pid = xiu_fork();
+    if (pid == 0) {
+        char *argv[] = { "/bin/sh", "-c", (char *)string, NULL };
+        xiu_execve("/bin/sh", argv, NULL);
+        xiu_exit(127);
+    }
+    if (pid < 0) return -1;
+    int status = 0;
+    xiu_wait4((int)pid, &status, 0, NULL);
+    return status;
+}
+
+pid_t wait(int *stat_loc) {
+    return (pid_t)xiu_wait4(-1, stat_loc, 0, NULL);
+}
+
+char *strndup(const char *s, size_t n) {
+    if (!s) return NULL;
+    size_t len = 0;
+    while (len < n && s[len] != '\0') len++;
+    char *res = (char *)malloc(len + 1);
+    if (!res) return NULL;
+    memcpy(res, s, len);
+    res[len] = '\0';
+    return res;
+}
+
+void _exit(int status) {
+    while (1) {
+        xiu_exit((i64)status);
+    }
+}
+
+wctype_t wctype(const char *name) {
+    (void)name;
+    return (wctype_t)1;
+}
+
+int execl(const char *path, const char *arg0, ...) {
+    char *argv[64];
+    argv[0] = (char *)arg0;
+    int argc = 1;
+    if (arg0 != NULL) {
+        va_list ap;
+        va_start(ap, arg0);
+        while (argc < 63) {
+            char *arg = va_arg(ap, char *);
+            if (!arg) break;
+            argv[argc++] = arg;
+        }
+        va_end(ap);
+    } else {
+        argc = 0;
+    }
+    argv[argc] = NULL;
+    extern char **environ;
+    return execve(path, argv, environ);
+}
+
+int execle(const char *path, const char *arg0, ...) {
+    char *argv[64];
+    argv[0] = (char *)arg0;
+    int argc = 1;
+    char **envp = NULL;
+    if (arg0 != NULL) {
+        va_list ap;
+        va_start(ap, arg0);
+        while (argc < 63) {
+            char *arg = va_arg(ap, char *);
+            if (!arg) {
+                envp = va_arg(ap, char **);
+                break;
+            }
+            argv[argc++] = arg;
+        }
+        va_end(ap);
+    } else {
+        argc = 0;
+    }
+    argv[argc] = NULL;
+    return execve(path, argv, envp);
+}
+
+kern_return_t bootstrap_check_in(mach_port_t bp, const name_t service_name, mach_port_t *sp) {
+    (void)bp;
+    if (!service_name || !sp) return BOOTSTRAP_UNKNOWN_SERVICE;
+    mach_port_t port = 0;
+    if (mach_port_allocate(mach_task_self(), 1 /* MACH_PORT_RIGHT_RECEIVE */, &port) != 0) {
+        return BOOTSTRAP_NO_MEMORY;
+    }
+    *sp = port;
+    if (xiu_mach_register_service(service_name, (mach_port_name_t)port) != 0) {
+        return BOOTSTRAP_NO_MEMORY;
+    }
+    if (strstr(service_name, "WindowServer")) {
+        xiu_mach_register_service("com.apple.WindowServer", (mach_port_name_t)port);
+        xiu_mach_register_service("com.ravynos.WindowServer", (mach_port_name_t)port);
+    }
+    return BOOTSTRAP_SUCCESS;
+}
+
+mach_msg_return_t mach_msg(mach_msg_header_t *msg, mach_msg_option_t option, mach_msg_size_t send_size, mach_msg_size_t rcv_size, mach_port_name_t rcv_name, mach_msg_timeout_t timeout, mach_port_name_t notify) {
+    (void)notify;
+    return (mach_msg_return_t)xiu_mach_msg(msg, option, send_size, rcv_size, rcv_name, timeout);
+}
+
+kern_return_t mach_port_insert_right(ipc_space_t task, mach_port_name_t name, mach_port_t poly, mach_msg_type_name_t polyPoly) {
+    (void)task; (void)name; (void)poly; (void)polyPoly;
+    return 0;
+}
+
+char *nl_langinfo(int item) {
+    switch (item) {
+        case 0: return "UTF-8"; // CODESET
+        case 1: return "%a %b %e %H:%M:%S %Y"; // D_T_FMT
+        case 2: return "%m/%d/%y"; // D_FMT
+        case 3: return "%H:%M:%S"; // T_FMT
+        case 4: return "%I:%M:%S %p"; // T_FMT_AMPM
+        case 5: return "AM"; // AM_STR
+        case 6: return "PM"; // PM_STR
+        case 7: return "Sunday"; // DAY_1
+        case 8: return "Monday"; // DAY_2
+        case 9: return "Tuesday"; // DAY_3
+        case 10: return "Wednesday"; // DAY_4
+        case 11: return "Thursday"; // DAY_5
+        case 12: return "Friday"; // DAY_6
+        case 13: return "Saturday"; // DAY_7
+        case 14: return "Sun"; // ABDAY_1
+        case 15: return "Mon"; // ABDAY_2
+        case 16: return "Tue"; // ABDAY_3
+        case 17: return "Wed"; // ABDAY_4
+        case 18: return "Thu"; // ABDAY_5
+        case 19: return "Fri"; // ABDAY_6
+        case 20: return "Sat"; // ABDAY_7
+        case 21: return "January"; // MON_1
+        case 22: return "February"; // MON_2
+        case 23: return "March"; // MON_3
+        case 24: return "April"; // MON_4
+        case 25: return "May"; // MON_5
+        case 26: return "June"; // MON_6
+        case 27: return "July"; // MON_7
+        case 28: return "August"; // MON_8
+        case 29: return "September"; // MON_9
+        case 30: return "October"; // MON_10
+        case 31: return "November"; // MON_11
+        case 32: return "December"; // MON_12
+        case 33: return "Jan"; // ABMON_1
+        case 34: return "Feb"; // ABMON_2
+        case 35: return "Mar"; // ABMON_3
+        case 36: return "Apr"; // ABMON_4
+        case 37: return "May"; // ABMON_5
+        case 38: return "Jun"; // ABMON_6
+        case 39: return "Jul"; // ABMON_7
+        case 40: return "Aug"; // ABMON_8
+        case 41: return "Sep"; // ABMON_9
+        case 42: return "Oct"; // ABMON_10
+        case 43: return "Nov"; // ABMON_11
+        case 44: return "Dec"; // ABMON_12
+        case 50: return "."; // RADIXCHAR
+        case 51: return ","; // THOUSEP
+        case 52: return "^[yY]"; // YESEXPR
+        case 53: return "^[nN]"; // NOEXPR
+        default: return "";
+    }
+}
+
+double sin(double x) {
+    return __builtin_sin(x);
+}
+
+double cos(double x) {
+    return __builtin_cos(x);
+}
+
+double fmod(double x, double y) {
+    return __builtin_fmod(x, y);
+}
+
+double acos(double x) {
+    return __builtin_acos(x);
+}
+
+double __exp10(double x) {
+    return __builtin_pow(10.0, x);
+}
+
+struct __sincos_res {
+    double s;
+    double c;
+};
+
+struct __sincos_res __sincos_stret(double x) {
+    struct __sincos_res res;
+    res.s = __builtin_sin(x);
+    res.c = __builtin_cos(x);
+    return res;
+}
+
+int clock_gettime(clockid_t clk_id, struct timespec *tp) {
+    (void)clk_id;
+    if (!tp) return -1;
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    tp->tv_sec = tv.tv_sec;
+    tp->tv_nsec = tv.tv_usec * 1000;
+    return 0;
+}
+
+double exp(double x) {
+    return __builtin_exp(x);
+}
+
+float fmodf(float x, float y) {
+    return __builtin_fmodf(x, y);
+}
+
+pthread_t pthread_self(void) {
+    return (pthread_t)1;
+}
+
+int pthread_getschedparam(pthread_t t, int *p, struct sched_param *param) {
+    (void)t; (void)p; (void)param;
+    return 0;
+}
+
+int pthread_setschedparam(pthread_t t, int p, const struct sched_param *param) {
+    (void)t; (void)p; (void)param;
+    return 0;
+}
+
+int pthread_mutex_destroy(pthread_mutex_t *m) {
+    (void)m;
+    return 0;
+}
+
+int sched_get_priority_min(int p) {
+    (void)p;
+    return 0;
+}
+
+void _NSInitializeSynchronizedDirective(void) {
+}
+
+double log10(double x) {
+    return __builtin_log10(x);
+}
+
+int fpclassify(double x) {
+    return __builtin_fpclassify(0, 1, 2, 3, 4, x);
+}
+
+struct lconv *localeconv(void) {
+    static struct lconv lc = {
+        .decimal_point = ".",
+        .thousands_sep = ",",
+        .grouping = "\3",
+        .int_curr_symbol = "USD ",
+        .currency_symbol = "$",
+        .mon_decimal_point = ".",
+        .mon_thousands_sep = ",",
+        .mon_grouping = "\3",
+        .positive_sign = "",
+        .negative_sign = "-",
+        .int_frac_digits = 2,
+        .frac_digits = 2,
+        .p_cs_precedes = 1,
+        .p_sep_by_space = 0,
+        .n_cs_precedes = 1,
+        .n_sep_by_space = 0,
+        .p_sign_posn = 1,
+        .n_sign_posn = 1,
+        .int_p_cs_precedes = 1,
+        .int_n_cs_precedes = 1,
+        .int_p_sep_by_space = 0,
+        .int_n_sep_by_space = 0,
+        .int_p_sign_posn = 1,
+        .int_n_sign_posn = 1
+    };
+    return &lc;
+}
+
+struct lconv *localeconv_l(void *loc) {
+    (void)loc;
+    return localeconv();
+}
+
+struct hostent *gethostbyaddr(const void *addr, socklen_t len, int type) {
+    (void)addr; (void)len; (void)type;
+    return NULL;
+}
+
+int signbit(double x) {
+    return __builtin_signbit(x);
+}
+
+static char *s_default_env[] = { "PATH=/bin:/usr/bin", "HOME=/", "USER=root", NULL };
+char **NSPlatform_environ(void) {
+    return s_default_env;
+}
+
+const void *kCFBooleanTrue = (const void *)1;
+const void *kCFBooleanFalse = (const void *)0;
+
+const void *kCGImageDestinationDPI = "kCGImageDestinationDPI";
+const void *kCGImageDestinationLossyCompressionQuality = "kCGImageDestinationLossyCompressionQuality";
+const void *kCGImagePropertyDPIHeight = "kCGImagePropertyDPIHeight";
+const void *kCGImagePropertyDPIWidth = "kCGImagePropertyDPIWidth";
+
+#include "include/mach-o/loader.h"
+extern const struct mach_header_64 _mh_execute_header __attribute__((weak));
+
+char *getsectdata(const char *segname, const char *sectname, unsigned long *size) {
+    if (!sectname) return NULL;
+    const struct mach_header_64 *hdr = (const struct mach_header_64 *)0x1000ULL;
+    if (hdr->magic != MH_MAGIC_64) {
+        hdr = (const struct mach_header_64 *)0x100000000ULL;
+        if (hdr->magic != MH_MAGIC_64) {
+            hdr = &_mh_execute_header;
+            if (!hdr || hdr->magic != MH_MAGIC_64) return NULL;
+        }
+    }
+    
+    const uint8_t *cmd = (const uint8_t *)(hdr + 1);
+    for (uint32_t i = 0; i < hdr->ncmds; i++) {
+        const struct load_command *lc = (const struct load_command *)cmd;
+        if (lc->cmd == LC_SEGMENT_64) {
+            const struct segment_command_64 *seg = (const struct segment_command_64 *)lc;
+            const struct section_64 *sec = (const struct section_64 *)(seg + 1);
+            for (uint32_t s = 0; s < seg->nsects; s++) {
+                if (strncmp(sec[s].sectname, sectname, 16) == 0) {
+                    if (!segname || segname[0] == '\0' || strncmp(seg->segname, segname, 16) == 0) {
+                        if (size) *size = sec[s].size;
+                        return (char *)(sec[s].addr);
+                    }
+                }
+            }
+        }
+        cmd += lc->cmdsize;
+    }
+    return NULL;
+}
+
+const char *const sys_signame[32] = {
+    "0", "HUP", "INT", "QUIT", "ILL", "TRAP", "ABRT", "EMT",
+    "FPE", "KILL", "BUS", "SEGV", "SYS", "PIPE", "ALRM", "TERM",
+    "URG", "STOP", "TSTP", "CONT", "CHLD", "TTIN", "TTOU", "IO",
+    "XCPU", "XFSZ", "VTALRM", "PROF", "WINCH", "INFO", "USR1", "USR2"
+};
+
+long long strtonum(const char *numstr, long long minval, long long maxval, const char **errstrp) {
+    if (minval > maxval) {
+        if (errstrp) *errstrp = "invalid";
+        return 0;
+    }
+    char *ep = NULL;
+    errno = 0;
+    long long ll = strtoll(numstr, &ep, 10);
+    if (numstr == ep || *ep != '\0') {
+        if (errstrp) *errstrp = "invalid";
+        return 0;
+    }
+    if (errno == ERANGE || ll < minval || ll > maxval) {
+        if (errstrp) *errstrp = (ll < minval) ? "too small" : "too large";
+        return 0;
+    }
+    if (errstrp) *errstrp = NULL;
+    return ll;
+}
+
+char *strsep(char **stringp, const char *delim) {
+    if (!stringp || !*stringp) return NULL;
+    char *s = *stringp;
+    char *end = s + strcspn(s, delim);
+    if (*end) {
+        *end = '\0';
+        *stringp = end + 1;
+    } else {
+        *stringp = NULL;
+    }
+    return s;
+}
+
+static const char *s_progname = "xiu";
+const char *getprogname(void) { return s_progname; }
+void setprogname(const char *pn) { if (pn) s_progname = pn; }
+
+void vwarn(const char *fmt, va_list ap) {
+    int err = errno;
+    fprintf(stderr, "%s: ", getprogname());
+    if (fmt) {
+        vfprintf(stderr, fmt, ap);
+        fprintf(stderr, ": ");
+    }
+    fprintf(stderr, "%s\n", strerror(err));
+}
+
+void vwarnx(const char *fmt, va_list ap) {
+    fprintf(stderr, "%s: ", getprogname());
+    if (fmt) vfprintf(stderr, fmt, ap);
+    fprintf(stderr, "\n");
+}
+
+void warn(const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    vwarn(fmt, ap);
+    va_end(ap);
+}
+
+void warnx(const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    vwarnx(fmt, ap);
+    va_end(ap);
+}
+
+void verr(int eval, const char *fmt, va_list ap) {
+    vwarn(fmt, ap);
+    exit(eval);
+}
+
+void verrx(int eval, const char *fmt, va_list ap) {
+    vwarnx(fmt, ap);
+    exit(eval);
+}
+
+void err(int eval, const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    verr(eval, fmt, ap);
+    va_end(ap);
+}
+
+void errx(int eval, const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    verrx(eval, fmt, ap);
+    va_end(ap);
+}
+
+speed_t cfgetispeed(const struct termios *tp) {
+    return tp ? tp->c_ispeed : 0;
+}
+
+speed_t cfgetospeed(const struct termios *tp) {
+    return tp ? tp->c_ospeed : 0;
+}
+
+int cfsetispeed(struct termios *tp, speed_t speed) {
+    if (tp) { tp->c_ispeed = speed; return 0; }
+    return -1;
+}
+
+int cfsetospeed(struct termios *tp, speed_t speed) {
+    if (tp) { tp->c_ospeed = speed; return 0; }
+    return -1;
+}
+
+void cfmakeraw(struct termios *tp) {
+    if (!tp) return;
+    tp->c_iflag &= ~(IGNBRK | BRKINT | PARMRK | ISTRIP | INLCR | IGNCR | ICRNL | IXON);
+    tp->c_oflag &= ~OPOST;
+    tp->c_lflag &= ~(ECHO | ECHONL | ICANON | ISIG | IEXTEN);
+    tp->c_cflag &= ~(CSIZE | PARENB);
+    tp->c_cflag |= CS8;
+    tp->c_cc[VMIN] = 1;
+    tp->c_cc[VTIME] = 0;
+}
+
+void cfmakesane(struct termios *tp) {
+    if (!tp) return;
+    tp->c_cflag = CS8 | CREAD | CLOCAL;
+    tp->c_iflag = BRKINT | ICRNL | IMAXBEL;
+    tp->c_oflag = OPOST | ONLCR;
+    tp->c_lflag = ECHO | ECHOE | ECHOK | ECHOCTL | ECHOKE | ICANON | ISIG | IEXTEN;
+    tp->c_ispeed = 38400;
+    tp->c_ospeed = 38400;
+}
+
+int gethostname(char *name, size_t len) {
+    if (!name || len == 0) return -1;
+    strncpy(name, "Mac", len - 1);
+    name[len - 1] = '\0';
+    return 0;
+}
+
+char *getlogin(void) {
+    char *u = getenv("USER");
+    if (u && *u) return u;
+    return "fvr";
+}
+
+void *setmode(const char *mode_str) {
+    if (!mode_str) return NULL;
+    mode_t *m = (mode_t *)malloc(sizeof(mode_t));
+    if (!m) return NULL;
+    char *ep = NULL;
+    *m = (mode_t)strtoul(mode_str, &ep, 8);
+    return m;
+}
+
+mode_t getmode(const void *bbox, mode_t omode) {
+    if (!bbox) return omode;
+    return *(const mode_t *)bbox;
+}
+
+int getrusage(int who, struct rusage *usage) {
+    (void)who;
+    if (!usage) return -1;
+    memset(usage, 0, sizeof(*usage));
+    return 0;
+}
+
+pid_t wait3(int *status, int options, struct rusage *rusage) {
+    if (rusage) memset(rusage, 0, sizeof(*rusage));
+    return waitpid(-1, status, options);
+}
+
+int mbtowc(wchar_t *pwc, const char *s, size_t n) {
+    if (!s) return 0;
+    if (n == 0) return -1;
+    if (pwc) *pwc = (wchar_t)(unsigned char)*s;
+    return (*s == 0) ? 0 : 1;
+}
+
+int wcscoll(const wchar_t *ws1, const wchar_t *ws2) {
+    while (*ws1 && (*ws1 == *ws2)) { ws1++; ws2++; }
+    return *(const unsigned int *)ws1 - *(const unsigned int *)ws2;
+}
+
+void *memccpy(void *dst, const void *src, int c, size_t n) {
+    const unsigned char *s = (const unsigned char *)src;
+    unsigned char *d = (unsigned char *)dst;
+    unsigned char uc = (unsigned char)c;
+    for (size_t i = 0; i < n; i++) {
+        d[i] = s[i];
+        if (s[i] == uc) return &d[i + 1];
+    }
+    return NULL;
+}
+
+size_t strftime(char *s, size_t max, const char *format, const struct tm *tm) {
+    (void)format;
+    if (!s || max == 0) return 0;
+    return snprintf(s, max, "%04d-%02d-%02d %02d:%02d:%02d",
+                    tm ? tm->tm_year + 1900 : 2026,
+                    tm ? tm->tm_mon + 1 : 1,
+                    tm ? tm->tm_mday : 1,
+                    tm ? tm->tm_hour : 0,
+                    tm ? tm->tm_min : 0,
+                    tm ? tm->tm_sec : 0);
+}
+
+size_t strlcpy(char *dst, const char *src, size_t size) {
+    size_t srclen = strlen(src);
+    if (size > 0) {
+        size_t copylen = (srclen >= size) ? size - 1 : srclen;
+        memcpy(dst, src, copylen);
+        dst[copylen] = '\0';
+    }
+    return srclen;
+}
+
+int strncasecmp(const char *s1, const char *s2, size_t n) {
+    while (n && *s1 && *s2) {
+        int c1 = tolower((unsigned char)*s1);
+        int c2 = tolower((unsigned char)*s2);
+        if (c1 != c2) return c1 - c2;
+        s1++; s2++; n--;
+    }
+    return n ? ((unsigned char)*s1 - (unsigned char)*s2) : 0;
+}
+
+uintmax_t strtoumax(const char *nptr, char **endptr, int base) {
+    return (uintmax_t)strtoull(nptr, endptr, base);
+}
+
+FILE *funopen(const void *cookie,
+              int (*readfn)(void *, char *, int),
+              int (*writefn)(void *, const char *, int),
+              fpos_t (*seekfn)(void *, fpos_t, int),
+              int (*closefn)(void *)) {
+    (void)cookie; (void)readfn; (void)writefn; (void)seekfn; (void)closefn;
+    return stdout;
+}
+
+int __mb_cur_max = 1;
+int ___mb_cur_max(void) { return 1; }
+int ___mb_cur_max_l(void *loc) { (void)loc; return 1; }
+
+unsigned int alarm(unsigned int seconds) {
+    (void)seconds;
+    return 0;
+}
+
+void clearerr(FILE *f) {
+    (void)f;
+}
+
+char *cuserid(char *s) {
+    if (s) {
+        strcpy(s, "root");
+        return s;
+    }
+    return "root";
+}
+
+int feof(FILE *f) {
+    (void)f;
+    return 0;
+}
+
+int ferror(FILE *f) {
+    (void)f;
+    return 0;
+}
+
+int fileno(FILE *f) {
+    if (!f) return -1;
+    if (f == stdin) return 0;
+    if (f == stdout) return 1;
+    if (f == stderr) return 2;
+    return 0;
+}
+
+static struct group g_root_grp = {
+    .gr_name = "root",
+    .gr_passwd = "*",
+    .gr_gid = 0,
+    .gr_mem = NULL,
+};
+
+struct group *getgrnam(const char *name) {
+    (void)name;
+    return &g_root_grp;
+}
+
+int isinf(double x) {
+    return __builtin_isinf(x);
+}
+
+int isnan(double x) {
+    return __builtin_isnan(x);
+}
+
+int link(const char *p1, const char *p2) {
+    (void)p1; (void)p2;
+    return -1;
+}
+
+char *mktemp(char *template) {
+    return template;
+}
+
+int putc(int c, FILE *stream) {
+    return fputc(c, stream);
+}
+
+static unsigned long s_next_rand = 1;
+int rand(void) {
+    s_next_rand = s_next_rand * 1103515245 + 12345;
+    return (unsigned int)(s_next_rand / 65536) % 32768;
+}
+
+void srand(unsigned int seed) {
+    s_next_rand = seed;
+}
+
+ssize_t readlink(const char *path, char *buf, size_t bufsiz) {
+    (void)path; (void)buf; (void)bufsiz;
+    return -1;
+}
+
+int setresuid(uid_t r, uid_t e, uid_t s) {
+    (void)r; (void)e; (void)s;
+    return 0;
+}
+
+int setresgid(gid_t r, gid_t e, gid_t s) {
+    (void)r; (void)e; (void)s;
+    return 0;
+}
+
+int setvbuf(FILE *f, char *buf, int mode, size_t size) {
+    (void)f; (void)buf; (void)mode; (void)size;
+    return 0;
+}
+
+int symlink(const char *p1, const char *p2) {
+    (void)p1; (void)p2;
+    return -1;
+}
+
+char *ttyname(int fd) {
+    (void)fd;
+    return "/dev/tty";
+}
+
+int uname(struct utsname *name) {
+    if (!name) return -1;
+    strncpy(name->sysname, "XIU", sizeof(name->sysname) - 1);
+    strncpy(name->nodename, "xiu", sizeof(name->nodename) - 1);
+    strncpy(name->release, "1.0", sizeof(name->release) - 1);
+    strncpy(name->version, "XIU Darwin/XNU Mach-O 64-bit", sizeof(name->version) - 1);
+    strncpy(name->machine, "x86_64", sizeof(name->machine) - 1);
+    return 0;
+}
+
+/* -----------------------------------------------------------------------------
+ * Termcap / Terminfo Emulation for Darwin / XIU Console
+ * ----------------------------------------------------------------------------- */
+int tgetent(char *bp, const char *name) {
+    (void)bp; (void)name;
+    return 1;
+}
+
+int tgetflag(const char *id) {
+    if (!id) return 0;
+    if (strcmp(id, "am") == 0) return 1; /* auto margins */
+    if (strcmp(id, "xn") == 0) return 1; /* newline glitch */
+    if (strcmp(id, "hs") == 0) return 0; /* status line */
+    return 0;
+}
+
+int tgetnum(const char *id) {
+    if (!id) return -1;
+    if (strcmp(id, "co") == 0 || strcmp(id, "cols") == 0) {
+        struct winsize ws;
+        if (ioctl(1, TIOCGWINSZ, &ws) == 0 && ws.ws_col > 0) return ws.ws_col;
+        return 80;
+    }
+    if (strcmp(id, "li") == 0 || strcmp(id, "lines") == 0) {
+        struct winsize ws;
+        if (ioctl(1, TIOCGWINSZ, &ws) == 0 && ws.ws_row > 0) return ws.ws_row;
+        return 25;
+    }
+    if (strcmp(id, "colors") == 0 || strcmp(id, "Co") == 0) return 16;
+    return -1;
+}
+
+char *tgetstr(const char *id, char **area) {
+    if (!id) return NULL;
+    const char *cap = NULL;
+    if (strcmp(id, "cl") == 0) cap = "\033[2J\033[H";
+    else if (strcmp(id, "cd") == 0) cap = "\033[J";
+    else if (strcmp(id, "ce") == 0) cap = "\033[K";
+    else if (strcmp(id, "cm") == 0) cap = "\033[%i%d;%dH";
+    else if (strcmp(id, "up") == 0) cap = "\033[A";
+    else if (strcmp(id, "do") == 0) cap = "\033[B";
+    else if (strcmp(id, "le") == 0) cap = "\033[D";
+    else if (strcmp(id, "nd") == 0) cap = "\033[C";
+    else if (strcmp(id, "so") == 0) cap = "\033[7m";
+    else if (strcmp(id, "se") == 0) cap = "\033[27m";
+    else if (strcmp(id, "us") == 0) cap = "\033[4m";
+    else if (strcmp(id, "ue") == 0) cap = "\033[24m";
+    else if (strcmp(id, "md") == 0) cap = "\033[1m";
+    else if (strcmp(id, "me") == 0) cap = "\033[0m";
+    else if (strcmp(id, "AF") == 0) cap = "\033[3%dm";
+    else if (strcmp(id, "AB") == 0) cap = "\033[4%dm";
+    else if (strcmp(id, "bc") == 0) cap = "\b";
+    else if (strcmp(id, "cr") == 0) cap = "\r";
+    else if (strcmp(id, "nl") == 0) cap = "\n";
+    else if (strcmp(id, "vi") == 0) cap = "\033[?25l";
+    else if (strcmp(id, "ve") == 0) cap = "\033[?25h";
+
+    if (!cap) return NULL;
+    if (area && *area) {
+        char *ret = *area;
+        strcpy(ret, cap);
+        *area += strlen(cap) + 1;
+        return ret;
+    }
+    return (char *)cap;
+}
+
+char *tgoto(const char *cap, int col, int row) {
+    static char buf[32];
+    if (!cap) return "";
+    snprintf(buf, sizeof(buf), "\033[%d;%dH", row + 1, col + 1);
+    return buf;
+}
+
+int tputs(const char *cp, int affcnt, int (*outc)(int)) {
+    (void)affcnt;
+    if (!cp || !outc) return 0;
+    while (*cp) {
+        outc((unsigned char)*cp++);
+    }
+    return 0;
+}
+
+
+
+
+
 
 
 
