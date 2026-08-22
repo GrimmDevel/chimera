@@ -170,16 +170,16 @@ void *objc_msgSend_lookup(id self, const char *sel_name) {
     if (!self) return (void *)default_nil_stub;
     Class cls = object_getClass(self);
     if (!cls) return (void *)default_nil_stub;
-    
+
     // 1. Walk class and superclass hierarchy
     for (Class c = cls; c != Nil; ) {
         void *imp = class_find_method_imp(c, sel_name);
         if (imp) return imp;
-        
+
         struct objc_class_2 *oc = (struct objc_class_2 *)c;
         c = oc->superclass;
     }
-    
+
     // 2. Built-in standard root methods
     if (sel_name) {
         if (strcmp(sel_name, "new") == 0) return (void *)default_new;
@@ -189,8 +189,10 @@ void *objc_msgSend_lookup(id self, const char *sel_name) {
         if (strcmp(sel_name, "release") == 0) return (void *)default_release;
         if (strcmp(sel_name, "dealloc") == 0) return (void *)default_dealloc;
         if (strcmp(sel_name, "class") == 0) return (void *)default_class;
+        fprintf(stderr, "[DBG-msgSend-miss] class=%s sel=%s self=%p\n",
+            self == (id)cls ? class_getName(cls) : object_getClassName(self), sel_name, self);
     }
-    
+
     return (void *)default_nil_stub;
 }
 
@@ -324,6 +326,7 @@ Class objc_getClass(const char *name) {
             return s_classes[i].cls;
         }
     }
+    fprintf(stderr, "[DBG-getClass-miss] %s\n", name);
     return Nil;
 }
 
@@ -373,12 +376,12 @@ void objc_setProperty_nonatomic(id self, SEL _cmd, id newValue, ptrdiff_t offset
     *val = newValue;
 }
 
-int objc_sync_enter(id obj) {
+__attribute__((weak)) int objc_sync_enter(id obj) {
     (void)obj;
     return 0;
 }
 
-int objc_sync_exit(id obj) {
+__attribute__((weak)) int objc_sync_exit(id obj) {
     (void)obj;
     return 0;
 }
@@ -522,16 +525,16 @@ void *O2ShadingColorSpace(void *s) {
     return NULL;
 }
 
-const void *NSStreamFileCurrentOffsetKey = "NSStreamFileCurrentOffsetKey";
+__attribute__((weak)) const void *NSStreamFileCurrentOffsetKey = "NSStreamFileCurrentOffsetKey";
 
-void NSSelectSetShutdownForCurrentThread(void) {
+__attribute__((weak)) void NSSelectSetShutdownForCurrentThread(void) {
 }
 
 void NSUnimplementedFunction(const char *func, const char *file, int line) {
     (void)func; (void)file; (void)line;
 }
 
-const void *NSParagraphStyleAttributeName = "NSParagraphStyleAttributeName";
+__attribute__((weak)) const void *NSParagraphStyleAttributeName = "NSParagraphStyleAttributeName";
 
 
 
@@ -596,18 +599,18 @@ size_t class_getInstanceSize(Class cls) {
     return 256;
 }
 
-BOOL NSDebugEnabled = NO;
+__attribute__((weak)) BOOL NSDebugEnabled = NO;
 
-const void *NSFontAttributeName = "NSFontAttributeName";
-const void *NSForegroundColorAttributeName = "NSForegroundColorAttributeName";
+__attribute__((weak)) const void *NSFontAttributeName = "NSFontAttributeName";
+__attribute__((weak)) const void *NSForegroundColorAttributeName = "NSForegroundColorAttributeName";
 
 
-BOOL NSCurrentLocaleIsMetric(void) {
+__attribute__((weak)) BOOL NSCurrentLocaleIsMetric(void) {
     return YES;
 }
 
-void NSCooperativeThreadBlocking(void) {}
-void NSCooperativeThreadWaiting(void) {}
+__attribute__((weak)) void NSCooperativeThreadBlocking(void) {}
+__attribute__((weak)) void NSCooperativeThreadWaiting(void) {}
 
 const char *objc_ext_skip_type_specifier(const char *type, BOOL relaxed) {
     (void)relaxed;
@@ -633,7 +636,7 @@ unsigned objc_ext_alignof_type(const char *type) {
     return objc_ext_sizeof_type(type);
 }
 
-id NSDictionaryFromStringsFormatString(id str) {
+__attribute__((weak)) id NSDictionaryFromStringsFormatString(id str) {
     (void)str;
     return nil;
 }
@@ -712,7 +715,7 @@ const char *NSPlatformLoadableObjectFileExtension(void) {
 }
 
 
-void NSPlatformSleepThreadForTimeInterval(NSTimeInterval interval) {
+__attribute__((weak)) void NSPlatformSleepThreadForTimeInterval(NSTimeInterval interval) {
     if (interval > 0) {
         extern int usleep(unsigned int useconds);
         usleep((unsigned int)(interval * 1000000.0));
@@ -794,17 +797,17 @@ int objc_getClassList(Class *buffer, int bufferCount) {
     return count;
 }
 
-const void *NSFontNameAttribute = "NSFontNameAttribute";
-const void *NSFontSizeAttribute = "NSFontSizeAttribute";
-const void *NSFontTraitsAttribute = "NSFontTraitsAttribute";
-const void *NSFontVisibleNameAttribute = "NSFontVisibleNameAttribute";
-const void *NSFontSymbolicTrait = "NSFontSymbolicTrait";
-const void *NSFontWeightTrait = "NSFontWeightTrait";
-const void *NSFontFixedAdvanceAttribute = "NSFontFixedAdvanceAttribute";
-const void *NSFontFaceAttribute = "NSFontFaceAttribute";
-const void *NSFontFamilyAttribute = "NSFontFamilyAttribute";
-const void *NSFontCharacterSetAttribute = "NSFontCharacterSetAttribute";
-const void *NSFontSlantTrait = "NSFontSlantTrait";
+__attribute__((weak)) const void *NSFontNameAttribute = "NSFontNameAttribute";
+__attribute__((weak)) const void *NSFontSizeAttribute = "NSFontSizeAttribute";
+__attribute__((weak)) const void *NSFontTraitsAttribute = "NSFontTraitsAttribute";
+__attribute__((weak)) const void *NSFontVisibleNameAttribute = "NSFontVisibleNameAttribute";
+__attribute__((weak)) const void *NSFontSymbolicTrait = "NSFontSymbolicTrait";
+__attribute__((weak)) const void *NSFontWeightTrait = "NSFontWeightTrait";
+__attribute__((weak)) const void *NSFontFixedAdvanceAttribute = "NSFontFixedAdvanceAttribute";
+__attribute__((weak)) const void *NSFontFaceAttribute = "NSFontFaceAttribute";
+__attribute__((weak)) const void *NSFontFamilyAttribute = "NSFontFamilyAttribute";
+__attribute__((weak)) const void *NSFontCharacterSetAttribute = "NSFontCharacterSetAttribute";
+__attribute__((weak)) const void *NSFontSlantTrait = "NSFontSlantTrait";
 
 void *CTFontCreateWithName(void *name, CGFloat size, void *matrix) {
     (void)name; (void)size; (void)matrix;
@@ -906,8 +909,161 @@ void objc_setProperty_atomic_copy(id self, SEL _cmd, id newValue, ptrdiff_t offs
     *slot = newValue;
 }
 
-bool NSZombieEnabled = false;
-void NSRegisterZombie(id obj) { (void)obj; }
+bool NSZombieEnabled __attribute__((weak)) = false;
+__attribute__((weak)) void NSRegisterZombie(id obj) { (void)obj; }
+
+/* Exception typeinfo for @catch(id); the personality only compares pointers */
+extern void *_objc_ehtype_vtable;
+struct objc_ehtype_t { void **vtable; void *cls; };
+struct objc_ehtype_t OBJC_EHTYPE_id __attribute__((used)) = { &_objc_ehtype_vtable, NULL };
+
+/* XIU has no platform-suffixed resources; referenced by NSNibLoading */
+const void * const NSPlatformResourceNameSuffix = NULL;
+
+__attribute__((weak)) const void *kCFBundleNameKey = "kCFBundleNameKey";
+__attribute__((weak)) const void *kCFStreamPropertySocketNativeHandle = "kCFStreamPropertySocketNativeHandle";
+
+/* ---- runtime introspection used by Foundation (NSInvocation, KVC, ...) ---- */
+
+static struct method_2_t *find_method_entry(Class cls, const char *sel_name) {
+    if (!cls || !sel_name) return NULL;
+    if ((uintptr_t)cls < 0x1000ULL || (uintptr_t)cls >= 0x800000000000ULL) return NULL;
+
+    for (Class c = cls; c != Nil; ) {
+        struct objc_class_2 *oc = (struct objc_class_2 *)c;
+        if (oc->data_bits && (uintptr_t)oc->data_bits >= 0x1000ULL &&
+            (uintptr_t)oc->data_bits < 0x800000000000ULL) {
+            struct class_ro_2_t *ro = (struct class_ro_2_t *)(oc->data_bits & ~7ULL);
+            if (ro && (uintptr_t)ro >= 0x1000ULL && (uintptr_t)ro < 0x800000000000ULL &&
+                ro->baseMethodList) {
+                const struct method_list_2_t *mlist = ro->baseMethodList;
+                uint32_t entsize = mlist->entsizeAndFlags & 0xffff;
+                if (entsize < sizeof(struct method_2_t)) entsize = sizeof(struct method_2_t);
+                for (uint32_t i = 0; i < mlist->count; i++) {
+                    struct method_2_t *m = (struct method_2_t *)
+                        ((const uint8_t *)&mlist->methods[0] + i * entsize);
+                    if (m->name && strcmp(m->name, sel_name) == 0) return m;
+                }
+            }
+        }
+        c = oc->superclass;
+    }
+    return NULL;
+}
+
+Method class_getInstanceMethod(Class cls, SEL name) {
+    return (Method)find_method_entry(cls, sel_getName(name));
+}
+
+Method class_getClassMethod(Class cls, SEL name) {
+    if (!cls) return NULL;
+    return (Method)find_method_entry(object_getClass((id)cls), sel_getName(name));
+}
+
+SEL method_getName(Method method) {
+    return method ? (SEL)((struct method_2_t *)method)->name : NULL;
+}
+
+const char *method_getTypeEncoding(Method method) {
+    return method ? ((struct method_2_t *)method)->types : NULL;
+}
+
+IMP method_getImplementation(Method method) {
+    return method ? (IMP)((struct method_2_t *)method)->imp : NULL;
+}
+
+unsigned method_getNumberOfArguments(Method method) {
+    const char *types = method_getTypeEncoding(method);
+    if (!types) return 0;
+    /* types = return-type atom, then one atom per argument (self, _cmd, ...) */
+    const char *t = types;
+    int atoms = -1; /* first atom is the return type */
+    int depth = 0;
+    while (*t) {
+        char c = *t;
+        if (c == '{' || c == '[' || c == '(') {
+            if (depth == 0) atoms++;
+            depth++;
+        } else if (c == '}' || c == ']' || c == ')') {
+            depth--;
+        } else if (depth == 0 && (c < '0' || c > '9')) {
+            atoms++;
+        }
+        t++;
+    }
+    return (unsigned)(atoms + 1); /* arguments exclude the return atom */
+}
+
+BOOL class_isMetaClass(Class cls) {
+    if (!cls || (uintptr_t)cls < 0x1000ULL || (uintptr_t)cls >= 0x800000000000ULL) return NO;
+    struct objc_class_2 *c = (struct objc_class_2 *)cls;
+    if (!c->data_bits) return NO;
+    struct class_ro_2_t *ro = (struct class_ro_2_t *)(c->data_bits & ~7ULL);
+    return ro && (ro->flags & 1) ? YES : NO;
+}
+
+Method *class_copyMethodList(Class cls, unsigned int *outCount) {
+    if (outCount) *outCount = 0;
+    if (!cls || (uintptr_t)cls < 0x1000ULL || (uintptr_t)cls >= 0x800000000000ULL) return NULL;
+    struct objc_class_2 *c = (struct objc_class_2 *)cls;
+    if (!c->data_bits) return NULL;
+    struct class_ro_2_t *ro = (struct class_ro_2_t *)(c->data_bits & ~7ULL);
+    if (!ro || !ro->baseMethodList || ro->baseMethodList->count == 0) return NULL;
+
+    const struct method_list_2_t *mlist = ro->baseMethodList;
+    uint32_t entsize = mlist->entsizeAndFlags & 0xffff;
+    if (entsize < sizeof(struct method_2_t)) entsize = sizeof(struct method_2_t);
+    Method *methods = (Method *)malloc(sizeof(Method) * mlist->count);
+    if (!methods) return NULL;
+    for (uint32_t i = 0; i < mlist->count; i++) {
+        methods[i] = (Method)((const uint8_t *)&mlist->methods[0] + i * entsize);
+    }
+    if (outCount) *outCount = mlist->count;
+    return methods;
+}
+
+Class object_setClass(id obj, Class cls) {
+    if (!obj) return Nil;
+    Class old = object_getClass(obj);
+    *(Class *)obj = cls;
+    return old;
+}
+
+/* XIU metadata is immutable at runtime; these report failure like a
+ * read-only class would */
+BOOL class_addMethod(Class cls, SEL name, IMP imp, const char *types) {
+    (void)cls; (void)name; (void)imp; (void)types;
+    return NO;
+}
+
+Class objc_allocateClassPair(Class superclass, const char *name, size_t extraBytes) {
+    (void)superclass; (void)name; (void)extraBytes;
+    return Nil;
+}
+
+void objc_registerClassPair(Class cls) {
+    (void)cls;
+}
+
+Ivar class_getInstanceVariable(Class cls, const char *name) {
+    (void)cls; (void)name;
+    return NULL;
+}
+
+const char *ivar_getTypeEncoding(Ivar ivar) {
+    (void)ivar;
+    return NULL;
+}
+
+ptrdiff_t ivar_getOffset(Ivar ivar) {
+    (void)ivar;
+    return 0;
+}
+
+Ivar object_setInstanceVariable(id obj, const char *name, void *value) {
+    (void)obj; (void)name; (void)value;
+    return NULL;
+}
 
 struct dummy_objc_class {
     Class isa;
@@ -1000,6 +1156,12 @@ DEFINE_DUMMY_CLASS(NSToolbarView)
 DEFINE_DUMMY_CLASS(NSTrackingArea)
 DEFINE_DUMMY_CLASS(NSURLConnection)
 DEFINE_DUMMY_CLASS(NSURLRequest)
+/* not linked on XIU (need QuartzCore/PDF/CFUUID/bonjour), dummy for linkers */
+DEFINE_DUMMY_CLASS(NSGradient)
+DEFINE_DUMMY_CLASS(NSRichTextReader)
+DEFINE_DUMMY_CLASS(NSURLCache)
+DEFINE_DUMMY_CLASS(NSCIImageRep)
+DEFINE_DUMMY_CLASS(NSNetServices)
 DEFINE_DUMMY_CLASS(NSUndoManager)
 DEFINE_DUMMY_CLASS(NSValue_placeholder)
 DEFINE_DUMMY_CLASS(NSViewBackingLayer)

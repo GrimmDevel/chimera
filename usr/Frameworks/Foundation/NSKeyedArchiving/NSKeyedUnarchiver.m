@@ -38,11 +38,21 @@ NSString* NSInvalidUnarchiveOperationException=@"NSInvalidUnarchiveOperationExce
 @implementation NSKeyedUnarchiver
 
 -initForReadingWithData:(NSData *)data {
+   if (data == nil || [data length] == 0) {
+      [self dealloc];
+      return nil;
+   }
    _nameToReplacementClass=[NSMutableDictionary new];
    _propertyList=[[NSPropertyListReader propertyListFromData:data] retain];
+   if (_propertyList == nil) {
+      [self dealloc];
+      return nil;
+   }
    _objects=[[_propertyList objectForKey:@"$objects"] retain];
    _plistStack=[NSMutableArray new];
-   [_plistStack addObject:[_propertyList objectForKey:@"$top"]];
+   id top=[_propertyList objectForKey:@"$top"];
+   if (top != nil)
+      [_plistStack addObject:top];
    _uidToObject=NSCreateMapTable(NSIntMapKeyCallBacks,NSNonOwnedPointerMapValueCallBacks,0);
    _objectToUid=NSCreateMapTable(NSNonOwnedPointerMapKeyCallBacks,NSIntMapValueCallBacks,0);
    _classVersions=NSCreateMapTable(NSObjectMapKeyCallBacks,NSIntMapValueCallBacks,0);

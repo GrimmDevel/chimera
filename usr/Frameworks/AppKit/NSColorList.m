@@ -29,7 +29,8 @@ static NSMutableDictionary *_namedColorLists = nil;
             NSString *path = [[places objectAtIndex:x] stringByAppendingPathComponent:name];
             name = [name stringByDeletingPathExtension];
             NSColorList *clr = [[[NSColorList alloc] initWithName:name fromFile:path] autorelease];
-            [_namedColorLists setObject:clr forKey:name];
+            if (clr != nil)
+                [_namedColorLists setObject:clr forKey:name];
         }
     }
 }
@@ -60,9 +61,19 @@ static NSMutableDictionary *_namedColorLists = nil;
         if(isDir)
             _path = [_path stringByAppendingPathComponent:[_path lastPathComponent]];
         NSData *data = [NSData dataWithContentsOfFile:_path];
-        NSKeyedUnarchiver *unarchiver = [[NSKeyedUnarchiver alloc] initForReadingWithData:data];
+        NSKeyedUnarchiver *unarchiver = (data != nil)
+            ? [[NSKeyedUnarchiver alloc] initForReadingWithData:data] : nil;
+        if (unarchiver == nil) {
+            [self dealloc];
+            return nil;
+        }
         _keys = [[unarchiver decodeObjectForKey:@"NSKeys"] retain];
         _colors = [[unarchiver decodeObjectForKey:@"NSColors"] retain];
+        [unarchiver release];
+        if (_keys == nil || _colors == nil) {
+            [self dealloc];
+            return nil;
+        }
     } else {
         _keys = [[NSMutableArray alloc] init];
         _colors = [[NSMutableArray alloc] init];

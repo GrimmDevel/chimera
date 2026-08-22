@@ -28,6 +28,8 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 #define IBAction void
 #endif
 
+#import <Foundation/NSZone.h>
+
 @class NSString, NSDictionary;
 
 @interface NSObject (NSNibLoading)

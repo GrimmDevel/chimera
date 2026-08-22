@@ -1819,7 +1819,27 @@ static NSGraphicsContext *graphicsContextForView(NSView *view){
 -(void)lockFocus {
    printf("[NSView PID %d] lockFocus: view=%p\n", getpid(), self);
    fflush(stdout);
-   [self _lockFocusInContext:graphicsContextForView(self)];
+   NSGraphicsContext *context=graphicsContextForView(self);
+
+   if(context==nil){
+    /* the window's backing context may not exist yet; fall back to the
+     * nearest ancestor that resolved one so subviews still draw */
+    NSView *ancestor=[self superview];
+    while(ancestor!=nil){
+     context=graphicsContextForView(ancestor);
+     if(context!=nil)
+      break;
+     ancestor=[ancestor superview];
+    }
+   }
+
+   if(context==nil){
+    printf("[NSView PID %d] lockFocus: no graphics context for view=%p, skipping\n", getpid(), self);
+    fflush(stdout);
+    return;
+   }
+
+   [self _lockFocusInContext:context];
 }
 
 -(BOOL)lockFocusIfCanDraw {

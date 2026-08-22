@@ -169,3 +169,7 @@ ___CFConstantStringClassReference:
 _objc_ehtype_vtable:
     .space 128
 
+/* clang references this (C name _objc_ehtype_vtable) for @catch typeinfo */
+.globl __objc_ehtype_vtable
+.set __objc_ehtype_vtable, _objc_ehtype_vtable
+

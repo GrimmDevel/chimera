@@ -75,24 +75,75 @@ static NSString *pathForCharacterSet(NSString *name){
    NSBundle *bundle=[NSBundle bundleForClass:[NSCharacterSet class]];
    NSString *path=[bundle pathForResource:name ofType:@"bitmap"];
 
-   if(path==nil)
-    [NSException raise:@"NSCharacterSetFailedException" format:@"NSCharacterSet unable to find bitmap for %@",name];
-
    return path;
+}
+
+/* Approximate standard character sets for when the bitmap resources are
+ * unavailable (bare XIU install); good enough for text layout fix-ups */
+static NSCharacterSet *fallbackCharacterSetForName(NSString *name){
+   NSMutableCharacterSet_bitmap *set=[[NSMutableCharacterSet_bitmap allocWithZone:NULL] init];
+
+   if([name isEqualToString:@"controlCharacterSet"]){
+      [set addCharactersInRange:NSMakeRange(0x0000,0x20)];
+      [set addCharactersInRange:NSMakeRange(0x7F,0x21)];
+   } else if([name isEqualToString:@"whitespaceCharacterSet"]){
+      [set addCharactersInRange:NSMakeRange(0x0009,5)];
+      [set addCharactersInRange:NSMakeRange(0x0020,1)];
+   } else if([name isEqualToString:@"whitespaceAndNewlineCharacterSet"]){
+      [set addCharactersInRange:NSMakeRange(0x0009,5)];
+      [set addCharactersInRange:NSMakeRange(0x0020,1)];
+      [set addCharactersInRange:NSMakeRange(0x2028,2)];
+   } else if([name isEqualToString:@"newlineCharacterSet"]){
+      [set addCharactersInRange:NSMakeRange(0x000A,1)];
+      [set addCharactersInRange:NSMakeRange(0x000D,1)];
+      [set addCharactersInRange:NSMakeRange(0x2028,2)];
+   } else if([name isEqualToString:@"decimalDigitCharacterSet"]){
+      [set addCharactersInRange:NSMakeRange('0',10)];
+   } else if([name isEqualToString:@"letterCharacterSet"]){
+      [set addCharactersInRange:NSMakeRange('a',26)];
+      [set addCharactersInRange:NSMakeRange('A',26)];
+   } else if([name isEqualToString:@"alphanumericCharacterSet"]){
+      [set addCharactersInRange:NSMakeRange('a',26)];
+      [set addCharactersInRange:NSMakeRange('A',26)];
+      [set addCharactersInRange:NSMakeRange('0',10)];
+   } else if([name isEqualToString:@"uppercaseLetterCharacterSet"]){
+      [set addCharactersInRange:NSMakeRange('A',26)];
+   } else if([name isEqualToString:@"lowercaseLetterCharacterSet"]){
+      [set addCharactersInRange:NSMakeRange('a',26)];
+   } else if([name isEqualToString:@"illegalCharacterSet"]){
+      [set addCharactersInRange:NSMakeRange(0xD800,0x800)];
+   } else if([name isEqualToString:@"punctuationCharacterSet"]){
+      [set addCharactersInRange:NSMakeRange('!',1)];
+      [set addCharactersInRange:NSMakeRange('.',3)];
+      [set addCharactersInRange:NSMakeRange(':',3)];
+      [set addCharactersInRange:NSMakeRange('?',1)];
+      [set addCharactersInRange:NSMakeRange('"',1)];
+      [set addCharactersInRange:NSMakeRange('\'',1)];
+      [set addCharactersInRange:NSMakeRange('(',3)];
+      [set addCharactersInRange:NSMakeRange('[',2)];
+      [set addCharactersInRange:NSMakeRange('{',2)];
+      [set addCharactersInRange:NSMakeRange('-',2)];
+   }
+
+   return [set autorelease];
 }
 
 static NSCharacterSet *sharedSetWithName(Class cls,NSString *name){
    NSCharacterSet *result;
+   NSString *path=pathForCharacterSet(name);
+
+   if(path==nil)
+    return [fallbackCharacterSetForName(name) retain];
 
    if(cls!=[NSCharacterSet class])
-    result=[cls characterSetWithContentsOfFile:pathForCharacterSet(name)];
+    result=[cls characterSetWithContentsOfFile:path];
    else {
     if((result=NSMapGet(nameToSet,name))==nil){
-     if((result=[NSCharacterSet characterSetWithContentsOfFile:pathForCharacterSet(name)])!=nil)
+     if((result=[NSCharacterSet characterSetWithContentsOfFile:path])!=nil)
       NSMapInsert(nameToSet,name,result);
     }
    }
-   
+
    return result;
 }
 

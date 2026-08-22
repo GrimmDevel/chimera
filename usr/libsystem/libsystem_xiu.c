@@ -2714,6 +2714,61 @@ int pthread_mutex_lock(pthread_mutex_t *mutex) {
     return 0;
 }
 
+int pthread_mutex_trylock(pthread_mutex_t *mutex) {
+    (void)mutex;
+    return 0;
+}
+
+int pthread_cond_init(pthread_cond_t *cond, const pthread_condattr_t *attr) {
+    (void)cond; (void)attr;
+    return 0;
+}
+
+int pthread_cond_destroy(pthread_cond_t *cond) {
+    (void)cond;
+    return 0;
+}
+
+int pthread_cond_wait(pthread_cond_t *cond, pthread_mutex_t *mutex) {
+    (void)cond; (void)mutex;
+    return 0;
+}
+
+int pthread_cond_timedwait(pthread_cond_t *cond, pthread_mutex_t *mutex,
+    const struct timespec *abstime) {
+    (void)cond; (void)mutex; (void)abstime;
+    return 0;
+}
+
+int pthread_cond_signal(pthread_cond_t *cond) {
+    (void)cond;
+    return 0;
+}
+
+int pthread_cond_broadcast(pthread_cond_t *cond) {
+    (void)cond;
+    return 0;
+}
+
+extern i64 xiu_fsync(u64 fd);
+int fsync(int fd) {
+    i64 ret = xiu_fsync((u64)fd);
+    if (ret < 0) { errno = (int)-ret; return -1; }
+    return 0;
+}
+
+int getdtablesize(void) {
+    return 1024;
+}
+
+extern i64 xiu_getsockname(u64 fd, u64 addr, u64 len);
+int getsockname(int fd, struct sockaddr *addr, socklen_t *len) {
+    if (!addr || !len) { errno = EFAULT; return -1; }
+    i64 ret = xiu_getsockname((u64)fd, (u64)addr, (u64)len);
+    if (ret < 0) { errno = (int)-ret; return -1; }
+    return 0;
+}
+
 int pthread_mutex_unlock(pthread_mutex_t *mutex) {
     (void)mutex;
     return 0;
@@ -2981,6 +3036,24 @@ double __exp10(double x) {
     return __builtin_pow(10.0, x);
 }
 
+float __exp10f(float x) {
+    return __builtin_powf(10.0f, x);
+}
+
+double atan2(double y, double x) {
+    double res;
+    __asm__ __volatile__ ("fpatan" : "=t" (res) : "0" (y), "u" (x) : "st(1)");
+    return res;
+}
+
+double hypot(double x, double y) {
+    return __builtin_sqrt(x * x + y * y);
+}
+
+long lroundf(float x) {
+    return (long)(x >= 0.0f ? x + 0.5f : x - 0.5f);
+}
+
 struct __sincos_res {
     double s;
     double c;
@@ -3034,7 +3107,7 @@ int sched_get_priority_min(int p) {
     return 0;
 }
 
-void _NSInitializeSynchronizedDirective(void) {
+__attribute__((weak)) void _NSInitializeSynchronizedDirective(void) {
 }
 
 double log10(double x) {

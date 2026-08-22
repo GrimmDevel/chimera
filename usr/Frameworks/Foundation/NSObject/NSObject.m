@@ -145,6 +145,18 @@ BOOL NSObjectIsKindOfClass(id object,Class kindOf) {
     return class_respondsToSelector(object_getClass(self), aSelector);
 }
 
++ (IMP)methodForSelector:(SEL)aSelector {
+    return class_getMethodImplementation(object_getClass((id)self), aSelector);
+}
+
+- (IMP)methodForSelector:(SEL)aSelector {
+    return class_getMethodImplementation(object_getClass(self), aSelector);
+}
+
+- (IMP)instanceMethodForSelector:(SEL)aSelector {
+    return class_getMethodImplementation(object_getClass(self), aSelector);
+}
+
 - (id)performSelector:(SEL)aSelector {
     if (!aSelector) return nil;
     IMP imp = class_getMethodImplementation(object_getClass(self), aSelector);

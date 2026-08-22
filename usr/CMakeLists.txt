@@ -162,144 +162,50 @@ target_compile_options(objc PUBLIC
 # -----------------------------------------------------------------------------
 # Foundation Framework
 # -----------------------------------------------------------------------------
-set(FOUNDATION_SRCS
-    Frameworks/Foundation/NSObject/NSObject.m
-    Frameworks/Foundation/NSString/NSString.m
-    Frameworks/Foundation/NSString/NSCFString.m
-    Frameworks/Foundation/NSString/NSStringUTF8.m
-    Frameworks/Foundation/NSArray/NSArray.m
-    Frameworks/Foundation/NSArray/NSArray_concrete.m
-    Frameworks/Foundation/NSArray/NSMutableArray.m
-    Frameworks/Foundation/NSArray/NSMutableArray_concrete.m
-    Frameworks/Foundation/NSDictionary/NSDictionary.m
-    Frameworks/Foundation/NSDictionary/NSMutableDictionary.m
-    Frameworks/Foundation/NSData/NSData.m
-    Frameworks/Foundation/NSData/NSData_concrete.m
-    Frameworks/Foundation/NSData/NSMutableData.m
-    Frameworks/Foundation/NSData/NSMutableData_concrete.m
-    Frameworks/Foundation/NSAutoreleasePool/NSAutoreleasePool.m
-    Frameworks/Foundation/NSDate/NSDate.m
-    Frameworks/Foundation/NSDate/NSDate_timeInterval.m
-    Frameworks/Foundation/NSDate/NSDateFormatter.m
-    Frameworks/Foundation/NSBundle.m
-    Frameworks/Foundation/NSNotificationCenter/NSNotificationCenter.m
-    Frameworks/Foundation/NSProcessInfo.m
-    Frameworks/Foundation/NSUserDefaults/NSUserDefaults.m
-    Frameworks/Foundation/NSError.m
-    Frameworks/Foundation/NSException/NSException.m
-    Frameworks/Foundation/NSException/NSRaise.m
-    Frameworks/Foundation/NSValue/NSValue.m
-    Frameworks/Foundation/NSNumber/NSNumber.m
-    Frameworks/Foundation/NSRange.m
-    Frameworks/Foundation/NSThread/NSThread.m
-    Frameworks/Foundation/NSRunLoop/NSRunLoop.m
-    Frameworks/Foundation/NSTimer/NSTimer.m
-    Frameworks/Foundation/NSURL/NSURL.m
-    Frameworks/Foundation/NSGeometry.m
-    Frameworks/Foundation/NSString/NSString_cString.m
-    Frameworks/Foundation/NSString/NSString_unicode.m
-    Frameworks/Foundation/NSString/NSString_unicodePtr.m
-    Frameworks/Foundation/NSString/NSStringFormatter.m
-    Frameworks/Foundation/NSString/NSStringSymbol.m
-    Frameworks/Foundation/NSString/NSUnicodeCaseMapping.m
-    Frameworks/Foundation/NSString/NSMutableString.m
-    Frameworks/Foundation/NSString/NSMutableString_unicodePtr.m
-    Frameworks/Foundation/NSString/NSPathUtilities.m
-    Frameworks/Foundation/NSValue/NSValue_concrete.m
-    Frameworks/Foundation/NSValue/NSValue_nonRetainedObject.m
-    Frameworks/Foundation/NSValue/NSValue_pointer.m
-    Frameworks/Foundation/NSURL/NSURLError.m
-    Frameworks/Foundation/platform_posix/NSPlatform_posix.m
-    Frameworks/Foundation/platform_posix/NSMemoryFunctions_posix.m
-    Frameworks/Foundation/platform_posix/NSString_defaultEncoding_posix.m
-    Frameworks/Foundation/NSNumber/NSNumber_char.m
-    Frameworks/Foundation/NSNumber/NSNumber_double.m
-    Frameworks/Foundation/NSNumber/NSNumber_float.m
-    Frameworks/Foundation/NSNumber/NSNumber_int.m
-    Frameworks/Foundation/NSNumber/NSNumber_long.m
-    Frameworks/Foundation/NSNumber/NSNumber_longLong.m
-    Frameworks/Foundation/NSNumber/NSNumber_short.m
-    Frameworks/Foundation/NSNumber/NSNumber_unsignedChar.m
-    Frameworks/Foundation/NSNumber/NSNumber_unsignedInt.m
-    Frameworks/Foundation/NSNumber/NSNumber_unsignedLong.m
-    Frameworks/Foundation/NSNumber/NSNumber_unsignedLongLong.m
-    Frameworks/Foundation/NSNumber/NSNumber_unsignedShort.m
-    Frameworks/Foundation/NSNumber/NSNumber_BOOL.m
-    Frameworks/Foundation/NSNumber/NSNumber_placeholder.m
-    Frameworks/Foundation/NSNumber/NSNumber_CF.m
-    Frameworks/Foundation/NSMapTable.m
-    Frameworks/Foundation/NSObjCRuntime.m
-    Frameworks/Foundation/NSPlatform.m
-    Frameworks/Foundation/NSLocale.m
-    Frameworks/Foundation/NSNotification/NSNotification.m
-    Frameworks/Foundation/NSNotification/NSNotification_concrete.m
-    Frameworks/Foundation/NSEnumerator.m
-    Frameworks/Foundation/NSString/NSString_isoLatin1.m
-    Frameworks/Foundation/NSString/NSString_isoLatin2.m
-    Frameworks/Foundation/NSString/NSString_macOSRoman.m
-    Frameworks/Foundation/NSString/NSString_nextstep.m
-    Frameworks/Foundation/NSString/NSString_win1252.m
-    Frameworks/Foundation/NSAttributedString/NSAttributedString.m
-    Frameworks/Foundation/NSAttributedString/NSMutableAttributedString.m
-    Frameworks/Foundation/NSAttributedString/NSMutableAttributedString_concrete.m
-    Frameworks/Foundation/NSAttributedString/NSAttributedString_placeholder.m
-    Frameworks/Foundation/NSAttributedString/NSAttributedString_oneAttribute.m
-    Frameworks/Foundation/NSAttributedString/NSAttributedString_manyAttributes.m
-    Frameworks/Foundation/NSAttributedString/NSAttributedString_nilAttributes.m
-    Frameworks/Foundation/NSAttributedString/NSRangeEntries.m
-    Frameworks/Foundation/NSArray/NSEnumerator_array.m
-    Frameworks/Foundation/NSArray/NSEnumerator_arrayReverse.m
-    Frameworks/Foundation/NSArray/NSArray_placeholder.m
-    Frameworks/Foundation/NSDictionary/NSEnumerator_dictionaryKeys.m
-    Frameworks/Foundation/NSDictionary/NSEnumerator_dictionaryObjects.m
-    Frameworks/Foundation/NSDictionary/NSDictionary_mapTable.m
-    Frameworks/Foundation/NSDictionary/NSMutableDictionary_mapTable.m
-    Frameworks/Foundation/NSString/NSString_nextstepCString.m
-    Frameworks/Foundation/NSString/NSStringEncoder.m
-    Frameworks/Foundation/NSString/NSStringFileIO.m
-    Frameworks/Foundation/NSFormatter.m
-    Frameworks/Foundation/NSZone/NSVirtualMemory.m
-    Frameworks/Foundation/NSZone/NSZone.m
+# All Foundation sources; keep only XIU/posix platform files. Classes that
+# must not be pulled in (external deps or conflicts with the runtime shims)
+# are filtered out below.
+file(GLOB_RECURSE FOUNDATION_SRCS RELATIVE ${CMAKE_CURRENT_SOURCE_DIR}
+    Frameworks/Foundation/*.m
 )
+list(FILTER FOUNDATION_SRCS EXCLUDE REGEX "platform_(windows|solaris|linux|bsd|darwin)/")
+list(FILTER FOUNDATION_SRCS EXCLUDE REGEX "NSConstantString")
+list(FILTER FOUNDATION_SRCS EXCLUDE REGEX "objc_forward_ffi")
+list(FILTER FOUNDATION_SRCS EXCLUDE REGEX "NSBlocks\\.m")
+list(FILTER FOUNDATION_SRCS EXCLUDE REGEX "objc_size_alignment\\.m")
+list(FILTER FOUNDATION_SRCS EXCLUDE REGEX "test_CFBridging")
+# NSNetServices needs a bonjour helper that does not exist on XIU;
+# NSURLCache needs CFUUID functions that are not implemented yet
+list(FILTER FOUNDATION_SRCS EXCLUDE REGEX "NSNetService/")
+list(FILTER FOUNDATION_SRCS EXCLUDE REGEX "NSURLCache\\.m")
+# kCFBooleanTrue/False are already defined by NSNumber_BOOL.m
+list(FILTER FOUNDATION_SRCS EXCLUDE REGEX "NSNumber_BOOL_const\\.m")
+
+file(GLOB FOUNDATION_SUBDIRS ${CMAKE_CURRENT_SOURCE_DIR}/Frameworks/Foundation/*/)
 
 add_library(Foundation OBJECT ${FOUNDATION_SRCS})
 target_include_directories(Foundation PUBLIC
     ${CMAKE_SOURCE_DIR}/usr/libsystem/include
+    ${CMAKE_SOURCE_DIR}/usr/libsystem/blocks
     ${CMAKE_SOURCE_DIR}/usr/libobjc
     ${CMAKE_SOURCE_DIR}/usr/libobjc/runtime
     ${CMAKE_SOURCE_DIR}/usr/Frameworks
     ${CMAKE_SOURCE_DIR}/usr/Frameworks/Foundation
     ${CMAKE_SOURCE_DIR}/usr/Frameworks/Foundation/Headers
-    ${CMAKE_SOURCE_DIR}/usr/Frameworks/Foundation/NSString
-    ${CMAKE_SOURCE_DIR}/usr/Frameworks/Foundation/NSArray
-    ${CMAKE_SOURCE_DIR}/usr/Frameworks/Foundation/NSDictionary
-    ${CMAKE_SOURCE_DIR}/usr/Frameworks/Foundation/NSData
-    ${CMAKE_SOURCE_DIR}/usr/Frameworks/Foundation/NSDate
-    ${CMAKE_SOURCE_DIR}/usr/Frameworks/Foundation/NSException
-    ${CMAKE_SOURCE_DIR}/usr/Frameworks/Foundation/NSValue
-    ${CMAKE_SOURCE_DIR}/usr/Frameworks/Foundation/NSNumber
-    ${CMAKE_SOURCE_DIR}/usr/Frameworks/Foundation/NSUserDefaults
+    ${FOUNDATION_SUBDIRS}
     ${CMAKE_SOURCE_DIR}/usr/Frameworks/CoreFoundation/Headers
 )
 target_compile_options(Foundation PUBLIC
     -x objective-c
     -nostdinc -isystem ${CMAKE_SOURCE_DIR}/usr/libsystem/include
+    -I${CMAKE_SOURCE_DIR}/usr/libsystem/blocks
     -I${CMAKE_SOURCE_DIR}/usr/libobjc
     -I${CMAKE_SOURCE_DIR}/usr/libobjc/runtime
     -I${CMAKE_SOURCE_DIR}/usr/Frameworks
     -I${CMAKE_SOURCE_DIR}/usr/Frameworks/Foundation
     -I${CMAKE_SOURCE_DIR}/usr/Frameworks/Foundation/Headers
-    -I${CMAKE_SOURCE_DIR}/usr/Frameworks/Foundation/NSString
-    -I${CMAKE_SOURCE_DIR}/usr/Frameworks/Foundation/NSArray
-    -I${CMAKE_SOURCE_DIR}/usr/Frameworks/Foundation/NSDictionary
-    -I${CMAKE_SOURCE_DIR}/usr/Frameworks/Foundation/NSData
-    -I${CMAKE_SOURCE_DIR}/usr/Frameworks/Foundation/NSDate
-    -I${CMAKE_SOURCE_DIR}/usr/Frameworks/Foundation/NSException
-    -I${CMAKE_SOURCE_DIR}/usr/Frameworks/Foundation/NSValue
-    -I${CMAKE_SOURCE_DIR}/usr/Frameworks/Foundation/NSNumber
-    -I${CMAKE_SOURCE_DIR}/usr/Frameworks/Foundation/NSUserDefaults
     -I${CMAKE_SOURCE_DIR}/usr/Frameworks/CoreFoundation/Headers
-    -D__RAVYNOS__ -D__MACH__ -D__XIU__ -DPLATFORM_IS_POSIX=1
+    -D__RAVYNOS__ -D__MACH__ -D__XIU__ -DPLATFORM_IS_POSIX=1 -DPLATFORM_USES_BSD_SOCKETS=1
     -DTARGET_OS_OSX=1 -DTARGET_OS_IOSMAC=0 -DTARGET_OS_MAC=1 -DTARGET_OS_IPHONE=0
     -Wno-error -Wno-undef-prefix -Wno-deprecated-declarations -Wno-unused-variable -Wno-macro-redefined
     -Wno-incompatible-pointer-types -Wno-implicit-function-declaration
@@ -421,42 +327,23 @@ target_compile_options(CoreGraphics PUBLIC
 # -----------------------------------------------------------------------------
 # AppKit Framework
 # -----------------------------------------------------------------------------
-set(APPKIT_SRCS
-    Frameworks/AppKit/NSResponder.m
-    Frameworks/AppKit/NSApplication.m
-    Frameworks/AppKit/NSDisplay.m
-    Frameworks/AppKit/NSWindow.m
-    Frameworks/AppKit/NSWindow-Drag.m
-    Frameworks/AppKit/NSView.m
-    Frameworks/AppKit/NSMenu.subproj/NSMenu.m
-    Frameworks/AppKit/NSMenu.subproj/NSMenuItem.m
-    Frameworks/AppKit/NSScreen.m
-    Frameworks/AppKit/NSColor.subproj/NSColor.m
-    Frameworks/AppKit/NSFont.m
-    Frameworks/AppKit/NSBezierPath.m
-    Frameworks/AppKit/NSEvent.subproj/NSEvent.m
-    Frameworks/AppKit/NSThemeFrame.m
-    Frameworks/AppKit/NSGraphics.m
-    Frameworks/AppKit/NSGraphicsContext.m
-    Frameworks/AppKit/NSCell.m
-    Frameworks/AppKit/NSActionCell.m
-    Frameworks/AppKit/NSButtonCell.m
-    Frameworks/AppKit/NSButton.m
-    Frameworks/AppKit/NSControl.m
-    Frameworks/AppKit/NSTextField.m
-    Frameworks/AppKit/NSTextFieldCell.m
-    Frameworks/AppKit/NSImage.m
-    Frameworks/AppKit/NSImageRep.m
-    Frameworks/AppKit/NSBitmapImageRep.m
-    Frameworks/AppKit/NSPanel.m
-    Frameworks/AppKit/NSWorkspace.m
-    Frameworks/AppKit/NSSheetContext.m
-    Frameworks/AppKit/NSPasteboard.m
-    Frameworks/AppKit/NSStatusBar.m
-    Frameworks/AppKit/NSStatusItem.m
-    Frameworks/AppKit/NSDockTile.m
-    Frameworks/AppKit/NSController/NSController.m
+# All AppKit sources except subprojects with external dependencies
+file(GLOB_RECURSE APPKIT_SRCS RELATIVE ${CMAKE_CURRENT_SOURCE_DIR}
+    Frameworks/AppKit/*.m
 )
+list(FILTER APPKIT_SRCS EXCLUDE REGEX "NSOpenGL/")
+list(FILTER APPKIT_SRCS EXCLUDE REGEX "CoreData_")
+list(FILTER APPKIT_SRCS EXCLUDE REGEX "_FT\\.m")
+list(FILTER APPKIT_SRCS EXCLUDE REGEX "NSEvent_CoreGraphics\\.m")
+# these pull in QuartzCore/CoreImage/PDF/CF symbols that don't exist on XIU yet
+list(FILTER APPKIT_SRCS EXCLUDE REGEX "NSCIImageRep\\.m")
+list(FILTER APPKIT_SRCS EXCLUDE REGEX "NSGradient\\.m")
+list(FILTER APPKIT_SRCS EXCLUDE REGEX "NSPDFImageRep\\.m")
+list(FILTER APPKIT_SRCS EXCLUDE REGEX "NSPrintOperation\\.m")
+list(FILTER APPKIT_SRCS EXCLUDE REGEX "NSRichTextReader\\.m")
+list(FILTER APPKIT_SRCS EXCLUDE REGEX "NSViewBackingLayer\\.m")
+
+file(GLOB APPKIT_SUBDIRS ${CMAKE_CURRENT_SOURCE_DIR}/Frameworks/AppKit/*/)
 
 add_library(AppKit OBJECT ${APPKIT_SRCS})
 target_include_directories(AppKit PUBLIC
@@ -466,9 +353,11 @@ target_include_directories(AppKit PUBLIC
     ${CMAKE_SOURCE_DIR}/usr/CoreServices
     ${CMAKE_SOURCE_DIR}/usr/Frameworks
     ${CMAKE_SOURCE_DIR}/usr/Frameworks/Foundation/Headers
+    ${FOUNDATION_SUBDIRS}
     ${CMAKE_SOURCE_DIR}/usr/Frameworks/Onyx2D
     ${CMAKE_SOURCE_DIR}/usr/Frameworks/CoreGraphics
     ${CMAKE_SOURCE_DIR}/usr/Frameworks/AppKit
+    ${APPKIT_SUBDIRS}
 )
 target_compile_options(AppKit PUBLIC
     -x objective-c

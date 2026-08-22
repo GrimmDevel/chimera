@@ -12,6 +12,9 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 #import <Foundation/NSStringFormatter.h>
 #import <Foundation/NSAutoreleasePool-private.h>
 #import <Foundation/NSRaise.h>
+
+/* XIU runtime: IMP lookup exported by libobjc */
+extern void *objc_msgSend_lookup(id self, const char *sel_name);
 #import <objc/message.h>
 
 @interface NSInvocation(private)
@@ -117,33 +120,21 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 - performSelector:(SEL)selector
 {
-#if defined(GCC_RUNTIME_3) || defined(APPLE_RUNTIME_4)
-    IMP imp = class_getMethodImplementation(object_getClass(self), selector);
-#else
-    IMP imp = objc_msg_lookup(self, selector);
-#endif
+    IMP imp = (IMP)objc_msgSend_lookup(self, (const char *)selector);
     return ((id (*)(id,SEL))imp)(self, selector);
 }
 
 
 - performSelector:(SEL)selector withObject:object1
 {
-#if defined(GCC_RUNTIME_3) || defined(APPLE_RUNTIME_4)
-    IMP imp = class_getMethodImplementation(object_getClass(self), selector);
-#else
-    IMP imp = objc_msg_lookup(self, selector);
-#endif
+    IMP imp = (IMP)objc_msgSend_lookup(self, (const char *)selector);
     return ((id (*)(id,SEL,id))imp)(self, selector, object1);
 }
 
 
 - performSelector:(SEL)selector withObject:object1 withObject:object2
 {
-#if defined(GCC_RUNTIME_3) || defined(APPLE_RUNTIME_4)
-    IMP imp = class_getMethodImplementation(object_getClass(self), selector);
-#else
-    IMP imp = objc_msg_lookup(self, selector);
-#endif
+    IMP imp = (IMP)objc_msgSend_lookup(self, (const char *)selector);
     return ((id (*)(id,SEL,id,id))imp)(self, selector, object1, object2);
 }
 
