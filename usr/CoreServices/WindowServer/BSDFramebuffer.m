@@ -31,6 +31,7 @@
 - (id)init
 {
     self = [super init];
+    _ID = 1;
     _flags = kWSDisplayActive | kWSDisplayOnline | kWSDisplayPrimary | kWSDisplayMain;
     _openGLMask = 0;
     fbfd = -1;

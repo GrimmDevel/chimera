@@ -116,8 +116,6 @@ O2Path *O2ClipStateOnePath(O2ClipState *self) {
    [_phases addObject:phase];
    
    [phase release];
-   
-   O2PathRelease(path);
  }
 
 -(void)addNonZeroWindingPath:(O2Path *)path {

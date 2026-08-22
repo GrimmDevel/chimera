@@ -124,11 +124,23 @@ static O2Image *wsZoom, *wsZoomUp, *wsZoomDown;
 
     NSWindow *window = [self window];
     O2Context *_context = [[window graphicsContext] graphicsPort];
-    CGFloat r, g, b, a;
-    [[[self window] backgroundColor] getRed:&r green:&g blue:&b alpha:&a];
-    O2ContextSetRGBStrokeColor(_context, r, g, b, a);
-    O2ContextSetRGBFillColor(_context, r, g, b, a);
-    O2ContextFillRect(_context, bounds);
+    NSColor *bgColor = [[self window] backgroundColor];
+    NSColor *rgbColor = nil;
+    if ([bgColor respondsToSelector:@selector(colorUsingColorSpaceName:)]) {
+        rgbColor = [bgColor colorUsingColorSpaceName:NSDeviceRGBColorSpace];
+    }
+    CGFloat r = 0.9, g = 0.9, b = 0.9, a = 1.0;
+    if (rgbColor != nil) {
+        [rgbColor getRed:&r green:&g blue:&b alpha:&a];
+    }
+    printf("[NSThemeFrame PID %d] drawRect: bounds=(%f,%f,%fx%f) _context=%p (r=%.2f,g=%.2f,b=%.2f,a=%.2f)\n",
+           getpid(), bounds.origin.x, bounds.origin.y, bounds.size.width, bounds.size.height, _context, r, g, b, a);
+    fflush(stdout);
+    if (_context != nil) {
+        O2ContextSetRGBStrokeColor(_context, r, g, b, a);
+        O2ContextSetRGBFillColor(_context, r, g, b, a);
+        O2ContextFillRect(_context, bounds);
+    }
 
     if([[self window] styleMask] == NSBorderlessWindowMask)
         return;

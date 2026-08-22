@@ -31,9 +31,13 @@
 
 @implementation AppDelegate
 - (AppDelegate *)init {
-    NSRect screenFrame = NSMakeRect(0, 0, 1280, 800);
+    NSScreen *mainDisplay = [NSScreen mainScreen];
+    NSRect screenFrame = mainDisplay ? [mainDisplay frame] : NSMakeRect(0, 0, 1280, 800);
     menuBar = [[MenuBarWindow alloc] initWithFrame:screenFrame];
-    [menuBar orderFront:nil];
+    [menuBar setDelegate:self];
+    [menuBar makeKeyAndOrderFront:nil];
+    [[menuBar contentView] setNeedsDisplay:YES];
+    [menuBar displayIfNeeded];
     return self;
 }
 
@@ -81,8 +85,6 @@
 #endif
 
 -(void)applicationWillFinishLaunching:(NSNotification *)note {
-    NSScreen *mainDisplay = [NSScreen mainScreen];
-    [menuBar initWithFrame:[mainDisplay frame]];
     [menuBar setDelegate:self];
     [[menuBar contentView] setNeedsDisplay:YES];
     [menuBar makeKeyAndOrderFront:self];

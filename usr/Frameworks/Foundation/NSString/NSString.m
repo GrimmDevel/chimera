@@ -1760,23 +1760,24 @@ static inline void reverseString(unichar *buf, NSUInteger len) {
 - (const char *)cStringUsingEncoding:(NSStringEncoding)encoding
 {
     NSUInteger length = [self length];
-    unichar *buffer = NSZoneMalloc(NULL, length * sizeof(unichar));
-    NSUInteger resultLength;
+    unichar *buffer = NSZoneMalloc(NULL, (1 + length) * sizeof(unichar));
+    NSUInteger resultLength = 0;
 
     [self getCharacters:buffer];
+    buffer[length] = 0;
     char *cstr = NSString_unicodeToAnyCString(encoding, buffer, length, NO, &resultLength, NULL, YES);
+    if (!cstr && encoding != NSUTF8StringEncoding) {
+        cstr = NSString_unicodeToAnyCString(NSUTF8StringEncoding, buffer, length, NO, &resultLength, NULL, YES);
+    }
 
     NSZoneFree(NULL, buffer);
     
     if (cstr) {
-        // FIXME obviously the char* should be handled by the autorelease pool or garbage collector
-        //       that's bad design
-        //NSData *data=
-        NSData *data= [NSData dataWithBytesNoCopy:cstr length:resultLength freeWhenDone:YES];
-        return cstr;
+        NSData *data = [NSData dataWithBytesNoCopy:cstr length:resultLength freeWhenDone:YES];
+        return [data bytes];
     }
     else {
-        return NULL;
+        return "";
     }
 }
 

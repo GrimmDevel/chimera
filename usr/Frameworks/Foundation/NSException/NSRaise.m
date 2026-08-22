@@ -15,15 +15,25 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 // DO NOT USE IN NEW CODE AND REPLACE USAGE. Use NSAssert().
 void NSRaiseException(NSString *name,id self,SEL cmd,NSString *fmt,...) {
-   NSString *where=[NSString stringWithFormat:@"-[%@ %s]",[self class],sel_getName(cmd)];
-   NSString *why;
+   const char *clsName = self ? object_getClassName(self) : "nil";
+   const char *selName = cmd ? sel_getName(cmd) : "NULL";
+   NSString *where = [NSString stringWithFormat:@"-[%s %s]", clsName, selName];
+   NSString *why = nil;
    va_list   args;
 
-   va_start(args,fmt);
+   if (fmt) {
+       va_start(args,fmt);
+       why = [[[NSString allocWithZone:NULL] initWithFormat:fmt arguments:args] autorelease];
+       va_end(args);
+   }
 
-   why=[[[NSString allocWithZone:NULL] initWithFormat:fmt arguments:args] autorelease];
+   fprintf(stderr, "[NSRaiseException] target=%p (%s) sel=%s reason=%s\n",
+           self, clsName, selName, why ? [why UTF8String] : "nil");
 
-   va_end(args);
+   if (name == nil) name = NSInvalidArgumentException;
+   if (why == nil) why = @"(null)";
+   if (where == nil) where = @"(null)";
+
    [NSException raise:name format:@"%@ %@",where,why];
 }
 

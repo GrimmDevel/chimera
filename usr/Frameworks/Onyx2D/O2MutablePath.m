@@ -106,7 +106,7 @@ void O2PathReset(O2MutablePathRef self) {
 
 static inline void expandOperatorCapacity(O2MutablePath *self,unsigned delta){
    if(self->_numberOfElements+delta>self->_capacityOfElements){
-    self->_capacityOfElements=MAX(1,self->_capacityOfElements);
+    if (self->_capacityOfElements == 0) self->_capacityOfElements = 1;
     
     while(self->_numberOfElements+delta>self->_capacityOfElements)
      self->_capacityOfElements*=2;
@@ -117,7 +117,7 @@ static inline void expandOperatorCapacity(O2MutablePath *self,unsigned delta){
 
 static inline void expandPointCapacity(O2MutablePath *self,unsigned delta){
    if(self->_numberOfPoints+delta>self->_capacityOfPoints){
-    self->_capacityOfPoints=MAX(1,self->_capacityOfPoints);
+    if (self->_capacityOfPoints == 0) self->_capacityOfPoints = 1;
     
     while(self->_numberOfPoints+delta>self->_capacityOfPoints)
      self->_capacityOfPoints*=2;

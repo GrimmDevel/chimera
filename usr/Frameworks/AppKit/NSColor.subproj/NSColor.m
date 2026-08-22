@@ -457,15 +457,38 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 +(NSColor *)colorWithCatalogName:(NSString *)catalogName colorName:(NSString *)colorName {
     NSColorList *list = [NSColorList colorListNamed:catalogName];
-    if(!list) {
-        NSLog(@"*** Unknown color catalog %@",catalogName);
-        return nil;
-    }
+    NSColor *color = nil;
+    if(list)
+        color = [list colorWithKey:colorName];
 
-    NSColor *color = [list colorWithKey:colorName];
     if(!color) {
-        NSLog(@"*** Unknown color %@ for catalog %@",colorName,catalogName);
-        return nil;
+        if([colorName isEqualToString:@"windowBackgroundColor"] ||
+           [colorName isEqualToString:@"controlBackgroundColor"] ||
+           [colorName isEqualToString:@"controlColor"] ||
+           [colorName isEqualToString:@"mainMenuBarColor"] ||
+           [colorName isEqualToString:@"menuBackgroundColor"]) {
+            return [NSColor colorWithCalibratedWhite:0.92 alpha:1.0];
+        }
+        if([colorName isEqualToString:@"textColor"] ||
+           [colorName isEqualToString:@"controlTextColor"] ||
+           [colorName isEqualToString:@"menuItemTextColor"] ||
+           [colorName isEqualToString:@"headerTextColor"]) {
+            return [NSColor colorWithCalibratedWhite:0.1 alpha:1.0];
+        }
+        if([colorName isEqualToString:@"selectedControlColor"] ||
+           [colorName isEqualToString:@"selectedMenuItemColor"] ||
+           [colorName isEqualToString:@"keyboardFocusIndicatorColor"]) {
+            return [NSColor colorWithCalibratedRed:0.2 green:0.5 blue:0.9 alpha:1.0];
+        }
+        if([colorName isEqualToString:@"selectedControlTextColor"] ||
+           [colorName isEqualToString:@"selectedMenuItemTextColor"]) {
+            return [NSColor colorWithCalibratedWhite:1.0 alpha:1.0];
+        }
+        if([colorName isEqualToString:@"systemDarkGrayColor"] ||
+           [colorName isEqualToString:@"darkGrayColor"]) {
+            return [NSColor colorWithCalibratedWhite:0.333 alpha:1.0];
+        }
+        return [NSColor colorWithCalibratedWhite:0.85 alpha:1.0];
     }
 
     // handle aliases to other catalog colors

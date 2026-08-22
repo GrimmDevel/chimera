@@ -77,6 +77,9 @@ static int s_drag_win = 0;
 static int s_drag_off_x = 0;
 static int s_drag_off_y = 0;
 
+static WSAppRecord *appsByPid[1024];
+static NSMutableArray *appsList = nil;
+
 /* This lock prevents other threads from messing with the graphics context while we
  * are in the rendering loop
  */
@@ -129,7 +132,6 @@ static NSString *_pathForPID(pid_t pid) {
     envp = NULL;
     curShell = LOADING;
     curApp = nil;
-    curWindow = nil;
     pthread_mutex_init(&renderLock, NULL);
     cursorHideCount = 0;
 
@@ -229,16 +231,14 @@ static NSString *_pathForPID(pid_t pid) {
 }
 
 -(WSDisplay *)displayWithID:(uint32_t)ID {
-    printf("[WindowServer displayWithID] searching for ID 0x%x among %lu displays...\n", ID, (unsigned long)[displays count]);
-    fflush(stdout);
     for(int i = 0; i < [displays count]; ++i) {
         WSDisplay *d = [displays objectAtIndex:i];
-        printf("[WindowServer displayWithID] display[%d]=%p, getDisplayID=0x%x\n", i, d, [d getDisplayID]);
-        fflush(stdout);
         if([d getDisplayID] == ID)
             return d;
     }
-    return nil;
+    if([displays count] > 0)
+        return [displays objectAtIndex:0];
+    return (WSDisplay *)fb;
 }
 
 -(BOOL)setUpEnviron:(uid_t)uid {
@@ -269,14 +269,26 @@ static NSString *_pathForPID(pid_t pid) {
 -(uint32_t)windowCreate:(struct wsRPCWindow *)data forApp:(WSAppRecord *)app {
     struct kinfo_proc *kp;
 
-    if(data->state < 0 || data->state >= WIN_STATE_MAX) {
-        NSLog(@"windowCreate called with invalid state");
-        data->state = NORMAL;
+    printf("[WindowServer] windowCreate: start winID=%llu, geom=(%f,%f,%fx%f) app=%@ (pid=%u)\n",
+           (unsigned long long)data->windowID, data->x, data->y, data->w, data->h,
+           app ? app.bundleID : @"(null)", app ? app.pid : 0);
+    fflush(stdout);
+
+    if(!app) {
+        printf("[WindowServer] windowCreate: app is null!\n");
+        fflush(stdout);
+        return 0;
+    }
+
+    if(data->w <= 0 || data->h <= 0) {
+        data->w = 1280;
+        data->h = 24;
     }
 
     if([app windowWithID:data->windowID] != nil) {
-        NSLog(@"windowCreate cannot create existing window ID %u for %@", data->windowID, app);
-        return 0;
+        printf("[WindowServer] windowCreate: window ID %llu already exists for app\n", (unsigned long long)data->windowID);
+        fflush(stdout);
+        return (uint32_t)data->windowID;
     }
 
     WSWindowRecord *winrec = [WSWindowRecord new];
@@ -284,60 +296,65 @@ static NSString *_pathForPID(pid_t pid) {
     winrec.number = data->windowID;
     winrec.state = data->state;
     winrec.styleMask = data->style;
-    winrec.geometry = NSMakeRect(data->x, data->y, data->w, data->h); // FIXME: bounds check?
-    if([app.bundleID isEqualToString:@"com.ravynos.LoginWindow"])
-        winrec.level = kCGOverlayWindowLevelKey;
-    else if(data->level >= kCGMinimumWindowLevelKey && data->level <= kCGMaximumWindowLevelKey)
-        winrec.level = data->level;
-    int len = 0;
-    while(data->title[len] != '\0' && len < sizeof(data->title)) ++len;
-    winrec.title = [NSString stringWithCString:data->title length:len];
-    winrec.icon = nil;
+    winrec.geometry = NSMakeRect(data->x, data->y, data->w, data->h);
+    winrec.level = data->level;
+    if (winrec.level < 0 || winrec.level >= kCGNumReservedWindowLevels) {
+        winrec.level = kCGNormalWindowLevelKey;
+    }
 
-    winrec.shmPath = [NSString stringWithFormat:@"/%@/%u/win/%u", [app bundleID],
-        [app pid], winrec.number];
-    winrec.bufSize = ([fb getDepth]/8) * data->w * data->h;
+    NSString *bid = [app bundleID];
+    const char *bid_cstr = [bid UTF8String];
+    if (!bid_cstr) bid_cstr = [bid cString];
+    if (!bid_cstr || strcmp(bid_cstr, "unknown") == 0) {
+        if ([app pid] == 3) bid_cstr = "com.ravynos.SystemUIServer";
+        else if ([app pid] == 4 || [app pid] == 5) bid_cstr = "com.ravynos.Dock";
+        else bid_cstr = "unix";
+    }
+    char path_buf[256];
+    snprintf(path_buf, sizeof(path_buf), "/%s/%u/win/%u", bid_cstr, [app pid], (uint32_t)winrec.number);
+    winrec.shmPath = [NSString stringWithCString:path_buf];
 
-    int shmfd = shm_open([winrec.shmPath cString], O_RDWR|O_CREAT, 0600);
+    int depth = [fb getDepth];
+    if (depth <= 0) depth = 32;
+    winrec.bufSize = (depth / 8) * (int)data->w * (int)data->h;
+
+    printf("[WindowServer] windowCreate: opening shmPath='%s', size=%zu\n", path_buf, winrec.bufSize);
+    fflush(stdout);
+
+    int shmfd = shm_open(path_buf, O_RDWR|O_CREAT, 0666);
     if(shmfd < 0) {
-        NSLog(@"Cannot open shm fd: %s", strerror(errno));
+        printf("[WindowServer] windowCreate: shm_open failed: %s (errno=%d)\n", strerror(errno), errno);
+        fflush(stdout);
         return 0;
     }
 
-    if(ftruncate(shmfd, winrec.bufSize) < 0)
-        NSLog(@"shmfd ftruncate failed: %s", strerror(errno));
-
-    int count = 0;
-    if(kvm != NULL) {
-        kp = kvm_getprocs(kvm, KERN_PROC_PID, [app pid], &count);
-        if(kp != NULL && count == 1 && kp->ki_pid == [app pid]) {
-            if(fchown(shmfd, kp->ki_uid, kp->ki_rgid) < 0)
-                NSLog(@"shmfd fchown failed: %s", strerror(errno));
-        }
-    }
+    ftruncate(shmfd, winrec.bufSize);
 
     winrec.surfaceBuf = mmap(NULL, winrec.bufSize, PROT_WRITE|PROT_READ, MAP_SHARED|MAP_NOCORE, shmfd, 0);
     close(shmfd);
 
-    if(winrec.surfaceBuf == NULL) {
+    if(winrec.surfaceBuf == NULL || winrec.surfaceBuf == MAP_FAILED) {
         winrec.bufSize = 0;
-        NSLog(@"Cannot alloc surface memory! %s", strerror(errno));
+        winrec.surfaceBuf = NULL;
+        printf("[WindowServer] windowCreate: mmap failed: %s (errno=%d)\n", strerror(errno), errno);
+        fflush(stdout);
         return 0;
     }
 
-    winrec.surface = [[O2Surface alloc] initWithBytes:winrec.surfaceBuf width:data->w
-            height:data->h bitsPerComponent:8 bytesPerRow:4*(data->w)
+    winrec.surface = [[O2Surface alloc] initWithBytes:winrec.surfaceBuf width:(int)data->w
+            height:(int)data->h bitsPerComponent:8 bytesPerRow:4*((int)data->w)
             colorSpace:[fb colorSpace]
             bitmapInfo:kCGBitmapByteOrderDefault|kCGImageAlphaPremultipliedFirst];
     winrec.frame = winrec.geometry;
 
     [app addWindow:winrec];
     [self addWindowByLevel:winrec];
-    if(curApp == app)
-        curWindow = winrec; // FIXME: is this how macOS behaves?
-    if(logLevel >= WS_INFO)
-        NSLog(@"windowCreate: success! %@", winrec);
-    return winrec.number;
+    curWindow = winrec;
+    printf("[WindowServer] windowCreate: SUCCESS winID=%u, frame=(%f,%f,%fx%f) surfaceBuf=%p\n",
+           (uint32_t)winrec.number, winrec.geometry.origin.x, winrec.geometry.origin.y,
+           winrec.geometry.size.width, winrec.geometry.size.height, winrec.surfaceBuf);
+    fflush(stdout);
+    return (uint32_t)winrec.number;
 }
 
 -(void)windowModify:(struct wsRPCWindow *)data forApp:(WSAppRecord *)app {
@@ -347,50 +364,37 @@ static NSString *_pathForPID(pid_t pid) {
     }
 
     WSWindowRecord *winrec = [app windowWithID:data->windowID];
+    if (!winrec) return;
+
     int oldState = winrec.state;
     winrec.state = data->state;
     winrec.styleMask = data->style;
     NSRect oldFrame = winrec.geometry;
-    winrec.geometry = NSMakeRect(data->x, data->y, data->w, data->h); // FIXME: bounds check?
+    winrec.geometry = NSMakeRect(data->x, data->y, data->w, data->h);
     if(!NSEqualRects(winrec.geometry, oldFrame)) {
-        // it resized, so fix up our surface to match
         pthread_mutex_lock(&renderLock);
-        winrec.bufSize = ([fb getDepth]/8) * data->w * data->h;
+        int depth = [fb getDepth];
+        if (depth <= 0) depth = 32;
+        winrec.bufSize = (depth / 8) * (int)data->w * (int)data->h;
 
-        int shmfd = shm_open([winrec.shmPath cString], O_RDWR|O_CREAT, 0600);
-        if(shmfd < 0) {
-            NSLog(@"Cannot open shm fd: %s", strerror(errno));
-            return;
+        const char *shm_c = [winrec.shmPath UTF8String];
+        if (!shm_c) shm_c = [winrec.shmPath cString];
+        if (shm_c) {
+            int shmfd = shm_open(shm_c, O_RDWR|O_CREAT, 0666);
+            if(shmfd >= 0) {
+                ftruncate(shmfd, winrec.bufSize);
+                if (winrec.surfaceBuf) munmap(winrec.surfaceBuf, winrec.bufSize);
+                winrec.surfaceBuf = mmap(NULL, winrec.bufSize, PROT_WRITE|PROT_READ,
+                                         MAP_SHARED|MAP_NOCORE, shmfd, 0);
+                close(shmfd);
+                if(winrec.surfaceBuf && winrec.surfaceBuf != MAP_FAILED) {
+                    winrec.surface = [[O2Surface alloc] initWithBytes:winrec.surfaceBuf width:(int)data->w
+                        height:(int)data->h bitsPerComponent:8 bytesPerRow:4*((int)data->w)
+                        colorSpace:[fb colorSpace]
+                        bitmapInfo:kCGBitmapByteOrderDefault|kCGImageAlphaPremultipliedFirst];
+                }
+            }
         }
-
-        if(ftruncate(shmfd, winrec.bufSize) < 0)
-            NSLog(@"shmfd ftruncate failed: %s", strerror(errno));
-
-        int count = 0;
-        struct kinfo_proc *kp;
-        kp = kvm_getprocs(kvm, KERN_PROC_PID, [app pid], &count);
-        if(count != 1 || kp->ki_pid != [app pid]) {
-            NSLog(@"Cannot get client task info! pid %u", [app pid]);
-            return;
-        }
-
-        if(fchown(shmfd, kp->ki_uid, kp->ki_rgid) < 0)
-            NSLog(@"shmfd fchown failed: %s", strerror(errno));
-
-        winrec.surfaceBuf = mmap(NULL, winrec.bufSize, PROT_WRITE|PROT_READ,
-                MAP_SHARED|MAP_NOCORE, shmfd, 0);
-        close(shmfd);
-
-        if(winrec.surfaceBuf == NULL) {
-            winrec.bufSize = 0;
-            NSLog(@"Cannot alloc surface memory! %s", strerror(errno));
-            return;
-        }
-
-        winrec.surface = [[O2Surface alloc] initWithBytes:winrec.surfaceBuf width:data->w
-            height:data->h bitsPerComponent:8 bytesPerRow:4*(data->w)
-            colorSpace:[fb colorSpace]
-            bitmapInfo:kCGBitmapByteOrderDefault|kCGImageAlphaPremultipliedFirst];
         pthread_mutex_unlock(&renderLock);
     }
 
@@ -432,11 +436,12 @@ static NSString *_pathForPID(pid_t pid) {
 }
 
 -(void)removeWindowFromAllLevels:(WSWindowRecord *)window {
+    if(!window) return;
     if(logLevel >= WS_INFO)
         NSLog(@"removeWindowFromAllLevels %@", window);
     pthread_mutex_lock(&renderLock);
     for(int i = 0; i < kCGNumReservedWindowLevels; ++i)
-        [_windows[window.level] removeObject:window];
+        [_windows[i] removeObject:window];
     pthread_mutex_unlock(&renderLock);
 }
 
@@ -640,13 +645,8 @@ static NSString *_pathForPID(pid_t pid) {
           kill(app.pid, SIGTERM);
 }
 
-/*
- * KEEP THIS RUN LOOP EFFICIENT! It is called every frame to render the entire screen contents.
- */
-static void ws_render_desktop(WindowServer *self, uint32_t *p, int pitch, int scr_w, int scr_h, NSPoint cursorPos) {
+static void ws_render_wallpaper(uint32_t *p, int pitch, int scr_w, int scr_h) {
     if (!p || scr_w <= 0 || scr_h <= 0) return;
-
-    // 1. Cosmic Wallpaper Gradient (Monterey / Big Sur aesthetic)
     ws_draw_gradient_v(p, pitch, scr_w, scr_h, 0, 0, scr_w, scr_h, 0xFF0D1B2A, 0xFF1B263B);
     for (int x = 0; x < scr_w; x++) {
         int wave = (x % 360) - 180;
@@ -654,240 +654,9 @@ static void ws_render_desktop(WindowServer *self, uint32_t *p, int pitch, int sc
         ws_fill_rect(p, pitch, scr_w, scr_h, x, gy, 1, 60, 0x153A86FF);
         ws_fill_rect(p, pitch, scr_w, scr_h, x, gy + 30, 1, 40, 0x108338EC);
     }
+}
 
-    // 2. Top macOS MenuBar (Height 24px)
-    ws_fill_rect(p, pitch, scr_w, scr_h, 0, 0, scr_w, 24, 0xEA161D28);
-    ws_fill_rect(p, pitch, scr_w, scr_h, 0, 23, scr_w, 1, 0x33FFFFFF);
-    ws_draw_apple_logo(p, pitch, scr_w, scr_h, 14, 5, 0xFFFFFFFF);
-
-    const char *active_app_title = "Finder";
-    if (s_active_window == 1 && s_term_open) active_app_title = "Terminal";
-    else if (s_active_window == 2 && s_calc_open) active_app_title = "Calculator";
-    else if (s_active_window == 3 && s_about_open) active_app_title = "System";
-
-    ws_draw_text_bold(p, pitch, scr_w, scr_h, 34, 4, active_app_title, 0xFFFFFFFF);
-    ws_draw_text(p, pitch, scr_w, scr_h, 110, 4, "File", 0xFFD1D5DB);
-    ws_draw_text(p, pitch, scr_w, scr_h, 154, 4, "Edit", 0xFFD1D5DB);
-    ws_draw_text(p, pitch, scr_w, scr_h, 198, 4, "View", 0xFFD1D5DB);
-    ws_draw_text(p, pitch, scr_w, scr_h, 242, 4, "Go", 0xFFD1D5DB);
-    ws_draw_text(p, pitch, scr_w, scr_h, 274, 4, "Window", 0xFFD1D5DB);
-    ws_draw_text(p, pitch, scr_w, scr_h, 334, 4, "Help", 0xFFD1D5DB);
-
-    // Right Status Items
-    ws_draw_text(p, pitch, scr_w, scr_h, scr_w - 270, 4, "100% [||||]", 0xFF9CA3AF);
-    ws_draw_text(p, pitch, scr_w, scr_h, scr_w - 175, 4, "[●] WiFi", 0xFF9CA3AF);
-    ws_draw_text_bold(p, pitch, scr_w, scr_h, scr_w - 95, 4, "Sat 02:30", 0xFFFFFFFF);
-
-    // 3. Apple Menu Dropdown (if open)
-    if (s_apple_menu_open) {
-        ws_draw_rounded_rect(p, pitch, scr_w, scr_h, 6, 26, 180, 160, 8, 0xF0181E29, 0x50FFFFFF);
-        ws_draw_text(p, pitch, scr_w, scr_h, 18, 34, "About This Mac", 0xFFFFFFFF);
-        ws_draw_text(p, pitch, scr_w, scr_h, 18, 52, "System Settings...", 0xFFCBD5E1);
-        ws_fill_rect(p, pitch, scr_w, scr_h, 14, 70, 164, 1, 0x33FFFFFF);
-        ws_draw_text(p, pitch, scr_w, scr_h, 18, 78, "Terminal", 0xFFFFFFFF);
-        ws_draw_text(p, pitch, scr_w, scr_h, 18, 96, "Calculator", 0xFFFFFFFF);
-        ws_fill_rect(p, pitch, scr_w, scr_h, 14, 114, 164, 1, 0x33FFFFFF);
-        ws_draw_text(p, pitch, scr_w, scr_h, 18, 122, "Restart...", 0xFFCBD5E1);
-        ws_draw_text(p, pitch, scr_w, scr_h, 18, 140, "Shut Down...", 0xFFCBD5E1);
-    }
-
-    // 4. Built-in Applications
-
-    // --- Terminal Window ---
-    if (s_term_open) {
-        int tx = (int)s_term_frame.origin.x;
-        int ty = (int)s_term_frame.origin.y;
-        int tw = (int)s_term_frame.size.width;
-        int th = (int)s_term_frame.size.height;
-        BOOL is_act = (s_active_window == 1);
-
-        // Shadow
-        ws_draw_rounded_rect(p, pitch, scr_w, scr_h, tx - 4, ty - 2, tw + 8, th + 8, 10, 0x50000000, 0);
-        // Titlebar
-        ws_draw_rounded_rect(p, pitch, scr_w, scr_h, tx, ty, tw, 28, 8, is_act ? 0xFF282E3A : 0xFF1C212B, 0xFF3D4656);
-        ws_draw_traffic_lights(p, pitch, scr_w, scr_h, tx + 8, ty + 8, -1);
-        ws_draw_text_bold(p, pitch, scr_w, scr_h, tx + 65, ty + 6, "root@Mac: ~ (zsh)", 0xFFE2E8F0);
-
-        // Interior
-        ws_fill_rect(p, pitch, scr_w, scr_h, tx, ty + 28, tw, th - 28, 0xFF0D1117);
-        // 1px border
-        ws_draw_rounded_rect(p, pitch, scr_w, scr_h, tx, ty, tw, th, 8, 0, 0xFF3D4656);
-
-        // Terminal text lines
-        int ly = ty + 36;
-        ws_draw_text(p, pitch, scr_w, scr_h, tx + 14, ly, "XIU OS 1.0 (Darwin 24.0.0 XNU) - Hybrid Mach/BSD", 0xFF64748B); ly += 18;
-        ws_draw_text(p, pitch, scr_w, scr_h, tx + 14, ly, "Kernel: xiu_kernel 1.0.0 (x86_64 Ring 0)", 0xFF64748B); ly += 24;
-
-        ws_draw_text_bold(p, pitch, scr_w, scr_h, tx + 14, ly, "root@Mac ~ # neofetch", 0xFF38BDF8); ly += 20;
-
-        ws_draw_text(p, pitch, scr_w, scr_h, tx + 18, ly, "   .:'      root@Mac", 0xFF10B981); ly += 18;
-        ws_draw_text(p, pitch, scr_w, scr_h, tx + 18, ly, "  '::'      OS: XIU OS 1.0 (Darwin 24.0.0)", 0xFF10B981); ly += 18;
-        ws_draw_text(p, pitch, scr_w, scr_h, tx + 18, ly, " .:::'      Host: Apple Silicon / Virtual Mac", 0xFF10B981); ly += 18;
-        ws_draw_text(p, pitch, scr_w, scr_h, tx + 18, ly, ".::::::.    Kernel: xiu_kernel (Mach-O)", 0xFF10B981); ly += 18;
-        ws_draw_text(p, pitch, scr_w, scr_h, tx + 18, ly, ":::::::::   Shell: zsh 5.9", 0xFF10B981); ly += 18;
-        ws_draw_text(p, pitch, scr_w, scr_h, tx + 18, ly, ":::::::::   WM: WindowServer (Onyx2D Compositor)", 0xFF10B981); ly += 18;
-        ws_draw_text(p, pitch, scr_w, scr_h, tx + 18, ly, " ':::::'    Memory: 142MB / 4096MB", 0xFF10B981); ly += 18;
-        ws_draw_text(p, pitch, scr_w, scr_h, tx + 18, ly, "   ':'      Disk: 512MB /dev/disk0 (FAT32)", 0xFF10B981); ly += 22;
-
-        ws_draw_text_bold(p, pitch, scr_w, scr_h, tx + 14, ly, "root@Mac ~ # ", 0xFF38BDF8);
-        ws_draw_text(p, pitch, scr_w, scr_h, tx + 14 + 13*9, ly, "ls -la", 0xFFF1F5F9); ly += 18;
-        ws_draw_text(p, pitch, scr_w, scr_h, tx + 14, ly, "Applications  Library  System  Users  bin  sbin", 0xFF94A3B8); ly += 20;
-
-        ws_draw_text_bold(p, pitch, scr_w, scr_h, tx + 14, ly, "root@Mac ~ #", 0xFF38BDF8);
-        ws_fill_rect(p, pitch, scr_w, scr_h, tx + 14 + 13*9, ly, 8, 16, 0xFF38BDF8); // cursor
-    }
-
-    // --- Calculator Window ---
-    if (s_calc_open) {
-        int cx = (int)s_calc_frame.origin.x;
-        int cy = (int)s_calc_frame.origin.y;
-        int cw = (int)s_calc_frame.size.width;
-        int ch = (int)s_calc_frame.size.height;
-        BOOL is_act = (s_active_window == 2);
-
-        // Shadow
-        ws_draw_rounded_rect(p, pitch, scr_w, scr_h, cx - 4, cy - 2, cw + 8, ch + 8, 10, 0x50000000, 0);
-        // Titlebar
-        ws_draw_rounded_rect(p, pitch, scr_w, scr_h, cx, cy, cw, 28, 8, is_act ? 0xFF282E3A : 0xFF1C212B, 0xFF3D4656);
-        ws_draw_traffic_lights(p, pitch, scr_w, scr_h, cx + 8, cy + 8, -1);
-        ws_draw_text_bold(p, pitch, scr_w, scr_h, cx + 70, cy + 6, "Calculator", 0xFFE2E8F0);
-
-        // Interior
-        ws_fill_rect(p, pitch, scr_w, scr_h, cx, cy + 28, cw, ch - 28, 0xFF1E2430);
-        ws_draw_rounded_rect(p, pitch, scr_w, scr_h, cx, cy, cw, ch, 8, 0, 0xFF3D4656);
-
-        // LCD Display
-        ws_draw_rounded_rect(p, pitch, scr_w, scr_h, cx + 12, cy + 36, 216, 42, 6, 0xFF12161F, 0xFF333E50);
-        int str_len = (int)strlen(s_calc_str);
-        ws_draw_text_bold(p, pitch, scr_w, scr_h, cx + 215 - str_len * 9, cy + 48, s_calc_str, 0xFFFFFFFF);
-
-        // 4x5 Button Grid
-        const char *btn_labels[5][4] = {
-            {"C", "+/-", "%", "/"},
-            {"7", "8", "9", "*"},
-            {"4", "5", "6", "-"},
-            {"1", "2", "3", "+"},
-            {"0", "", ".", "="}
-        };
-
-        for (int r = 0; r < 5; r++) {
-            for (int c = 0; c < 4; c++) {
-                if (r == 4 && c == 1) continue; // 0 spans 2 cols
-                int bx = cx + 12 + c * 54;
-                int by = cy + 88 + r * 46;
-                int bw = (r == 4 && c == 0) ? 102 : 48;
-                int bh = 40;
-
-                uint32_t bg_col = 0xFF2F3644;
-                if (c == 3 || (r == 4 && c == 3)) bg_col = 0xFFFF9F0A; // orange operator
-                else if (r == 0) bg_col = 0xFF4B5563; // slate top row
-
-                ws_draw_rounded_rect(p, pitch, scr_w, scr_h, bx, by, bw, bh, 6, bg_col, 0x40FFFFFF);
-                const char *lbl = btn_labels[r][c];
-                int lbl_w = (int)strlen(lbl) * 8;
-                ws_draw_text_bold(p, pitch, scr_w, scr_h, bx + (bw - lbl_w)/2, by + 12, lbl, 0xFFFFFFFF);
-            }
-        }
-    }
-
-    // --- About This Mac Window ---
-    if (s_about_open) {
-        int ax = (int)s_about_frame.origin.x;
-        int ay = (int)s_about_frame.origin.y;
-        int aw = (int)s_about_frame.size.width;
-        int ah = (int)s_about_frame.size.height;
-        BOOL is_act = (s_active_window == 3);
-
-        ws_draw_rounded_rect(p, pitch, scr_w, scr_h, ax - 4, ay - 2, aw + 8, ah + 8, 10, 0x50000000, 0);
-        ws_draw_rounded_rect(p, pitch, scr_w, scr_h, ax, ay, aw, 28, 8, is_act ? 0xFF282E3A : 0xFF1C212B, 0xFF3D4656);
-        ws_draw_traffic_lights(p, pitch, scr_w, scr_h, ax + 8, ay + 8, -1);
-        ws_draw_text_bold(p, pitch, scr_w, scr_h, ax + 120, ay + 6, "About This Mac", 0xFFE2E8F0);
-
-        ws_fill_rect(p, pitch, scr_w, scr_h, ax, ay + 28, aw, ah - 28, 0xFF1A202C);
-        ws_draw_rounded_rect(p, pitch, scr_w, scr_h, ax, ay, aw, ah, 8, 0, 0xFF3D4656);
-
-        ws_draw_apple_logo(p, pitch, scr_w, scr_h, ax + 36, ay + 60, 0xFFFFFFFF);
-        ws_draw_text_bold(p, pitch, scr_w, scr_h, ax + 60, ay + 60, "XIU OS Sonoma", 0xFFFFFFFF);
-        ws_draw_text(p, pitch, scr_w, scr_h, ax + 60, ay + 82, "Version 1.0 (Darwin 24.0.0 XNU)", 0xFF94A3B8);
-        ws_draw_text(p, pitch, scr_w, scr_h, ax + 60, ay + 104, "MacBook Pro (XIU Virtual Architecture)", 0xFFCBD5E1);
-        ws_draw_text(p, pitch, scr_w, scr_h, ax + 60, ay + 126, "Processor: 4-Core Virtual Mac CPU", 0xFFCBD5E1);
-        ws_draw_text(p, pitch, scr_w, scr_h, ax + 60, ay + 148, "Memory: 4096 MB RAM", 0xFFCBD5E1);
-        ws_draw_text(p, pitch, scr_w, scr_h, ax + 60, ay + 170, "Graphics: BSDFramebuffer 1280x800", 0xFFCBD5E1);
-    }
-
-    // 5. Bottom Floating macOS Dock
-    int dock_w = 380, dock_h = 58;
-    int dock_x = (scr_w - dock_w) / 2;
-    int dock_y = scr_h - 70;
-
-    // Soft drop shadow
-    ws_draw_rounded_rect(p, pitch, scr_w, scr_h, dock_x - 3, dock_y - 1, dock_w + 6, dock_h + 6, 18, 0x40000000, 0);
-    // Frosted glass background
-    ws_draw_rounded_rect(p, pitch, scr_w, scr_h, dock_x, dock_y, dock_w, dock_h, 16, 0xD01E2638, 0x60FFFFFF);
-
-    // Icon 0: Finder (Cyan Mac face)
-    int ix0 = dock_x + 14, iy0 = dock_y + 8;
-    ws_draw_rounded_rect(p, pitch, scr_w, scr_h, ix0, iy0, 42, 42, 10, 0xFF00A8E8, 0x50FFFFFF);
-    ws_draw_text_bold(p, pitch, scr_w, scr_h, ix0 + 13, iy0 + 12, "(:", 0xFFFFFFFF);
-    ws_draw_circle(p, pitch, scr_w, scr_h, ix0 + 21, dock_y + 53, 2, 0xFF38BDF8, 0);
-
-    // Icon 1: Launchpad (Cosmic grid)
-    int ix1 = dock_x + 66, iy1 = dock_y + 8;
-    ws_draw_rounded_rect(p, pitch, scr_w, scr_h, ix1, iy1, 42, 42, 10, 0xFF4338CA, 0x50FFFFFF);
-    for (int r = 0; r < 3; r++) {
-        for (int c = 0; c < 3; c++) {
-            ws_draw_circle(p, pitch, scr_w, scr_h, ix1 + 13 + c*8, iy1 + 13 + r*8, 2, 0xFFFFFFFF, 0);
-        }
-    }
-
-    // Icon 2: Terminal (Dark slate console with >_)
-    int ix2 = dock_x + 118, iy2 = dock_y + 8;
-    ws_draw_rounded_rect(p, pitch, scr_w, scr_h, ix2, iy2, 42, 42, 10, 0xFF0F172A, 0x50FFFFFF);
-    ws_draw_text_bold(p, pitch, scr_w, scr_h, ix2 + 11, iy2 + 12, ">_", 0xFF10B981);
-    if (s_term_open) ws_draw_circle(p, pitch, scr_w, scr_h, ix2 + 21, dock_y + 53, 2, 0xFF38BDF8, 0);
-
-    // Icon 3: Calculator (Orange arithmetic +-x=)
-    int ix3 = dock_x + 170, iy3 = dock_y + 8;
-    ws_draw_rounded_rect(p, pitch, scr_w, scr_h, ix3, iy3, 42, 42, 10, 0xFFFF9F0A, 0x50FFFFFF);
-    ws_draw_text_bold(p, pitch, scr_w, scr_h, ix3 + 8, iy3 + 7, "+ -", 0xFFFFFFFF);
-    ws_draw_text_bold(p, pitch, scr_w, scr_h, ix3 + 8, iy3 + 22, "x =", 0xFFFFFFFF);
-    if (s_calc_open) ws_draw_circle(p, pitch, scr_w, scr_h, ix3 + 21, dock_y + 53, 2, 0xFF38BDF8, 0);
-
-    // Icon 4: System Settings (Gear)
-    int ix4 = dock_x + 222, iy4 = dock_y + 8;
-    ws_draw_rounded_rect(p, pitch, scr_w, scr_h, ix4, iy4, 42, 42, 10, 0xFF64748B, 0x50FFFFFF);
-    ws_draw_circle(p, pitch, scr_w, scr_h, ix4 + 21, iy4 + 21, 10, 0xFF94A3B8, 0xFF475569);
-    ws_draw_circle(p, pitch, scr_w, scr_h, ix4 + 21, iy4 + 21, 4, 0xFF334155, 0);
-
-    // Divider
-    ws_fill_rect(p, pitch, scr_w, scr_h, dock_x + 272, dock_y + 12, 1, 34, 0x33FFFFFF);
-
-    // Icon 5: Trash
-    int ix5 = dock_x + 286, iy5 = dock_y + 8;
-    ws_draw_rounded_rect(p, pitch, scr_w, scr_h, ix5, iy5, 42, 42, 10, 0xFF334155, 0x50FFFFFF);
-    ws_draw_rounded_rect(p, pitch, scr_w, scr_h, ix5 + 11, iy5 + 11, 20, 22, 3, 0xFF94A3B8, 0xFFCBD5E1);
-    ws_fill_rect(p, pitch, scr_w, scr_h, ix5 + 8, iy5 + 8, 26, 3, 0xFFCBD5E1);
-
-    // Tooltip over hovered Dock icon
-    int mx = (int)cursorPos.x, my = (int)cursorPos.y;
-    if (my >= dock_y && my <= dock_y + dock_h) {
-        const char *tip = NULL;
-        int tip_x = 0;
-        if (mx >= ix0 && mx < ix0 + 42) { tip = "Finder"; tip_x = ix0; }
-        else if (mx >= ix1 && mx < ix1 + 42) { tip = "Launchpad"; tip_x = ix1 - 10; }
-        else if (mx >= ix2 && mx < ix2 + 42) { tip = "Terminal"; tip_x = ix2 - 6; }
-        else if (mx >= ix3 && mx < ix3 + 42) { tip = "Calculator"; tip_x = ix3 - 14; }
-        else if (mx >= ix4 && mx < ix4 + 42) { tip = "Settings"; tip_x = ix4 - 6; }
-        else if (mx >= ix5 && mx < ix5 + 42) { tip = "Trash"; tip_x = ix5; }
-
-        if (tip) {
-            int tw = (int)strlen(tip) * 8 + 16;
-            ws_draw_rounded_rect(p, pitch, scr_w, scr_h, tip_x, dock_y - 28, tw, 22, 5, 0xEE1E2638, 0x60FFFFFF);
-            ws_draw_text(p, pitch, scr_w, scr_h, tip_x + 8, dock_y - 24, tip, 0xFFFFFFFF);
-        }
-    }
-
-    // 6. Draw macOS Cursor (Black arrow with 1px white outline)
+static void ws_draw_cursor(uint32_t *p, int pitch, int scr_w, int scr_h, NSPoint cursorPos) {
     int cx = (int)cursorPos.x;
     int cy = (int)cursorPos.y - _cursor_height;
     for (int r = 0; r < 15; r++) {
@@ -900,6 +669,57 @@ static void ws_render_desktop(WindowServer *self, uint32_t *p, int pitch, int sc
     }
 }
 
+static inline void ws_blit_window_surface(uint32_t *dst, int dst_pitch, int scr_w, int scr_h,
+                                         const uint32_t *src, int src_w, int src_h,
+                                         int win_x, int win_y) {
+    if (!dst || !src || src_w <= 0 || src_h <= 0) return;
+
+    static int s_logged_blit = 0;
+    int non_zero_count = 0;
+
+    for (int y = 0; y < src_h; y++) {
+        int dst_y = (scr_h - 1) - (win_y + y);
+        if (dst_y < 0 || dst_y >= scr_h) continue;
+
+        for (int x = 0; x < src_w; x++) {
+            int dst_x = win_x + x;
+            if (dst_x < 0 || dst_x >= scr_w) continue;
+
+            uint32_t spix = src[y * src_w + x];
+            if (spix == 0) continue;
+            non_zero_count++;
+
+            uint8_t sa = (spix >> 24) & 0xFF;
+            if (sa == 0) sa = 255;
+
+            if (sa == 255) {
+                dst[dst_y * dst_pitch + dst_x] = (0xFF << 24) | (spix & 0x00FFFFFF);
+            } else {
+                uint32_t dpix = dst[dst_y * dst_pitch + dst_x];
+                uint8_t sr = (spix >> 16) & 0xFF;
+                uint8_t sg = (spix >> 8) & 0xFF;
+                uint8_t sb = spix & 0xFF;
+
+                uint8_t dr = (dpix >> 16) & 0xFF;
+                uint8_t dg = (dpix >> 8) & 0xFF;
+                uint8_t db = dpix & 0xFF;
+
+                uint8_t r = ((uint32_t)sr * sa + (uint32_t)dr * (255 - sa)) / 255;
+                uint8_t g = ((uint32_t)sg * sa + (uint32_t)dg * (255 - sa)) / 255;
+                uint8_t b = ((uint32_t)sb * sa + (uint32_t)db * (255 - sa)) / 255;
+
+                dst[dst_y * dst_pitch + dst_x] = (0xFF << 24) | (r << 16) | (g << 8) | b;
+            }
+        }
+    }
+    if (s_logged_blit < 10 && non_zero_count > 0) {
+        printf("[WindowServer] blitted window surface: %dx%d at (%d,%d) -> %d visible pixels\n",
+               src_w, src_h, win_x, win_y, non_zero_count);
+        fflush(stdout);
+        s_logged_blit++;
+    }
+}
+
 // Compositor Main Loop
 -(void)run {
     int scr_w = [fb width];
@@ -909,12 +729,17 @@ static void ws_render_desktop(WindowServer *self, uint32_t *p, int pitch, int sc
     if (scr_h <= 0) scr_h = (int)_geometry.size.height;
     if (pitch <= 0) pitch = scr_w;
 
+    printf("[WindowServer] Starting main compositor event loop...\n");
+    fflush(stdout);
+
+    // Initial desktop rendering pass
     uint32_t *raw_pixels = (uint32_t *)[fb pixels];
     uint32_t *vram_pixels = (uint32_t *)[fb vram];
     if (raw_pixels) {
         printf("[WindowServer] -run: Rendering initial desktop scene to pixels=%p, vram=%p (%dx%d, pitch=%d)...\n",
                raw_pixels, vram_pixels, scr_w, scr_h, pitch);
-        ws_render_desktop(self, raw_pixels, pitch, scr_w, scr_h, NSMakePoint(scr_w / 2, scr_h / 2));
+        fflush(stdout);
+        ws_render_wallpaper(raw_pixels, pitch, scr_w, scr_h);
         if (vram_pixels && raw_pixels != vram_pixels) {
             memcpy(vram_pixels, raw_pixels, pitch * scr_h * 4);
         }
@@ -923,7 +748,6 @@ static void ws_render_desktop(WindowServer *self, uint32_t *p, int pitch, int sc
         fflush(stdout);
     }
 
-    // Launch Desktop Environment (SystemUIServer for MenuBar & Extras, Dock for application launcher)
     printf("[WindowServer] -run: Launching desktop session (SystemUIServer & Dock)...\n");
     fflush(stdout);
 
@@ -968,15 +792,14 @@ static void ws_render_desktop(WindowServer *self, uint32_t *p, int pitch, int sc
     NSPoint lastCursorPos = NSMakePoint(-1, -1);
 
     while(ready == YES) {
-        // 1. Drain incoming Mach messages
-        for(int m = 0; m < 16; ++m) {
-            if([self receiveMachMessage]) {
-                needsRedraw = YES;
-            }
+        // 1. Drain all incoming Mach messages
+        while([self receiveMachMessage]) {
+            needsRedraw = YES;
         }
 
-        // 2. Poll input events (mouse / keyboard)
-        if(fds.fd >= 0 && poll(&fds, 1, 10) > 0) {
+        // 2. Poll input events (mouse / keyboard) without blocking
+        int pr = poll(&fds, 1, 0);
+        if(pr > 0 && (fds.revents & POLLIN)) {
             [input run:self];
             needsRedraw = YES;
         }
@@ -989,39 +812,62 @@ static void ws_render_desktop(WindowServer *self, uint32_t *p, int pitch, int sc
 
         // 3. Render desktop background, windows, decorations
         frame_count++;
-        if(needsRedraw || (frame_count % 30) == 0) {
+        if(needsRedraw || frame_count == 1 || (frame_count % 30) == 0) {
             needsRedraw = NO;
-            pthread_mutex_lock(&renderLock);
             
             uint32_t *raw_pixels = (uint32_t *)[fb pixels];
             uint32_t *vram_pixels = (uint32_t *)[fb vram];
 
             if (raw_pixels) {
-                // Render rich desktop UI (wallpaper, 24px frosted MenuBar, bottom floating glass Dock, built-in apps, cursor)
-                ws_render_desktop(self, raw_pixels, pitch, scr_w, scr_h, cursorRect.origin);
+                NSUInteger totalClientWins = 0;
+                for(int level = 0; level < kCGNumReservedWindowLevels; ++level) {
+                    totalClientWins += [_windows[level] count];
+                }
 
-                // Render client windows if any
+                // 1. Wallpaper background
+                ws_render_wallpaper(raw_pixels, pitch, scr_w, scr_h);
+
+                // 2. Render client windows
                 O2BitmapContext *ctx = [fb context];
-                if (ctx) {
+                if (totalClientWins > 0) {
+                    static int s_logged_render = 0;
                     for(int level = 0; level < kCGNumReservedWindowLevels; ++level) {
                         NSArray *wins = _windows[level];
                         int count = [wins count];
                         for(int i = 0; i < count; ++i) {
                             WSWindowRecord *win = [wins objectAtIndex:i];
+                            if (s_logged_render < 10) {
+                                printf("[WindowServer Compositor] lvl=%d winID=%llu state=%d geom=(%.0f,%.0f,%.0fx%.0f) buf=%p words=[0x%08x, 0x%08x, 0x%08x, 0x%08x]\n",
+                                       level, (unsigned long long)win.number, (int)win.state,
+                                       win.geometry.origin.x, win.geometry.origin.y, win.geometry.size.width, win.geometry.size.height,
+                                       win.surfaceBuf,
+                                       win.surfaceBuf ? ((uint32_t*)win.surfaceBuf)[0] : 0,
+                                       win.surfaceBuf ? ((uint32_t*)win.surfaceBuf)[1] : 0,
+                                       win.surfaceBuf ? ((uint32_t*)win.surfaceBuf)[2] : 0,
+                                       win.surfaceBuf ? ((uint32_t*)win.surfaceBuf)[3] : 0);
+                                fflush(stdout);
+                                s_logged_render++;
+                            }
                             if(win.state == HIDDEN || win.state == MINIMIZED || win.state == CLOSED)
                                 continue;
-                            if(win != curWindow && win.surface) {
+                            if(win.surfaceBuf) {
+                                ws_blit_window_surface(raw_pixels, pitch, scr_w, scr_h,
+                                                      (uint32_t *)win.surfaceBuf,
+                                                      (int)win.geometry.size.width,
+                                                      (int)win.geometry.size.height,
+                                                      (int)win.geometry.origin.x,
+                                                      (int)win.geometry.origin.y);
+                            } else if(ctx && win.surface) {
                                 [ctx drawImage:win.surface inRect:win.geometry];
                             }
-                        }
-                        if(curWindow && curWindow.level == level && curWindow.state != MINIMIZED
-                                && curWindow.state != HIDDEN && curWindow.surface) {
-                            [ctx drawImage:curWindow.surface inRect:curWindow.geometry];
                         }
                     }
                 }
 
-                // If direct VRAM pointer is available, ensure instant blit
+                // 3. Render hardware cursor
+                ws_draw_cursor(raw_pixels, pitch, scr_w, scr_h, cursorRect.origin);
+
+                // 4. If direct VRAM pointer is available, ensure instant blit
                 if (vram_pixels && raw_pixels != vram_pixels) {
                     memcpy(vram_pixels, raw_pixels, pitch * scr_h * 4);
                 }
@@ -1030,12 +876,13 @@ static void ws_render_desktop(WindowServer *self, uint32_t *p, int pitch, int sc
 
                 if(frame_count == 1 || (frame_count % 60) == 0) {
                     printf("[WindowServer] Compositor frame #%llu rendered (scr=%dx%d, raw_pixels=%p, vram=%p, wins=%lu)\n",
-                           frame_count, scr_w, scr_h, raw_pixels, vram_pixels, (unsigned long)[_windows[kCGNormalWindowLevelKey] count]);
+                           frame_count, scr_w, scr_h, raw_pixels, vram_pixels, totalClientWins);
                     fflush(stdout);
                 }
             }
-            pthread_mutex_unlock(&renderLock);
         }
+
+        usleep(2000);
     }
 }
 
@@ -1046,102 +893,107 @@ static void ws_render_desktop(WindowServer *self, uint32_t *p, int pitch, int sc
 }
 
 - (void)rpcGetOnlineDisplayList:(PortMessage *)msg {
-    size_t size = sizeof(struct wsRPCBase) + sizeof(uint32_t)*[displays count];
-    uint8_t *list = malloc(size);
-    struct wsRPCBase *p = (struct wsRPCBase *)list;
-    p->code = kCGGetOnlineDisplayList;
-    p->len = 0;
-    uint32_t *q = (uint32_t *)(list + sizeof(struct wsRPCBase));
+    struct {
+        struct wsRPCBase base;
+        uint32_t count;
+        CGDirectDisplayID list[32];
+    } reply;
+    memset(&reply, 0, sizeof(reply));
+    reply.base.code = kCGGetOnlineDisplayList;
     int j = 0;
-    for(int i = 0; i < [displays count]; ++i) {
+    for(int i = 0; i < [displays count] && j < 32; ++i) {
         WSDisplay *d = [displays objectAtIndex:i];
         if([d isOnline])
-            q[j++] = [d getDisplayID];
+            reply.list[j++] = [d getDisplayID];
     }
-    p->len = j * sizeof(uint32_t);
-    [self sendInlineData:list length:size withCode:MSG_ID_RPC toPort:msg->descriptor.name];
-    free(list);
+    reply.count = j;
+    reply.base.len = sizeof(uint32_t) + j * sizeof(CGDirectDisplayID);
+    [self sendInlineData:&reply length:sizeof(struct wsRPCBase) + reply.base.len withCode:MSG_ID_RPC toPort:msg->descriptor.name];
 }
 
 - (void)rpcGetActiveDisplayList:(PortMessage *)msg {
-    size_t size = sizeof(struct wsRPCBase) + sizeof(uint32_t)*[displays count];
-    uint8_t *list = malloc(size);
-    struct wsRPCBase *p = (struct wsRPCBase *)list;
-    p->code = kCGGetActiveDisplayList;
-    p->len = 0;
-    uint32_t *q = (uint32_t *)(list + sizeof(struct wsRPCBase));
+    struct {
+        struct wsRPCBase base;
+        uint32_t count;
+        CGDirectDisplayID list[32];
+    } reply;
+    memset(&reply, 0, sizeof(reply));
+    reply.base.code = kCGGetActiveDisplayList;
     int j = 0;
-    for(int i = 0; i < [displays count]; ++i) {
+    for(int i = 0; i < [displays count] && j < 32; ++i) {
         WSDisplay *d = [displays objectAtIndex:i];
         if([d isActive])
-            q[j++] = [d getDisplayID];
+            reply.list[j++] = [d getDisplayID];
     }
-    p->len = j * sizeof(uint32_t);
-    [self sendInlineData:list length:size withCode:MSG_ID_RPC toPort:msg->descriptor.name];
-    free(list);
+    reply.count = j;
+    reply.base.len = sizeof(uint32_t) + j * sizeof(CGDirectDisplayID);
+    [self sendInlineData:&reply length:sizeof(struct wsRPCBase) + reply.base.len withCode:MSG_ID_RPC toPort:msg->descriptor.name];
 }
 
 - (void)rpcGetDisplaysWithOpenGLDisplayMask:(PortMessage *)msg {
     struct wsRPCSimple *args = (struct wsRPCSimple *)msg->data;
     CGOpenGLDisplayMask mask = args->val1;
 
-    size_t size = sizeof(struct wsRPCBase) + sizeof(uint32_t)*[displays count];
-    uint8_t *list = malloc(size);
-    struct wsRPCBase *p = (struct wsRPCBase *)list;
-    p->code = kCGGetDisplaysWithOpenGLDisplayMask;
-    p->len = 0;
-    uint32_t *q = (uint32_t *)(list + sizeof(struct wsRPCBase));
+    struct {
+        struct wsRPCBase base;
+        uint32_t count;
+        CGDirectDisplayID list[32];
+    } reply;
+    memset(&reply, 0, sizeof(reply));
+    reply.base.code = kCGGetDisplaysWithOpenGLDisplayMask;
     int j = 0;
-    for(int i = 0; i < [displays count]; ++i) {
+    for(int i = 0; i < [displays count] && j < 32; ++i) {
         WSDisplay *d = [displays objectAtIndex:i];
         if([d openGLMask] & mask)
-            q[j++] = [d getDisplayID];
+            reply.list[j++] = [d getDisplayID];
     }
-    p->len = j * sizeof(uint32_t);
-    [self sendInlineData:list length:size withCode:MSG_ID_RPC toPort:msg->descriptor.name];
-    free(list);
+    reply.count = j;
+    reply.base.len = sizeof(uint32_t) + j * sizeof(CGDirectDisplayID);
+    [self sendInlineData:&reply length:sizeof(struct wsRPCBase) + reply.base.len withCode:MSG_ID_RPC toPort:msg->descriptor.name];
 }
 
 - (void)rpcGetDisplaysWithPoint:(PortMessage *)msg {
     struct wsRPCSimple *args = (struct wsRPCSimple *)msg->data;
     NSPoint point = NSMakePoint(args->val1, args->val2);
 
-    size_t size = sizeof(struct wsRPCBase) + sizeof(uint32_t)*[displays count];
-    uint8_t *list = malloc(size);
-    struct wsRPCBase *p = (struct wsRPCBase *)list;
-    p->code = kCGGetDisplaysWithPoint;
-    p->len = 0;
-    uint32_t *q = (uint32_t *)(list + sizeof(struct wsRPCBase));
+    struct {
+        struct wsRPCBase base;
+        uint32_t count;
+        CGDirectDisplayID list[32];
+    } reply;
+    memset(&reply, 0, sizeof(reply));
+    reply.base.code = kCGGetDisplaysWithPoint;
     int j = 0;
-    for(int i = 0; i < [displays count]; ++i) {
+    for(int i = 0; i < [displays count] && j < 32; ++i) {
         WSDisplay *d = [displays objectAtIndex:i];
-        if(NSPointInRect(point, [d geometry])) // FIXME: this should refer to global coordinates
-            q[j++] = [d getDisplayID];
+        if(NSPointInRect(point, [d geometry]))
+            reply.list[j++] = [d getDisplayID];
     }
-    p->len = j * sizeof(uint32_t);
-    [self sendInlineData:list length:size withCode:MSG_ID_RPC toPort:msg->descriptor.name];
-    free(list);
+    reply.count = j;
+    reply.base.len = sizeof(uint32_t) + j * sizeof(CGDirectDisplayID);
+    [self sendInlineData:&reply length:sizeof(struct wsRPCBase) + reply.base.len withCode:MSG_ID_RPC toPort:msg->descriptor.name];
 }
 
 - (void)rpcGetDisplaysWithRect:(PortMessage *)msg {
     struct wsRPCSimple *args = (struct wsRPCSimple *)msg->data;
     NSRect rect = NSMakeRect(args->val1, args->val2, args->val3, args->val4);
 
-    size_t size = sizeof(struct wsRPCBase) + sizeof(uint32_t)*[displays count];
-    uint8_t *list = malloc(size);
-    struct wsRPCBase *p = (struct wsRPCBase *)list;
-    p->code = kCGGetDisplaysWithRect;
-    p->len = 0;
-    uint32_t *q = (uint32_t *)(list + sizeof(struct wsRPCBase));
+    struct {
+        struct wsRPCBase base;
+        uint32_t count;
+        CGDirectDisplayID list[32];
+    } reply;
+    memset(&reply, 0, sizeof(reply));
+    reply.base.code = kCGGetDisplaysWithRect;
     int j = 0;
-    for(int i = 0; i < [displays count]; ++i) {
+    for(int i = 0; i < [displays count] && j < 32; ++i) {
         WSDisplay *d = [displays objectAtIndex:i];
-        if(NSIntersectsRect([d geometry], rect)) // FIXME: this should refer to global coordinates
-            q[j++] = [d getDisplayID];
+        if(NSIntersectsRect([d geometry], rect))
+            reply.list[j++] = [d getDisplayID];
     }
-    p->len = j * sizeof(uint32_t);
-    [self sendInlineData:list length:size withCode:MSG_ID_RPC toPort:msg->descriptor.name];
-    free(list);
+    reply.count = j;
+    reply.base.len = sizeof(uint32_t) + j * sizeof(CGDirectDisplayID);
+    [self sendInlineData:&reply length:sizeof(struct wsRPCBase) + reply.base.len withCode:MSG_ID_RPC toPort:msg->descriptor.name];
 }
 
 - (void)rpcOpenGLDisplayMaskToDisplayID:(PortMessage *)msg {
@@ -1827,7 +1679,17 @@ static void ws_render_desktop(WindowServer *self, uint32_t *p, int pitch, int sc
 
 -(WSAppRecord *)appForMessage:(PortMessage *)msg {
     if(!msg) return nil;
-    if(msg->bundleID[0] != '\0') {
+    pid_t pid = msg->pid;
+    if(pid >= 0 && pid < 1024 && appsByPid[pid] != nil) {
+        return appsByPid[pid];
+    }
+    if(appsList) {
+        for(WSAppRecord *app in appsList) {
+            if(app.pid == pid)
+                return app;
+        }
+    }
+    if(msg->bundleID[0] != '\0' && strcmp(msg->bundleID, "unknown") != 0) {
         WSAppRecord *app = [apps objectForKey:[NSString stringWithCString:msg->bundleID]];
         if(app) return app;
     }
@@ -1836,8 +1698,16 @@ static void ws_render_desktop(WindowServer *self, uint32_t *p, int pitch, int sc
         if(app && app.pid == msg->pid)
             return app;
     }
-    if(msg->pid == 3) return [apps objectForKey:@"com.ravynos.SystemUIServer"];
-    if(msg->pid == 4 || msg->pid == 5) return [apps objectForKey:@"com.ravynos.Dock"];
+    if(pid == 3) {
+        WSAppRecord *app = [apps objectForKey:@"com.ravynos.SystemUIServer"];
+        if(!app) app = [apps objectForKey:@"unix.3"];
+        if(app) return app;
+    }
+    if(pid == 4 || pid == 5) {
+        WSAppRecord *app = [apps objectForKey:@"com.ravynos.Dock"];
+        if(!app) app = [apps objectForKey:@"unix.4"];
+        if(app) return app;
+    }
     return nil;
 }
 
@@ -1889,16 +1759,23 @@ static void ws_render_desktop(WindowServer *self, uint32_t *p, int pitch, int sc
 
 -(void)rpcWindowCreate:(PortMessage *)msg {
     struct wsRPCSimple reply = { {kWSWindowCreate, 4}, kWSErrorFailure, 0, 0, 0 };
+    printf("[WindowServer] rpcWindowCreate: msg->len=%u, sizeof(wsRPCWindow)=%zu, pid=%u\n",
+           msg->len, sizeof(struct wsRPCWindow), msg->pid);
+    fflush(stdout);
 
-    if(msg->len == sizeof(struct wsRPCWindow)) {
+    if(msg->len >= sizeof(struct wsRPCWindow) - sizeof(struct wsRPCBase)) {
         struct wsRPCWindow *data = (struct wsRPCWindow*)msg->data;
         WSAppRecord *app = [self appForMessage:msg];
 
         if(app != nil) {
-            if([self windowCreate:data forApp:app] != 0)
+            uint32_t winId = [self windowCreate:data forApp:app];
+            printf("[WindowServer] rpcWindowCreate: created winId=%u for app=%@\n", winId, app.bundleID);
+            fflush(stdout);
+            if(winId != 0)
                 reply.val1 = kWSErrorSuccess;
         } else {
-            NSLog(@"No matching app for rpcWindowCreate! %s %u", msg->bundleID, msg->pid);
+            printf("[WindowServer] No matching app for rpcWindowCreate! %s pid=%u\n", msg->bundleID, msg->pid);
+            fflush(stdout);
         }
     }
     [self sendInlineData:&reply length:sizeof(reply) withCode:MSG_ID_RPC toPort:msg->descriptor.name];
@@ -1906,23 +1783,30 @@ static void ws_render_desktop(WindowServer *self, uint32_t *p, int pitch, int sc
 
 -(void)rpcWindowModifyState:(PortMessage *)msg {
     struct wsRPCSimple reply = { {kWSWindowModifyState, 4}, kWSErrorFailure, 0, 0, 0 };
+    printf("[WindowServer] rpcWindowModifyState: msg->len=%u, sizeof(wsRPCWindow)=%zu, pid=%u\n",
+           msg->len, sizeof(struct wsRPCWindow), msg->pid);
+    fflush(stdout);
 
-    if(msg->len == sizeof(struct wsRPCWindow)) {
+    if(msg->len >= sizeof(struct wsRPCWindow) - sizeof(struct wsRPCBase)) {
         struct wsRPCWindow *data = (struct wsRPCWindow*)msg->data;
         WSAppRecord *app = [self appForMessage:msg];
 
         if(app != nil) {
             [self windowModify:data forApp:app];
+            printf("[WindowServer] rpcWindowModifyState: modified winId=%u state=%d for app=%@\n",
+                   data->windowID, data->state, app.bundleID);
+            fflush(stdout);
             reply.val1 = kWSErrorSuccess;
         } else {
-            NSLog(@"No matching app for rpcWindowModifyState! %s %u", msg->bundleID, msg->pid);
+            printf("[WindowServer] No matching app for rpcWindowModifyState! %s pid=%u\n", msg->bundleID, msg->pid);
+            fflush(stdout);
         }
     }
     [self sendInlineData:&reply length:sizeof(reply) withCode:MSG_ID_RPC toPort:msg->descriptor.name];
 }
 
 -(void)rpcWindowDestroy:(PortMessage *)msg {
-    if(msg->len == sizeof(struct wsRPCWindow)) {
+    if(msg->len >= sizeof(struct wsRPCWindow) - sizeof(struct wsRPCBase)) {
         struct wsRPCWindow *data = (struct wsRPCWindow*)msg->data;
         WSAppRecord *app = [self appForMessage:msg];
 
@@ -1997,6 +1881,8 @@ static void ws_render_desktop(WindowServer *self, uint32_t *p, int pitch, int sc
     if(result != MACH_MSG_SUCCESS)
         return NO;
     else {
+        printf("[WindowServer receiveMachMessage] got msgh_id=%u from port 0x%x\n", msg.msg.header.msgh_id, _servicePort);
+        fflush(stdout);
         switch(msg.msg.header.msgh_id) {
             case 5001 /* WS_MSG_CREATE_WINDOW */: {
                 ws_req_create_t *req = (ws_req_create_t *)&msg;
@@ -2103,14 +1989,15 @@ static void ws_render_desktop(WindowServer *self, uint32_t *p, int pitch, int sc
                 pid_t pid = msg.portMsg.pid;
                 const char *rawBundle = msg.portMsg.bundleID;
                 NSString *bundleID = (rawBundle && rawBundle[0]) ? [NSString stringWithCString:rawBundle] : nil;
-                if (!bundleID) {
+                if (!bundleID || [bundleID isEqualToString:@"unknown"] || [bundleID length] == 0) {
                     if (pid == 3) bundleID = @"com.ravynos.SystemUIServer";
                     else if (pid == 4 || pid == 5) bundleID = @"com.ravynos.Dock";
-                    else bundleID = [NSString stringWithFormat:@"com.unknown.app%d", pid];
+                    else bundleID = [NSString stringWithFormat:@"unix.%u", pid];
                 }
-                if(logLevel >= WS_INFO)
-                    NSLog(@"Port registration received from %@ pid %u for port %u", bundleID, pid, port);
+                printf("[WindowServer] Port registration: bundleID='%s' pid=%u port=%u\n", [bundleID UTF8String], pid, port);
+                fflush(stdout);
                 WSAppRecord *rec = [apps objectForKey:bundleID];
+                if(!rec && pid >= 0 && pid < 1024) rec = appsByPid[pid];
                 if(!rec) {
                     rec = [WSAppRecord new];
                     rec.bundleID = bundleID;
@@ -2120,12 +2007,15 @@ static void ws_render_desktop(WindowServer *self, uint32_t *p, int pitch, int sc
                         [rec skipSwitcher:YES];
                 }
                 rec.pid = pid;
+                rec.port = port;
                 rec.path = _pathForPID(pid);
                 if(!rec.path) rec.path = @"";
-                if(port != rec.port && logLevel >= WS_WARNING)
-                    NSLog(@"Port registration received for %@ pid %u when already registered (%u -> %u)",
-                            rec.bundleID, pid, rec.port, port);
                 [apps setObject:rec forKey:bundleID];
+                if (pid >= 0 && pid < 1024) appsByPid[pid] = rec;
+                if(!appsList) appsList = [NSMutableArray new];
+                if(![appsList containsObject:rec]) [appsList addObject:rec];
+                if (pid == 3) [apps setObject:rec forKey:@"unix.3"];
+                if (pid == 4) [apps setObject:rec forKey:@"unix.4"];
 
                 Message repMsg = {0};
                 WSAppRecord *dock = [apps objectForKey:@"com.ravynos.Dock"];
@@ -2665,7 +2555,9 @@ static void ws_handle_mouse_click(WindowServer *self, NSPoint pos) {
     msg.header.msgh_size = sizeof(msg) - sizeof(mach_msg_trailer_t);
     msg.code = code;
     msg.pid = [app pid];
-    strncpy(msg.bundleID, [app.bundleID UTF8String], sizeof(msg.bundleID)-1);
+    const char *bidStr1 = [app.bundleID UTF8String];
+    if(bidStr1)
+        strncpy(msg.bundleID, bidStr1, sizeof(msg.bundleID)-1);
 
     memcpy(msg.data, data, length);
     msg.len = length;
@@ -2749,7 +2641,9 @@ static void ws_handle_mouse_click(WindowServer *self, NSPoint pos) {
     msg.header.msgh_size = sizeof(msg) - sizeof(mach_msg_trailer_t);
     msg.code = CODE_ACTIVATION_STATE;
     msg.pid = getpid();
-    strncpy(msg.bundleID, [[app bundleID] UTF8String], sizeof(msg.bundleID));
+    const char *bidStr2 = [[app bundleID] UTF8String];
+    if(bidStr2)
+        strncpy(msg.bundleID, bidStr2, sizeof(msg.bundleID) - 1);
     memcpy(msg.data, &data, sizeof(data)); // window ID
     msg.len = sizeof(data);
     mach_msg((mach_msg_header_t *)&msg, MACH_SEND_MSG|MACH_SEND_TIMEOUT,
@@ -2774,7 +2668,9 @@ static void ws_handle_mouse_click(WindowServer *self, NSPoint pos) {
     msg.header.msgh_size = sizeof(msg) - sizeof(mach_msg_trailer_t);
     msg.code = CODE_ACTIVATION_STATE;
     msg.pid = getpid();
-    strncpy(msg.bundleID, [[app bundleID] UTF8String], sizeof(msg.bundleID));
+    const char *bidStr3 = [[app bundleID] UTF8String];
+    if(bidStr3)
+        strncpy(msg.bundleID, bidStr3, sizeof(msg.bundleID) - 1);
     memcpy(msg.data, &data, sizeof(data));
     msg.len = sizeof(data);
     mach_msg((mach_msg_header_t *)&msg, MACH_SEND_MSG|MACH_SEND_TIMEOUT,

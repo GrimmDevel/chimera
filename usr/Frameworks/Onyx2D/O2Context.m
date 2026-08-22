@@ -334,12 +334,12 @@ O2ColorRef O2ContextFillColor(O2ContextRef self) {
 }
 
 O2ContextRef O2ContextRetain(O2ContextRef self) {
-   return (self!=NULL)?(O2ContextRef)CFRetain(self):NULL;
+   return (self!=NULL)?(O2ContextRef)[(id)self retain]:NULL;
 }
 
 void O2ContextRelease(O2ContextRef self) {
    if(self!=NULL)
-    CFRelease(self);
+    [(id)self release];
 }
 
 // context state
@@ -675,11 +675,14 @@ void O2ContextRotateCTM(O2ContextRef self,O2Float radians) {
 }
 
 void O2ContextClip(O2ContextRef self) {
+   printf("[O2Context PID %d] O2ContextClip start self=%p\n", getpid(), self); fflush(stdout);
    if(self==nil)
     return;
 
-   if(O2PathIsEmpty(self->_path))
+   if(O2PathIsEmpty(self->_path)) {
+    printf("[O2Context PID %d] O2ContextClip path empty\n", getpid()); fflush(stdout);
     return;
+   }
    
    O2GState *gState=O2ContextCurrentGState(self);
 
@@ -691,6 +694,7 @@ void O2ContextClip(O2ContextRef self) {
    O2PathReset(self->_path);
    
    [self clipToState:O2GStateClipState(gState)];
+   printf("[O2Context PID %d] O2ContextClip complete\n", getpid()); fflush(stdout);
 }
 
 void O2ContextEOClip(O2ContextRef self) {
@@ -724,14 +728,19 @@ void O2ContextClipToMask(O2ContextRef self,O2Rect rect,O2ImageRef image) {
 }
 
 void O2ContextClipToRect(O2ContextRef self,O2Rect rect) {
+   printf("[O2Context PID %d] O2ContextClipToRect: self=%p\n", getpid(), self); fflush(stdout);
    if(self==nil)
     return;
     
    O2AffineTransform ctm=O2GStateUserSpaceTransform(O2ContextCurrentGState(self));
+   printf("[O2Context PID %d] O2ContextClipToRect: 1. ctm got\n", getpid()); fflush(stdout);
 
    O2PathReset(self->_path);
+   printf("[O2Context PID %d] O2ContextClipToRect: 2. O2PathReset done\n", getpid()); fflush(stdout);
    O2PathAddRect(self->_path,&ctm,rect);
+   printf("[O2Context PID %d] O2ContextClipToRect: 3. O2PathAddRect done\n", getpid()); fflush(stdout);
    O2ContextClip(self);
+   printf("[O2Context PID %d] O2ContextClipToRect complete\n", getpid()); fflush(stdout);
 }
 
 void O2ContextClipToRects(O2ContextRef self,const O2Rect *rects,unsigned count) {

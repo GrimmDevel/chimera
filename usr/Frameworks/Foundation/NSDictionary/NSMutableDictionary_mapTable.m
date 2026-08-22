@@ -75,7 +75,7 @@ BOOL NSNextDictionaryEnumeratorPair(CFDictionaryEnumerator *state,void **key,voi
 @implementation NSMutableDictionary_CF
 
 const void *objectRetainCallBack(CFAllocatorRef allocator,const void *value) {
-   return CFRetain(value);
+   return [(id)value retain];
 }
 
 const void *objectCopyCallBack(CFAllocatorRef allocator,const void *value) {
@@ -83,15 +83,27 @@ const void *objectCopyCallBack(CFAllocatorRef allocator,const void *value) {
 }
 
 static void objectReleaseCallBack(CFAllocatorRef allocator,const void *value) {
-   CFRelease(value);
+   [(id)value release];
+}
+
+static CFHashCode objectHashCallBack(const void *value) {
+   return [(id)value hash];
+}
+
+static Boolean objectEqualCallBack(const void *value,const void *other) {
+   return [(id)value isEqual:(id)other];
+}
+
+static CFStringRef objectCopyDescription(const void *value) {
+   return (CFStringRef)[[(id)value description] copy];
 }
 
 static CFDictionaryKeyCallBacks objectKeyCallBacks={
- 0,objectCopyCallBack,objectReleaseCallBack,CFCopyDescription,CFEqual,CFHash,
+ 0,objectCopyCallBack,objectReleaseCallBack,objectCopyDescription,objectEqualCallBack,objectHashCallBack,
 };
 
 static CFDictionaryValueCallBacks objectValueCallbacks={
- 0,objectRetainCallBack,objectReleaseCallBack,CFCopyDescription,CFEqual
+ 0,objectRetainCallBack,objectReleaseCallBack,objectCopyDescription,objectEqualCallBack
 };
 
 const void *defaultRetainCallBack(CFAllocatorRef allocator,const void *value) {

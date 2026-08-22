@@ -413,12 +413,12 @@ O2FontRef O2FontCreateWithDataProvider(O2DataProviderRef provider) {
 }
 
 O2FontRef O2FontRetain(O2FontRef self) {
-   return (self!=NULL)?(O2FontRef)CFRetain(self):NULL;
+   return (self!=NULL)?(O2FontRef)[(id)self retain]:NULL;
 }
 
 void      O2FontRelease(O2FontRef self) {
    if(self!=NULL)
-    CFRelease(self);
+    [(id)self release];
 }
 
 O2FontPlatformType O2FontGetPlatformType(O2Font *self) {

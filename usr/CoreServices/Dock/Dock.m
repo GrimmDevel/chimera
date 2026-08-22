@@ -64,6 +64,9 @@ extern Dock *dock; // our singleton object in main.m
     NSRect frame = NSMakeRect(0,0,_currentSize.width,_currentSize.height);
     [self createWindowWithFrame:frame];
     [self placeItemsInWindow:max];
+    [_window makeKeyAndOrderFront:nil];
+    [[_window contentView] setNeedsDisplay:YES];
+    [_window displayIfNeeded];
     return self;
 }
 
@@ -343,7 +346,7 @@ extern Dock *dock; // our singleton object in main.m
 
 -(void)loadItems {
     if(_items == nil)
-        _items = [NSMutableArray arrayWithCapacity:10];
+        _items = [[NSMutableArray alloc] initWithCapacity:10];
 
     NSMutableArray *pa = [NSMutableArray arrayWithCapacity:10];
     [pa addObjectsFromArray:[_prefs objectForKey:INFOKEY_PERSISTENT_APPS]];
@@ -404,11 +407,21 @@ extern Dock *dock; // our singleton object in main.m
     return _alpha;
 }
 
+-(void)dealloc {
+    [_items release];
+    [_desktops release];
+    [_window release];
+    [super dealloc];
+}
+
 @end
 
 @implementation DockView
 -(void)drawRect:(NSRect)rect {
     CGContextRef context = [[[self window] graphicsContext] graphicsPort];
+    printf("[DockView PID %d] drawRect: rect=(%f,%f,%fx%f) context=%p\n",
+           getpid(), rect.origin.x, rect.origin.y, rect.size.width, rect.size.height, context);
+    fflush(stdout);
 
     CGContextSetGrayStrokeColor(context, 0.666, [dock alpha]);
     CGContextSetGrayFillColor(context, 0.666, [dock alpha]);
@@ -435,8 +448,6 @@ extern Dock *dock; // our singleton object in main.m
     CGContextAddLineToPoint(context, _frame.origin.x, NSMaxY(_frame));
     CGContextClosePath(context);
     CGContextFillPath(context);
-
-    [self setNeedsDisplay:YES];
 }
 @end
 

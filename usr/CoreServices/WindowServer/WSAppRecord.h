@@ -28,6 +28,12 @@
     NSMutableArray *_windows;
     BOOL _mouseCursorConnected;
     BOOL _skipSwitcher;
+    NSString *_bundleID;
+    NSString *_path;
+    NSString *_name;
+    unsigned int _pid;
+    mach_port_t _port;
+    NSImage *_icon;
 }
 
 @property NSString *bundleID;           // CFBundleID

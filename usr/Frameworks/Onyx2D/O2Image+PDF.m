@@ -79,7 +79,7 @@ const char *O2ImageNameWithIntent(O2ColorRenderingIntent intent){
         [dictionary setNameForKey:"Filter" value:"DCTDecode"];
         
         [[result mutableData] appendData:(NSData *)dctData];
-        CFRelease(dctData);
+        [(id)dctData release];
     } else {
 #define CHUNK 65536
         

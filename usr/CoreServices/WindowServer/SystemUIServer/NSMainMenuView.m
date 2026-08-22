@@ -36,16 +36,24 @@ enum {
 @implementation NSMainMenuView
 
 +(NSFont *)menuFont {
-    return [NSFont menuFontOfSize:15.0];
+    NSFont *font = [NSFont menuFontOfSize:15.0];
+    if(font == nil)
+        font = [NSFont userFontOfSize:15.0];
+    if(font == nil)
+        font = [NSFont fontWithName:@"Inter-Regular" size:15.0];
+    return font;
 }
 
 +(float)menuHeight {
-    NSDictionary *attributes=[NSDictionary dictionaryWithObjectsAndKeys:
-        [self menuFont], NSFontAttributeName, nil];
-    float result=[@"Menu" sizeWithAttributes:attributes].height;
-
-    result+=4;
-    return result;
+    NSFont *font = [self menuFont];
+    if(font != nil) {
+        NSDictionary *attributes=[NSDictionary dictionaryWithObjectsAndKeys:
+            font, NSFontAttributeName, nil];
+        float result=[@"Menu" sizeWithAttributes:attributes].height;
+        result+=4;
+        return (result > 22.0) ? result : 22.0;
+    }
+    return 22.0;
 }
 
 -(Margins)menuItemTextMargins {
@@ -184,6 +192,9 @@ enum {
 	NSRect        bounds=[self bounds];
 	NSArray      *items=[[self menu] itemArray];
 	int           i,count=[items count];
+	printf("[NSMainMenuView PID %d] drawRect: bounds=(%f,%f,%fx%f) items=%d\n",
+	       getpid(), bounds.origin.x, bounds.origin.y, bounds.size.width, bounds.size.height, count);
+	fflush(stdout);
 	NSRect        previousBorderRect=NSMakeRect(0,0,0,0);
 	BOOL          overflow=NO;
 	NSPoint       mouseLoc = [[NSApp currentEvent] locationInWindow];

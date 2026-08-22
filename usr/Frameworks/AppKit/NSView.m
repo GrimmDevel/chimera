@@ -1774,27 +1774,51 @@ static NSGraphicsContext *graphicsContextForView(NSView *view){
 }
 
 -(void)_lockFocusInContext:(NSGraphicsContext *)context {
+    printf("[NSView PID %d] _lockFocusInContext: view=%p context=%p\n", getpid(), self, context);
+    fflush(stdout);
     CGContextRef graphicsPort=[context graphicsPort];
+    printf("[NSView PID %d] _lockFocusInContext: 1. graphicsPort=%p\n", getpid(), graphicsPort);
+    fflush(stdout);
 
     [NSGraphicsContext saveGraphicsState];
+    printf("[NSView PID %d] _lockFocusInContext: 2. saveGraphicsState done\n", getpid());
+    fflush(stdout);
+
     [NSGraphicsContext setCurrentContext:context];
+    printf("[NSView PID %d] _lockFocusInContext: 3. setCurrentContext done\n", getpid());
+    fflush(stdout);
    
     [[context focusStack] addObject:self];
+    printf("[NSView PID %d] _lockFocusInContext: 4. focusStack addObject done\n", getpid());
+    fflush(stdout);
 
     CGContextSaveGState(graphicsPort);
+    printf("[NSView PID %d] _lockFocusInContext: 5. CGContextSaveGState done\n", getpid());
+    fflush(stdout);
+
     CGContextResetClip(graphicsPort);
+    printf("[NSView PID %d] _lockFocusInContext: 6. CGContextResetClip done\n", getpid());
+    fflush(stdout);
     
     if(_layer!=nil)
      CGContextSetCTM(graphicsPort,[self transformToLayer]);
     else
      CGContextSetCTM(graphicsPort,[self transformToWindow]);
+    printf("[NSView PID %d] _lockFocusInContext: 7. CGContextSetCTM done\n", getpid());
+    fflush(stdout);
      
     CGContextClipToRect(graphicsPort,[self visibleRect]);
+    printf("[NSView PID %d] _lockFocusInContext: 8. CGContextClipToRect done\n", getpid());
+    fflush(stdout);
 
     [self setUpGState];
+    printf("[NSView PID %d] _lockFocusInContext: complete for view=%p\n", getpid(), self);
+    fflush(stdout);
 }
 
 -(void)lockFocus {
+   printf("[NSView PID %d] lockFocus: view=%p\n", getpid(), self);
+   fflush(stdout);
    [self _lockFocusInContext:graphicsContextForView(self)];
 }
 
@@ -1944,6 +1968,10 @@ static NSGraphicsContext *graphicsContextForView(NSView *view){
 }
 
 -(void)_displayIfNeededWithoutViewWillDraw {
+   printf("[NSView PID %d] _displayIfNeededWithoutViewWillDraw: view=%p (%s) needsDisplay=%d subviews=%lu\n",
+          getpid(), self, class_getName(isa), (int)[self needsDisplay], (unsigned long)[_subviews count]);
+   fflush(stdout);
+
    if([self needsDisplay]){
     [self displayRect:unionOfInvalidRects(self)];
     clearNeedsDisplay(self);
@@ -2015,8 +2043,10 @@ static NSGraphicsContext *graphicsContextForView(NSView *view){
 -(void)displayRect:(NSRect)rect {
    NSView *opaque=[self opaqueAncestor];
 
-   if(opaque!=self)
+   if(opaque!=self && opaque!=nil)
     rect=[self convertRect:rect toView:opaque];
+   if(opaque == nil)
+    opaque = self;
    [opaque displayRectIgnoringOpacity:rect];
 }
 
@@ -2025,34 +2055,45 @@ static NSGraphicsContext *graphicsContextForView(NSView *view){
 
    rect=NSIntersectionRect(rect,visibleRect);
 
+   printf("[NSView PID %d] displayRectIgnoringOpacity: view=%p (%s) rect=(%.0f,%.0f,%.0fx%.0f) visRect=(%.0f,%.0f,%.0fx%.0f) canDraw=%d\n",
+          getpid(), self, class_getName(isa), rect.origin.x, rect.origin.y, rect.size.width, rect.size.height,
+          visibleRect.origin.x, visibleRect.origin.y, visibleRect.size.width, visibleRect.size.height, (int)[self canDraw]);
+   fflush(stdout);
+
    if(NSIsEmptyRect(rect))
     return;
     
    if ([self canDraw]) {
-      // This view must be locked/unlocked prior to drawing subviews otherwise gState changes may affect subviews.
+      printf("[NSView PID %d] displayRectIgnoringOpacity: locking focus for %p (%s)\n", getpid(), self, class_getName(isa)); fflush(stdout);
       [self lockFocus];
+      printf("[NSView PID %d] displayRectIgnoringOpacity: lockFocus done for %p\n", getpid(), self); fflush(stdout);
 
       NSGraphicsContext *context=[NSGraphicsContext currentContext];
       CGContextRef       graphicsPort=[context graphicsPort];
 
-	   CGContextClipToRect(graphicsPort,rect);
-	   
-	   const NSRect *rects;
-	   NSUInteger rectsCount;
-	   [self getRectsBeingDrawn:&rects count:&rectsCount];
-	   // If there is only one rect, it's the visible rect - it's already clipped
-	   if (rectsCount > 1)
- 		   CGContextClipToRects(graphicsPort, rects, rectsCount);
+      printf("[NSView PID %d] displayRectIgnoringOpacity: graphicsPort=%p for %p\n", getpid(), graphicsPort, self); fflush(stdout);
+      CGContextClipToRect(graphicsPort,rect);
+      
+      const NSRect *rects;
+      NSUInteger rectsCount;
+      [self getRectsBeingDrawn:&rects count:&rectsCount];
+      // If there is only one rect, it's the visible rect - it's already clipped
+      if (rectsCount > 1)
+          CGContextClipToRects(graphicsPort, rects, rectsCount);
 
       // [_window dirtyRect:[self convertRect:rect toView:nil]];
-	   if ([NSGraphicsContext inQuartzDebugMode]) {
-		   [[NSColor yellowColor] set];
-		   NSRectFill(rect);
-	   }
-      else
-		   [self drawRect:rect];
+      if ([NSGraphicsContext inQuartzDebugMode]) {
+          [[NSColor yellowColor] set];
+          NSRectFill(rect);
+      }
+      else {
+          printf("[NSView PID %d] displayRectIgnoringOpacity: drawing rect for %p (%s)\n", getpid(), self, class_getName(isa)); fflush(stdout);
+          [self drawRect:rect];
+          printf("[NSView PID %d] displayRectIgnoringOpacity: drawRect done for %p\n", getpid(), self); fflush(stdout);
+      }
 
       [self unlockFocus];
+      printf("[NSView PID %d] displayRectIgnoringOpacity: unlockFocus done for %p\n", getpid(), self); fflush(stdout);
 
 	   NSEnumerator *viewEnumerator = [self _subviewsInDisplayOrderEnumerator];
 	   

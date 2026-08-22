@@ -345,17 +345,18 @@ static NSLock *_cacheLock=nil;
 +(NSFont *)fontWithName:(NSString *)name size:(float)size {
    NSFont *result;
 
-   if(name==nil)
-    [NSException raise:NSInvalidArgumentException format:@"-[%@ %s] name==nil",self,sel_getName(_cmd)];
+   if(name==nil || [name length] == 0)
+       name = @"Inter-Regular";
 
-	// Name can be PS name or a display name - internally we want a PS name - that's what Cocoa is doing
-	name = [O2Font postscriptNameForFontName:name];
+   NSString *psName = [O2Font postscriptNameForFontName:name];
+   if(psName != nil && [psName length] > 0)
+       name = psName;
 
    result=[self cachedFontWithName:name size:size];
 
-    if(result==nil) {
-        result=[[[NSFont alloc] initWithName:name size:size] autorelease];
-    }
+   if(result==nil) {
+       result=[[[NSFont alloc] initWithName:name size:size] autorelease];
+   }
 
    return result;
 }

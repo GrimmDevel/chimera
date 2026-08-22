@@ -48,12 +48,7 @@ SOFTWARE. */
 }
 
 +(NSDisplay *)currentDisplay {
-   printf("[NSDisplay +currentDisplay] PID %d calling NSThreadSharedInstance...\n", getpid());
-   fflush(stdout);
-   NSDisplay *d = NSThreadSharedInstance(@"NSDisplay");
-   printf("[NSDisplay +currentDisplay] PID %d got display %p\n", getpid(), d);
-   fflush(stdout);
-   return d;
+   return NSThreadSharedInstance(@"NSDisplay");
 }
 
 -init {
@@ -81,16 +76,22 @@ SOFTWARE. */
            mode, mode ? CGDisplayModeGetWidth(mode) : 0, mode ? CGDisplayModeGetHeight(mode) : 0); fflush(stdout);
     CGColorSpaceRef cs = CGDisplayCopyColorSpace(mainDisplay);
     printf("[NSDisplay -init] got cs=%p\n", cs); fflush(stdout);
-    NSRect frame = NSMakeRect(0, 0, CGDisplayModeGetWidth(mode), CGDisplayModeGetHeight(mode));
+    CGFloat sw = mode ? CGDisplayModeGetWidth(mode) : 1280;
+    CGFloat sh = mode ? CGDisplayModeGetHeight(mode) : 800;
+    if (sw <= 0) sw = 1280;
+    if (sh <= 0) sh = 800;
+    NSRect frame = NSMakeRect(0, 0, sw, sh);
     NSRect visFrame = frame;
     visFrame.size.height -= MENU_BAR_HEIGHT;
     printf("[NSDisplay -init] allocating NSScreen frame=(%f,%f,%f,%f)...\n",
            frame.origin.x, frame.origin.y, frame.size.width, frame.size.height); fflush(stdout);
     NSScreen *screen = [[[NSScreen alloc] initWithFrame:frame visibleFrame:visFrame] retain];
     printf("[NSDisplay -init] screen=%p, calling _propertiesFromMode...\n", screen); fflush(stdout);
-    [screen _propertiesFromMode:mode colorSpace:cs displayID:mainDisplay];
+    if (mode) {
+        [screen _propertiesFromMode:mode colorSpace:cs displayID:mainDisplay];
+        CGDisplayModeRelease(mode);
+    }
     printf("[NSDisplay -init] _propertiesFromMode done\n"); fflush(stdout);
-    CGDisplayModeRelease(mode);
     [_screens addObject:screen];
 
     // now add any other displays as additional screens
@@ -129,13 +130,14 @@ SOFTWARE. */
 -(uint32_t)depth { return _depth; }
 
 -(NSPasteboard *)pasteboardWithName:(NSString *)name {
-   NSUnimplementedMethod();
    return nil;
 }
 
 -(NSDraggingManager *)draggingManager {
-   NSUnimplementedMethod();
-   return nil;
+   if (!_draggingManager) {
+       _draggingManager = [NSDraggingManager new];
+   }
+   return _draggingManager;
 }
 
 -(NSColor *)colorWithName:(NSString *)colorName {
@@ -173,30 +175,24 @@ SOFTWARE. */
 }
 
 -(void)_addSystemColor:(NSColor *) result forName:(NSString *)colorName {
-   NSUnimplementedMethod();
- }
-
+}
 
 -(NSTimeInterval)textCaretBlinkInterval {
    return 0.5;
 }
 
 -(void)hideCursor {
-   NSUnimplementedMethod();
 }
 
 -(void)unhideCursor {
-   NSUnimplementedMethod();
 }
 
 // Arrow, IBeam, HorizontalResize, VerticalResize
 -(id)cursorWithName:(NSString *)name {
-   NSUnimplementedMethod();
    return nil;
 }
 
 -(void)setCursor:(id)cursor {
-   NSUnimplementedMethod();
 }
 
 -(NSEvent *)nextEventMatchingMask:(unsigned)mask untilDate:(NSDate *)untilDate inMode:(NSString *)mode dequeue:(BOOL)dequeue {

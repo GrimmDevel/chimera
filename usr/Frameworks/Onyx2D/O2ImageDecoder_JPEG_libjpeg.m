@@ -167,7 +167,7 @@ static unsigned char *stbi_jpeg_load_from_memory(const uint8_t const *buffer, in
     
     bitmap=stbi_jpeg_load_from_memory(encodedBytes,encodedLength,&width,&height);
     
-    CFRelease(encodedData);
+    [(id)encodedData release];
     
     if(bitmap==NULL){
         [self dealloc];
@@ -190,12 +190,12 @@ static unsigned char *stbi_jpeg_load_from_memory(const uint8_t const *buffer, in
 -(void)dealloc {
     [_dataProvider release];
     [_colorSpace release];
-    CFRelease(_pixelData);
+    [(id)_pixelData release];
     [super dealloc];
 }
 
 -(CFDataRef)createPixelData {
-    return CFRetain(_pixelData);
+    return (CFDataRef)[(id)_pixelData retain];
 }
 
 @end

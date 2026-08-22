@@ -23,7 +23,22 @@
 #import <CoreFoundation/CFString.h>
 #import <CoreGraphics/CGFont.h>
 
-@interface WSWindowRecord : NSObject
+@interface WSWindowRecord : NSObject {
+    int _number;
+    void *_surfaceBuf;
+    size_t _bufSize;
+    O2Surface *_surface;
+    enum WindowState _state;
+    enum WindowState _prevState;
+    NSRect _geometry;
+    NSRect _frame;
+    NSString *_title;
+    NSImage *_icon;
+    NSString *_shmPath;
+    int _styleMask;
+    int _level;
+    id _app;
+}
 
 @property int number;                   // internal window ID
 @property void *surfaceBuf;             // mmaped shared graphics memory

@@ -30,6 +30,7 @@ SOFTWARE. */
 @interface NSDisplay : NSObject {
     NSMutableArray *_eventQueue;
     NSMutableArray *_screens;
+    NSDraggingManager *_draggingManager;
     uint32_t _depth;
     NSPoint pointerPos;
 }

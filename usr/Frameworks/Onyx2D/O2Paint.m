@@ -36,12 +36,12 @@ O2PaintRef O2PaintInitWithTransform(O2PaintRef self,O2AffineTransform transform)
 }
 
 O2PaintRef O2PaintRetain(O2PaintRef self) {
-   return (self!=NULL)?(O2PaintRef)CFRetain(self):NULL;
+   return (self!=NULL)?(O2PaintRef)[(id)self retain]:NULL;
 }
 
 void O2PaintRelease(O2PaintRef self) {
    if(self!=NULL)
-    CFRelease(self);
+    [(id)self release];
 }
 
 @end

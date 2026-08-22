@@ -26,12 +26,7 @@ NSString * const NSRunLoopCommonModes=@"kCFRunLoopCommonModes";
 @implementation NSRunLoop
 
 +(NSRunLoop *)currentRunLoop {
-   printf("[NSRunLoop +currentRunLoop PID %d] calling NSThreadSharedInstance...\n", getpid());
-   fflush(stdout);
-   NSRunLoop *rl = NSThreadSharedInstance(@"NSRunLoop");
-   printf("[NSRunLoop +currentRunLoop PID %d] got runLoop %p\n", getpid(), rl);
-   fflush(stdout);
-   return rl;
+   return NSThreadSharedInstance(@"NSRunLoop");
 }
 
 +(NSRunLoop *)mainRunLoop {

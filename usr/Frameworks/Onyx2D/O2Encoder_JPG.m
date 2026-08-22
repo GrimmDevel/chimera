@@ -6,13 +6,13 @@
 
 O2JPGEncoderRef O2JPGEncoderCreate(O2DataConsumerRef consumer) {
    O2JPGEncoderRef self=NSZoneCalloc(NULL,1,sizeof(struct O2JPGEncoder));
-   self->_consumer=(id)CFRetain(consumer);
+   self->_consumer=(id)[(id)consumer retain];
    return self;
 }
 
 void O2JPGEncoderDealloc(O2JPGEncoderRef self) {
    if(self->_consumer!=NULL)
-    CFRelease(self->_consumer);
+    [(id)self->_consumer release];
    NSZoneFree(NULL,self);
 }
 

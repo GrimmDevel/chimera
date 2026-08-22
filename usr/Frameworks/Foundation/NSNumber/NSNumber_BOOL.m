@@ -8,21 +8,28 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 #import "NSNumber_BOOL.h"
 #import <Foundation/NSStringFormatter.h>
 
-#if defined(__APPLE__)
-#import "NSNumber_BOOL_const.h"
-#else
-#import "NSNumber_BOOL_const_impl.h"
-#endif
+static NSNumber_BOOL *sTrue = nil;
+static NSNumber_BOOL *sFalse = nil;
+
+const CFBooleanRef kCFBooleanTrue = (CFBooleanRef)&sTrue;
+const CFBooleanRef kCFBooleanFalse = (CFBooleanRef)&sFalse;
 
 @implementation NSNumber_BOOL
 
 NSNumber *NSNumber_BOOLNew(NSZone *zone,BOOL value) {
-   return value?kNSNumberTrue:kNSNumberFalse;
+   if (!sTrue) {
+       sTrue = (NSNumber_BOOL *)NSAllocateObject([NSNumber_BOOL class], 0, NULL);
+       sTrue->_value = YES;
+       sTrue->_type = kCFNumberCharType;
+       sFalse = (NSNumber_BOOL *)NSAllocateObject([NSNumber_BOOL class], 0, NULL);
+       sFalse->_value = NO;
+       sFalse->_type = kCFNumberCharType;
+   }
+   return value ? sTrue : sFalse;
 }
 
 + (id) allocWithZone:(NSZone *)zone {
-   [NSException raise:NSInternalInconsistencyException format:@"Private class NSNumber_BOOL is not intended to be alloced."];
-   return nil;
+   return [self alloc];
 }
 
 // Being constant singletons (doubletons?), boolean numbers can't be released.

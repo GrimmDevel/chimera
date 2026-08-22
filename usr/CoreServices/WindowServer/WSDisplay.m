@@ -30,6 +30,7 @@ extern struct CGDisplayMode *CGDisplayModeRetain(struct CGDisplayMode *);
 @implementation WSDisplay
 -init {
     self = [super init];
+    _ID = 1;
     _flags = 0;
     _openGLMask = 0x1;
     _captured = 0;

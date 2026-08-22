@@ -384,7 +384,9 @@ int objc_sync_exit(id obj) {
 }
 
 void objc_exception_throw(id exception) {
-    fprintf(stderr, "[XIU ObjC] Unhandled exception occurred: %p (callers: %p %p %p %p %p %p)\n",
+    const char *cls = exception ? object_getClassName(exception) : "nil";
+    fprintf(stderr, "[XIU ObjC] Unhandled exception of class '%s' at %p (callers: %p %p %p %p %p %p)\n",
+        cls,
         exception,
         __builtin_return_address(0),
         __builtin_return_address(1),

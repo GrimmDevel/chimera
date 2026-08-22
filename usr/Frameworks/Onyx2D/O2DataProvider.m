@@ -70,12 +70,12 @@ O2DataProviderRef O2DataProviderCreateWithFilename(const char *pathCString) {
 }
 
 O2DataProviderRef O2DataProviderRetain(O2DataProviderRef self) {
-   return (self!=NULL)?(O2DataProviderRef)CFRetain(self):NULL;
+   return (self!=NULL)?(O2DataProviderRef)[(id)self retain]:NULL;
 }
 
 void O2DataProviderRelease(O2DataProviderRef self) {
    if(self!=NULL)
-    CFRelease(self);
+    [(id)self release];
 }
 
 CFDataRef O2DataProviderCopyData(O2DataProviderRef self) {

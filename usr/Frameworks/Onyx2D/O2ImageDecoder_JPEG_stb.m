@@ -1125,7 +1125,7 @@ static unsigned char *stbi_jpeg_load_from_memory(jpeg *j,stbi_uc const *buffer, 
     
     bitmap=stbi_jpeg_load_from_memory(&jpeg_decoder,encodedBytes,encodedLength,&width,&height,&comp,STBI_rgb_alpha);
     
-    CFRelease(encodedData);
+    [(id)encodedData release];
 
     if(bitmap==NULL){
         [self dealloc];
@@ -1140,7 +1140,6 @@ static unsigned char *stbi_jpeg_load_from_memory(jpeg *j,stbi_uc const *buffer, 
     _colorSpace=O2ColorSpaceCreateDeviceRGB();
     _bitmapInfo=kO2BitmapByteOrder32Big|kO2ImageAlphaPremultipliedLast;
     
-    _pixelData=CFDataCreateWithBytesNoCopy(NULL, bitmap, _bytesPerRow*_height, NULL);
     _pixelData=(CFDataRef)[[NSData alloc] initWithBytesNoCopy:bitmap length:_bytesPerRow*_height freeWhenDone:YES];
 
     return self;
@@ -1149,12 +1148,12 @@ static unsigned char *stbi_jpeg_load_from_memory(jpeg *j,stbi_uc const *buffer, 
 -(void)dealloc {
     [_dataProvider release];
     [_colorSpace release];
-    CFRelease(_pixelData);
+    [(id)_pixelData release];
     [super dealloc];
 }
 
 -(CFDataRef)createPixelData {
-    return CFRetain(_pixelData);
+    return (CFDataRef)[(id)_pixelData retain];
 }
 
 @end

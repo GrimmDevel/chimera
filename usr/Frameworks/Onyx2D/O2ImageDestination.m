@@ -73,7 +73,7 @@ O2ImageDestinationRef O2ImageDestinationCreateWithDataConsumer(O2DataConsumerRef
        self->_consumer=O2DataConsumerRetain(dataConsumer);
        self->_type=fileTypeForUTI(type);
        self->_imageCount=imageCount;
-       self->_options=(options==NULL)?NULL:CFRetain(options);
+       self->_options=(options==NULL)?NULL:(id)[(id)options retain];
        
        switch(self->_type){
        
@@ -195,7 +195,7 @@ bool O2ImageDestinationFinalize(O2ImageDestinationRef self) {
 	[self->_consumer release]; // This is needed so the consumer can finalize its work before we exit this function
 	self->_consumer = nil;
    if (self->_options)
-	   CFRelease(self->_options);
+	   [(id)self->_options release];
 	self->_options = NULL;
 	
    return TRUE;

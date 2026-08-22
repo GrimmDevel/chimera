@@ -43,12 +43,13 @@ int main(int argc, const char *argv[]) {
     }
     printf("[Dock] Dock initialized\n");
     fflush(stdout);
-    [pool drain];
 
     [NSApp setDelegate:dock];
     printf("[Dock] Entering [NSApp run]...\n");
     fflush(stdout);
     [NSApp run];
+
+    [pool drain];
     return 0;
 }
 

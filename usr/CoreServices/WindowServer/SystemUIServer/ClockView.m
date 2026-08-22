@@ -39,24 +39,30 @@ pthread_mutex_t mtx;
     NSUserDefaults *prefs = [NSUserDefaults standardUserDefaults];
     dateFormat = [prefs stringForKey:PrefsDateFormatStringKey];
     if(dateFormat == nil || [dateFormat length] == 0) {
-        NSString *locale = [[NSLocale currentLocale] localeIdentifier];
-        if([locale hasPrefix:@"en"])
-            dateFormat = defaultFormatEN;
-        else if([locale hasPrefix:@"C"])
-        dateFormat = @"%Y-%m-%d %R";
-        else
-            dateFormat = [prefs objectForKey:NSTimeDateFormatString];
+        dateFormat = defaultFormatEN;
     }
+    NSLocale *locale = [NSLocale currentLocale];
     dateFormatter = [[NSDateFormatter alloc] initWithDateFormat:dateFormat 
-        allowNaturalLanguage:YES locale:[NSLocale currentLocale]];
+        allowNaturalLanguage:YES locale:locale];
 
     NSFont *font = [NSFont systemFontOfSize:15];
-    attributes = [NSDictionary
-        dictionaryWithObjects:@[font, [NSColor blackColor]]
-                      forKeys:@[NSFontAttributeName, NSForegroundColorAttributeName]];
+    if(font == nil)
+        font = [NSFont userFontOfSize:15];
+    NSColor *color = [NSColor blackColor];
+    if(color == nil)
+        color = [NSColor textColor];
 
-    dateString = [[NSAttributedString alloc]
-        initWithString:[self currentDateValue] attributes:attributes];
+    if(font != nil && color != nil) {
+        attributes = [NSDictionary
+            dictionaryWithObjects:@[font, color]
+                          forKeys:@[NSFontAttributeName, NSForegroundColorAttributeName]];
+    } else {
+        attributes = [NSDictionary new];
+    }
+
+    NSString *val = [self currentDateValue];
+    if(val == nil) val = @"Sat 02:30";
+    dateString = [[NSAttributedString alloc] initWithString:val attributes:attributes];
 
     NSSize sz = [dateString size];
     sz.width += menuBarHPad;
@@ -66,30 +72,30 @@ pthread_mutex_t mtx;
 
     pthread_mutex_init(&mtx, NULL);
 
-    [NSThread detachNewThreadSelector:@selector(notifyTick:)
-                             toTarget:self
-                           withObject:nil];
+    [NSTimer scheduledTimerWithTimeInterval:1.0 target:self selector:@selector(timerTick:) userInfo:nil repeats:YES];
     return self;
 }
 
 - (NSString *)currentDateValue {
-    return [dateFormatter stringForObjectValue:[NSDate date]];
+    NSString *s = nil;
+    if(dateFormatter != nil)
+        s = [dateFormatter stringForObjectValue:[NSDate date]];
+    if(s == nil || [s length] == 0)
+        s = @"Sat 02:30";
+    return s;
+}
+
+- (void)timerTick:(NSTimer *)timer {
+    [self setNeedsDisplay:YES];
 }
 
 - (void)notifyTick:(id)arg {
-    static NSString *_dateValue = NULL;
-
-    while(YES) {
-        if([_dateValue isEqualToString:[self currentDateValue]] == NO) {
-            _dateValue = [self currentDateValue];
-            [self setNeedsDisplay:YES];
-            [NSApp _wakeUp];
-        }
-        sleep(1);
-    }
+    [self setNeedsDisplay:YES];
 }
 
 -(void)drawRect:(NSRect)rect {
+    printf("[ClockView PID %d] drawRect: rect=(%f,%f,%fx%f)\n", getpid(), rect.origin.x, rect.origin.y, rect.size.width, rect.size.height);
+    fflush(stdout);
     [super drawRect:rect];
     dateString = [[NSAttributedString alloc] initWithString:[self currentDateValue] attributes:attributes];
     [dateString drawInRect:rect];

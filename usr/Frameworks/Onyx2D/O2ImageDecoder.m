@@ -81,7 +81,7 @@ O2DataProviderRef O2ImageDecoderCreatePixelDataProvider(O2ImageDecoderRef self) 
     
     O2DataProviderRef result=O2DataProviderCreateWithCFData(bitmap);
     
-    CFRelease(bitmap);
+    [(id)bitmap release];
     
     return result;
 }

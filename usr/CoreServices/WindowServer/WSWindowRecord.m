@@ -32,6 +32,22 @@
 #import "WindowServer.h"
 
 @implementation WSWindowRecord
+
+@synthesize number = _number;
+@synthesize surfaceBuf = _surfaceBuf;
+@synthesize bufSize = _bufSize;
+@synthesize surface = _surface;
+@synthesize state = _state;
+@synthesize prevState = _prevState;
+@synthesize geometry = _geometry;
+@synthesize frame = _frame;
+@synthesize title = _title;
+@synthesize icon = _icon;
+@synthesize shmPath = _shmPath;
+@synthesize styleMask = _styleMask;
+@synthesize level = _level;
+@synthesize app = _app;
+
 -init {
     self = [super init];
     _level = kCGNormalWindowLevelKey;

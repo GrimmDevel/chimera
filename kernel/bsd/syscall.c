@@ -1306,31 +1306,33 @@ static i64 sys_mach_msg(u64 msg_ptr, u64 option, u64 send_sz, u64 rcv_sz,
   if (!task)
     return -1;
 
+  u32 cur_pid = task->ta_proc ? task->ta_proc->p_pid : 0;
+
   if (option & 1) {
     mach_msg_header_t user_hdr;
     if (copyin((const void *)msg_ptr, &user_hdr, sizeof(user_hdr)) !=
         XIU_SUCCESS) {
-      kprintf("[IPC-ERR] sys_mach_msg SEND copyin header failed for msg_ptr=0x%llx\n", msg_ptr);
+      kprintf("[IPC-ERR] sys_mach_msg SEND copyin header failed for msg_ptr=0x%llx (pid=%u)\n", msg_ptr, cur_pid);
       return -1;
     }
 
     ipc_kmsg_t *kmsg = ipc_kmsg_alloc(send_sz);
     if (ipc_kmsg_copyin(kmsg, msg_ptr, task->ta_ipc_space) != XIU_SUCCESS) {
       kprintf("[IPC-ERR] sys_mach_msg SEND ipc_kmsg_copyin failed for pid=%u msg_ptr=0x%llx send_sz=%llu\n",
-              task->ta_proc ? task->ta_proc->p_pid : 0, msg_ptr, send_sz);
+              cur_pid, msg_ptr, send_sz);
       ipc_kmsg_free(kmsg);
       return -1;
     }
 
     ipc_port_t *port = kmsg->ikm_remote_port;
     kprintf("[IPC] sys_mach_msg SEND: pid=%u to_port=%p msgh_id=%u\n",
-            task->ta_proc ? task->ta_proc->p_pid : 0, (void *)port,
+            cur_pid, (void *)port,
             ((mach_msg_header_t *)kmsg->ikm_header)->msgh_id);
     xiu_error_t err = ipc_mqueue_send(port, kmsg, (u32)timeout);
 
     if (err != XIU_SUCCESS) {
       if (err != XIU_ERR_PORT_FULL)
-        kprintf("[IPC] Send failed with error %d\n", err);
+        kprintf("[IPC] Send failed for pid=%u with error %d\n", cur_pid, err);
       ipc_kmsg_free(kmsg);
       return -1;
     }
@@ -1341,7 +1343,7 @@ static i64 sys_mach_msg(u64 msg_ptr, u64 option, u64 send_sz, u64 rcv_sz,
         task->ta_ipc_space, (mach_port_name_t)rcv_name, MACH_PORT_TYPE_RECEIVE);
     if (!port) {
       kprintf("[IPC] RCV port lookup failed for rcv_name=0x%llx (pid=%u)\n",
-              (unsigned long long)rcv_name, task->ta_proc ? task->ta_proc->p_pid : 0);
+              (unsigned long long)rcv_name, cur_pid);
       return -1;
     }
 
@@ -1350,20 +1352,20 @@ static i64 sys_mach_msg(u64 msg_ptr, u64 option, u64 send_sz, u64 rcv_sz,
 
     if (err != XIU_SUCCESS) {
       if (timeout != 0) {
-        kprintf("[IPC] sys_mach_msg RCV: pid=%u port=%p err=%d\n",
-                task->ta_proc ? task->ta_proc->p_pid : 0, (void *)port, err);
+        kprintf("[IPC] sys_mach_msg RCV: pid=%u port=%p timeout_ms=%llu err=%d\n",
+                cur_pid, (void *)port, timeout, err);
       }
       return -1;
     }
 
     kprintf("[IPC] sys_mach_msg RCV: pid=%u port=%p DEQUEUED msgh_id=%u\n",
-            task->ta_proc ? task->ta_proc->p_pid : 0, (void *)port,
+            cur_pid, (void *)port,
             ((mach_msg_header_t *)kmsg->ikm_header)->msgh_id);
 
     if (ipc_kmsg_copyout(kmsg, msg_ptr, (u32)rcv_sz, task->ta_ipc_space) !=
         XIU_SUCCESS) {
       kprintf("[IPC-ERR] sys_mach_msg RCV copyout failed for pid=%u rcv_sz=%llu\n",
-              task->ta_proc ? task->ta_proc->p_pid : 0, rcv_sz);
+              cur_pid, rcv_sz);
       ipc_kmsg_free(kmsg);
       return -1;
     }

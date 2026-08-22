@@ -1274,15 +1274,11 @@ kern_return_t _windowServerRPC(void *data, size_t len, void *replyBuf, int *repl
         printf("[_windowServerRPC PID %d] rmsg->code=%u rmsg->len=%u requested_replyLen=%d\n",
                getpid(), rmsg->code, rmsg->len, *replyLen);
         fflush(stdout);
-        if(*replyLen >= rmsg->len) {
-            *replyLen = rmsg->len;
-            memmove(replyBuf, rmsg->data, *replyLen);
-        } else {
-            printf("[_windowServerRPC PID %d] ERROR: replyLen (%d) < rmsg->len (%u)!\n",
-                   getpid(), *replyLen, rmsg->len);
-            fflush(stdout);
-            *replyLen = -1;
+        int toCopy = (*replyLen < (int)rmsg->len) ? *replyLen : (int)rmsg->len;
+        if (toCopy > 0) {
+            memmove(replyBuf, rmsg->data, toCopy);
         }
+        *replyLen = toCopy;
     }
     return ret;
 }

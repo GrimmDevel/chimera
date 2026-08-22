@@ -544,16 +544,22 @@ static NSMenuItem *itemWithTag(NSMenu *root, int tag) {
 
    // don't try to find the service if this is the app that provides it...
    bundleID = [mainBundle bundleIdentifier];
-   if(bundleID == nil) {
-       NSString *procName = [[mainBundle bundlePath] lastPathComponent];
-       if ([procName isEqualToString:@"SystemUIServer"])
+   if(bundleID == nil || [bundleID isEqualToString:@"unknown"] || [bundleID length] == 0) {
+       if (getpid() == 3)
            bundleID = @"com.ravynos.SystemUIServer";
-       else if ([procName isEqualToString:@"Dock"])
+       else if (getpid() == 4 || getpid() == 5)
            bundleID = @"com.ravynos.Dock";
-       else if ([procName isEqualToString:@"WindowServer"])
-           bundleID = @"com.ravynos.WindowServer";
-       else
-           bundleID = [NSString stringWithFormat:@"unix.%u", getpid()];
+       else {
+           NSString *procName = [[mainBundle bundlePath] lastPathComponent];
+           if ([procName isEqualToString:@"SystemUIServer"])
+               bundleID = @"com.ravynos.SystemUIServer";
+           else if ([procName isEqualToString:@"Dock"])
+               bundleID = @"com.ravynos.Dock";
+           else if ([procName isEqualToString:@"WindowServer"])
+               bundleID = @"com.ravynos.WindowServer";
+           else
+               bundleID = [NSString stringWithFormat:@"unix.%u", getpid()];
+       }
    }
    if(!([bundleID isEqualToString:@"com.ravynos.WindowServer"])) {
         const char *bidStr = [bundleID UTF8String];
@@ -896,7 +902,10 @@ static int _tagAllMenus(NSMenu *menu, int tag) {
     msg.header.msgh_size = sizeof(msg);
     msg.code = CODE_MENU_FOR_APP;
     msg.pid = getpid();
-    strncpy(msg.bundleID, [bundleID UTF8String], sizeof(msg.bundleID));
+    NSString *bundleID = [[NSBundle mainBundle] bundleIdentifier];
+    const char *bidStr = [bundleID UTF8String];
+    if(bidStr)
+        strncpy(msg.bundleID, bidStr, sizeof(msg.bundleID) - 1);
     int len = MIN([d length], sizeof(msg.data));
     memcpy(msg.data, [d bytes], len);
     msg.len = len;
@@ -906,7 +915,6 @@ static int _tagAllMenus(NSMenu *menu, int tag) {
         NSLog(@"Failed to send menus to WS");
 
     [menuCopy release];
-    [d release];
 }
 
 - (void)addRecentItem:(NSURL *)url {
@@ -916,8 +924,11 @@ static int _tagAllMenus(NSMenu *menu, int tag) {
     msg.header.msgh_id = MSG_ID_INLINE;
     msg.header.msgh_size = sizeof(msg);
     msg.code = CODE_ADD_RECENT_ITEM;
-    strncpy(msg.data, [[url absoluteString] UTF8String], sizeof(msg.data));
-    msg.len = strlen(msg.data);
+    const char *urlStr = [[url absoluteString] UTF8String];
+    if(urlStr) {
+        strncpy(msg.data, urlStr, sizeof(msg.data) - 1);
+        msg.len = strlen(msg.data);
+    }
 
     if(mach_msg((mach_msg_header_t *)&msg, MACH_SEND_MSG|MACH_SEND_TIMEOUT,
         sizeof(msg), 0, MACH_PORT_NULL,
@@ -932,19 +943,16 @@ static int _tagAllMenus(NSMenu *menu, int tag) {
     msg.header.msgh_id = MSG_ID_INLINE;
     msg.header.msgh_size = sizeof(msg);
     msg.code = CODE_ADD_STATUS_ITEM;
+    msg.pid = getpid();
+    const char *bidStr = [[[NSBundle mainBundle] bundleIdentifier] UTF8String];
+    if(bidStr)
+        strncpy(msg.bundleID, bidStr, sizeof(msg.bundleID) - 1);
 
     NSNumber *pid = [NSNumber numberWithUnsignedInt:getpid()];
     NSDictionary *dict = [NSDictionary
         dictionaryWithObjects:@[item,pid]
         forKeys:@[@"StatusItem",@"ProcessID"]];
     NSData *d = [NSKeyedArchiver archivedDataWithRootObject:dict];
-    NSObject *o = nil;
-    @try {
-	o = [NSKeyedUnarchiver unarchiveObjectWithData:d];
-    }
-    @catch(NSException *localException) {
-	NSLog(@"%@",localException);
-    }
 
     if([d length] > sizeof(msg.data)) {
 	NSLog(@"Failed to send NSStatusItem to WS: overflow");
@@ -953,8 +961,6 @@ static int _tagAllMenus(NSMenu *menu, int tag) {
 
     memcpy(msg.data, [d bytes], [d length]);
     msg.len = [d length];
-    [d release];
-    [dict release];
 
     if(mach_msg((mach_msg_header_t *)&msg, MACH_SEND_MSG|MACH_SEND_TIMEOUT,
         sizeof(msg), 0, MACH_PORT_NULL,
@@ -1083,6 +1089,10 @@ static int _tagAllMenus(NSMenu *menu, int tag) {
    BOOL               needsUntitled=YES;
 
    NS_DURING
+    if ([_delegate respondsToSelector:@selector(applicationWillFinishLaunching:)]) {
+        NSNotification *note = [NSNotification notificationWithName:NSApplicationWillFinishLaunchingNotification object:self];
+        [_delegate applicationWillFinishLaunching:note];
+    }
     [[NSNotificationCenter defaultCenter] postNotificationName: NSApplicationWillFinishLaunchingNotification object:self];
    NS_HANDLER
     [self reportException:localException];
@@ -1139,6 +1149,10 @@ static int _tagAllMenus(NSMenu *menu, int tag) {
    }
    
    NS_DURING
+    if ([_delegate respondsToSelector:@selector(applicationDidFinishLaunching:)]) {
+        NSNotification *note = [NSNotification notificationWithName:NSApplicationDidFinishLaunchingNotification object:self];
+        [_delegate applicationDidFinishLaunching:note];
+    }
     [[NSNotificationCenter defaultCenter] postNotificationName:NSApplicationDidFinishLaunchingNotification object:self];
    NS_HANDLER
     [self reportException:localException];

@@ -306,11 +306,7 @@ static void *nsThreadStartThread(void* t)
 }
 
 static inline id _NSThreadSharedInstance(NSThread *thread,NSString *className,BOOL create) {
-   printf("[_NSThreadSharedInstance PID %d] enter for thread %p\n", getpid(), thread);
-   fflush(stdout);
    if(!thread) {
-      printf("[_NSThreadSharedInstance PID %d] thread is NIL!\n", getpid());
-      fflush(stdout);
       return nil;
    }
    NSMutableDictionary *shared=thread->_sharedObjects;

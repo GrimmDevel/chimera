@@ -30,6 +30,14 @@
 extern pthread_mutex_t renderLock;
 
 @implementation WSAppRecord
+
+@synthesize bundleID = _bundleID;
+@synthesize path = _path;
+@synthesize name = _name;
+@synthesize pid = _pid;
+@synthesize port = _port;
+@synthesize icon = _icon;
+
 -init {
     _windows = [NSMutableArray new];
     _mouseCursorConnected = YES;

@@ -10,7 +10,7 @@ O2TIFFEncoderRef O2TIFFEncoderCreate(O2DataConsumerRef consumer) {
    self->_bufferCapacity=0;
    self->_bufferCount=0;
    self->_mutableBytes=NULL;
-   self->_consumer=(id)CFRetain(consumer);
+   self->_consumer=(id)[(id)consumer retain];
    return self;
 }
 
@@ -18,7 +18,7 @@ void O2TIFFEncoderDealloc(O2TIFFEncoderRef self) {
    if(self->_mutableBytes!=NULL)
     NSZoneFree(NULL,self->_mutableBytes);
    if(self->_consumer!=NULL)
-    CFRelease(self->_consumer);
+    [(id)self->_consumer release];
    NSZoneFree(NULL,self);
 }
 

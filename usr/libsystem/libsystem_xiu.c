@@ -3094,8 +3094,6 @@ char **NSPlatform_environ(void) {
     return s_default_env;
 }
 
-const void *kCFBooleanTrue = (const void *)1;
-const void *kCFBooleanFalse = (const void *)0;
 
 const void *kCGImageDestinationDPI = "kCGImageDestinationDPI";
 const void *kCGImageDestinationLossyCompressionQuality = "kCGImageDestinationLossyCompressionQuality";

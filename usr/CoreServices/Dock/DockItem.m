@@ -412,7 +412,9 @@ view does not need to draw the application or custom string badges.
         '\0',
     };
 
-    strncpy(data.buf, [[[self app] bundleIdentifier] UTF8String], sizeof(data.buf));
+    const char *appBid = [[[self app] bundleIdentifier] UTF8String];
+    if(appBid)
+        strncpy(data.buf, appBid, sizeof(data.buf) - 1);
     data.win.base.len += strlen(data.buf);
     _windowServerRPC(&data, sizeof(data), NULL, NULL);
 }
@@ -434,10 +436,12 @@ view does not need to draw the application or custom string badges.
                 .windowID = 0,
                 .state = NORMAL,
             },
-            '\0',
+            {'\0'},
         };
 
-        strncpy(data.buf, [[self bundleIdentifier] UTF8String], sizeof(data.buf));
+        const char *itemBid = [[self bundleIdentifier] UTF8String];
+        if(itemBid)
+            strncpy(data.buf, itemBid, sizeof(data.buf) - 1);
         data.win.base.len += strlen(data.buf);
         _windowServerRPC(&data, sizeof(data), NULL, NULL);
     }
