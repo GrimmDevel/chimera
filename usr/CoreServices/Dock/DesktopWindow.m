@@ -81,9 +81,13 @@
     NSDictionary *dict = [prefs objectForKey:INFOKEY_WALLPAPER];
     _wallpaperPath = [dict objectForKey:@"NSMainScreen"]; // FIXME: use CGDisplayID from NSScreen deviceDescription
     if(!_wallpaperPath)
-        _wallpaperPath = @"/System/Library/Desktop Pictures/sunsetbridge.jpg";
+        _wallpaperPath = @"/System/Library/Desktop Pictures/waves_purple.png";
 
     NSImage *image = [[NSImage alloc] initWithContentsOfFile:_wallpaperPath];
+    NSLog(@"[Dock] wallpaper path='%@' image=%p size=%@ isValid=%d",
+          _wallpaperPath, image,
+          image ? NSStringFromSize([image size]) : @"(null)",
+          image ? [image isValid] : 0);
     [image setScalesWhenResized:YES];
     [view setImage:image];
     [view setNeedsDisplay:YES];

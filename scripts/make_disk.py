@@ -635,11 +635,11 @@ def copy_ravynos_assets(disk, workspace):
         files_dict = {}
         for f in os.listdir(pics_dir):
             p = os.path.join(pics_dir, f)
-            if os.path.isfile(p) and f.endswith((".png", ".jpg", ".JPG", ".jpeg", ".json")) and os.path.getsize(p) < 2 * 1024 * 1024:
+            if os.path.isfile(p) and f.endswith((".png", ".jpg", ".JPG", ".jpeg", ".json")) and os.path.getsize(p) < 24 * 1024 * 1024:
                 with open(p, "rb") as fp:
                     files_dict[f] = fp.read()
         if files_dict:
-            disk.update_dir_files("System/Library/Desktop_Pictures", files_dict)
+            disk.update_dir_files("System/Library/Desktop Pictures", files_dict)
 
     # 4. Fonts
     fonts_dir = os.path.join(ravynos_dir, "SystemLibrary", "Fonts", "TTF")
