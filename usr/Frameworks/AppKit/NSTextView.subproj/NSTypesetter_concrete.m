@@ -35,6 +35,8 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 -init {
    [super init];
    _layoutNextFragment=[self methodForSelector:@selector(layoutNextFragment)];
+   _positionOfGlyph=(NSPoint (*)(NSFont *, SEL, NSGlyph, NSGlyph, BOOL *))
+    [NSFont instanceMethodForSelector:@selector(positionOfGlyph:precededByGlyph:isNominal:)];
    _glyphCacheRange=NSMakeRange(0,0);
    _glyphCacheCapacity=256;
    _glyphCache=NSZoneMalloc([self zone],sizeof(NSGlyph)*_glyphCacheCapacity);
@@ -158,6 +160,11 @@ static void loadGlyphAndCharacterCacheForLocation(NSTypesetter_concrete *self,un
 	unsigned glyphIndex = 0;
     NSRange  fragmentRange=NSMakeRange(_nextGlyphLocation,0);
 	float    fragmentWidth=0;
+
+	/* a failed font load leaves _font nil; measure nothing rather than
+	 * call through a NULL receiver */
+	if (_font == nil || _positionOfGlyph == NULL)
+		return;
 
     NSRange  wordWrapRange=NSMakeRange(_nextGlyphLocation,0);
 	float    wordWrapWidth=0;

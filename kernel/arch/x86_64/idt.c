@@ -196,6 +196,15 @@ void interrupt_handler(struct interrupt_frame *frame) {
                 kprintf("        RIP=0x%llx CR2=0x%llx RSP=0x%llx Error=0x%llx\n",
                         (unsigned long long)frame->rip, (unsigned long long)cr2,
                         (unsigned long long)frame->rsp, (unsigned long long)frame->err_code);
+                /* the user stack is mapped in the current CR3; show the frames
+                 * above the fault so the caller of a NULL call is identifiable */
+                if (frame->rsp > 0x1000 && frame->rsp < 0x800000000000ULL) {
+                    u64 *sp = (u64 *)frame->rsp;
+                    kprintf("        stack: [rsp]=0x%llx [rsp+8]=0x%llx [rsp+16]=0x%llx [rsp+24]=0x%llx [rsp+32]=0x%llx\n",
+                            (unsigned long long)sp[0], (unsigned long long)sp[1],
+                            (unsigned long long)sp[2], (unsigned long long)sp[3],
+                            (unsigned long long)sp[4]);
+                }
                 extern void sys_exit_direct(u64 code);
                 sys_exit_direct(139);
                 return;

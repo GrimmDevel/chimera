@@ -189,8 +189,6 @@ void *objc_msgSend_lookup(id self, const char *sel_name) {
         if (strcmp(sel_name, "release") == 0) return (void *)default_release;
         if (strcmp(sel_name, "dealloc") == 0) return (void *)default_dealloc;
         if (strcmp(sel_name, "class") == 0) return (void *)default_class;
-        fprintf(stderr, "[DBG-msgSend-miss] class=%s sel=%s self=%p\n",
-            self == (id)cls ? class_getName(cls) : object_getClassName(self), sel_name, self);
     }
 
     return (void *)default_nil_stub;
@@ -326,7 +324,6 @@ Class objc_getClass(const char *name) {
             return s_classes[i].cls;
         }
     }
-    fprintf(stderr, "[DBG-getClass-miss] %s\n", name);
     return Nil;
 }
 

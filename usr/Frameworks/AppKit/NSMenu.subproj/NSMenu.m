@@ -114,6 +114,16 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
    return _title;
 }
 
+-(NSString *)name {
+   return _name;
+}
+
+-(void)setName:(NSString *)name {
+   name=[name copy];
+   [_name release];
+   _name=name;
+}
+
 -(int)numberOfItems {
    return [_itemArray count];
 }

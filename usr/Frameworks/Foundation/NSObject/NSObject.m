@@ -146,15 +146,40 @@ BOOL NSObjectIsKindOfClass(id object,Class kindOf) {
 }
 
 + (IMP)methodForSelector:(SEL)aSelector {
-    return class_getMethodImplementation(object_getClass((id)self), aSelector);
+    IMP imp = class_getMethodImplementation(object_getClass((id)self), aSelector);
+    /* when self is a class and the selector names an instance method,
+     * the metaclass walk above misses it; search the class itself */
+    if (!imp)
+        imp = class_getMethodImplementation(self, aSelector);
+    return imp;
 }
 
 - (IMP)methodForSelector:(SEL)aSelector {
     return class_getMethodImplementation(object_getClass(self), aSelector);
 }
 
++ (IMP)instanceMethodForSelector:(SEL)aSelector {
+    return class_getMethodImplementation(self, aSelector);
+}
+
 - (IMP)instanceMethodForSelector:(SEL)aSelector {
     return class_getMethodImplementation(object_getClass(self), aSelector);
+}
+
+- (NSMethodSignature *)methodSignatureForSelector:(SEL)aSelector {
+    Method method = class_getInstanceMethod(object_getClass(self), aSelector);
+    if (method == NULL)
+        return nil;
+    return [NSMethodSignature signatureWithObjCTypes:method_getTypeEncoding(method)];
+}
+
++ (NSMethodSignature *)methodSignatureForSelector:(SEL)aSelector {
+    Method method = class_getInstanceMethod(self, aSelector);
+    if (method == NULL)
+        method = class_getClassMethod(self, aSelector);
+    if (method == NULL)
+        return nil;
+    return [NSMethodSignature signatureWithObjCTypes:method_getTypeEncoding(method)];
 }
 
 - (id)performSelector:(SEL)aSelector {

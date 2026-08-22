@@ -56,19 +56,21 @@ void waitForTaskChildProcess()
 {
     pid_t pid;
     int status;
-    
+
     while(YES) {
         pid = wait3(&status, WNOHANG, NULL);
 
         if (pid < 0) {
-            if (errno == ECHILD) {
-                break; // no child exists
-            }
-            else if (errno == EINTR) {
+            if (errno == EINTR) {
                 continue;
             }
-
-            NSCLog("Invalid wait3 result [%s] in child signal handler", strerror(errno));
+            /* ECHILD, errno untouched by a spurious -1, or an unexpected
+             * result: stop instead of spinning and flooding the log from
+             * the signal-driven path */
+            if (errno != ECHILD && errno != 0) {
+                NSCLog("Invalid wait3 result [%s] in child signal handler", strerror(errno));
+            }
+            break;
         }
         else if (pid == 0) {
             //no child exited

@@ -866,6 +866,61 @@ static void format_signed(char *buf, usize n, usize *pos, i64 val) {
   format_unsigned(buf, n, pos, mag, 10);
 }
 
+/* minimal %f/%e/%g renderer: fixed-point with rounding, enough for
+ * log-style coordinate/size output */
+static void format_double(char *buf, usize n, usize *pos, double val, int precision) {
+  if (precision < 0) precision = 6;
+  if (precision > 18) precision = 18;
+
+  if (val != val) {
+    format_puts(buf, n, pos, "nan");
+    return;
+  }
+  if (val > 1.7976931348623157e308 || val < -1.7976931348623157e308) {
+    format_puts(buf, n, pos, val < 0 ? "-inf" : "inf");
+    return;
+  }
+
+  if (val < 0) {
+    format_putc(buf, n, pos, '-');
+    val = -val;
+  }
+
+  if (val >= 1e18) {
+    /* too large for the u64 fixed-point path below */
+    format_puts(buf, n, pos, "huge");
+    return;
+  }
+
+  /* round to the requested number of fractional digits */
+  double scale = 1.0;
+  for (int i = 0; i < precision; i++) scale *= 10.0;
+  u64 scaled = (u64)(val * scale + 0.5);
+  u64 ipart = precision ? scaled / (u64)scale : scaled;
+  u64 fpart = precision ? scaled % (u64)scale : 0;
+
+  /* integer part */
+  char tmp[32];
+  int t = 0;
+  if (ipart == 0) tmp[t++] = '0';
+  while (ipart > 0) {
+    tmp[t++] = '0' + (char)(ipart % 10);
+    ipart /= 10;
+  }
+  while (t > 0) format_putc(buf, n, pos, tmp[--t]);
+
+  if (precision > 0) {
+    format_putc(buf, n, pos, '.');
+    /* fraction, leading zeros included */
+    char frac[20];
+    for (int i = precision - 1; i >= 0; i--) {
+      frac[i] = '0' + (char)(fpart % 10);
+      fpart /= 10;
+    }
+    for (int i = 0; i < precision; i++) format_putc(buf, n, pos, frac[i]);
+  }
+}
+
 int vsnprintf(char *buf, usize n, const char *fmt, __builtin_va_list args) {
   usize pos = 0;
 
@@ -983,6 +1038,10 @@ int vsnprintf(char *buf, usize n, const char *fmt, __builtin_va_list args) {
       u64 val = __builtin_va_arg(args, u64);
       format_puts(buf, n, &pos, "0x");
       format_unsigned(buf, n, &pos, val, 16);
+    } else if (spec == 'f' || spec == 'F' || spec == 'e' || spec == 'E' ||
+               spec == 'g' || spec == 'G') {
+      double val = __builtin_va_arg(args, double);
+      format_double(buf, n, &pos, val, precision);
     } else {
       format_putc(buf, n, &pos, spec);
     }
