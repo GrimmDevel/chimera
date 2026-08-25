@@ -5,7 +5,7 @@
 #include <arch/x86_64/msr.h>
 
 extern void kprintf(const char *fmt, ...);
-extern void context_switch(void **old_sp, void *new_sp, u64 new_cr3);
+extern void context_switch(void **old_sp, void *new_sp, u64 new_cr3, void *old_fp, void *new_fp);
 extern u32 smp_current_cpu_id(void);
 
 #define SCHED_MAX_THREADS 64
@@ -18,7 +18,7 @@ static spinlock_t s_runq_lock = SPINLOCK_INIT;
 
 extern void task_switch_to_user(uptr entry, uptr stack);
 extern void task_switch_to_user_frame(uptr entry, uptr stack, void *frame, u64 rax);
-extern void tss_set_rsp0(u64 rsp0);
+extern void tss_set_rsp0_cpu(u32 cpu_id, u64 rsp0);
 
 static void thread_launcher(void);
 static void fork_thread_launcher(void);
@@ -41,6 +41,16 @@ void thread_init_stack(xiu_thread_t *th, void *entry, void *stack) {
   th->th_stack_size = 4 * XIU_PAGE_SIZE;
   th->th_kernel_stack = kstack_top;
   th->th_running_cpu = 0xFFFFFFFF;
+
+  // initialize FPU/SSE state image
+  th->th_fp_initialized = 1;
+  __builtin_memset(th->th_fp_state, 0, sizeof(th->th_fp_state));
+  u16 *fcw = (u16 *)&th->th_fp_state[0];
+  *fcw = 0x037F;
+  u32 *mxcsr = (u32 *)&th->th_fp_state[24];
+  *mxcsr = 0x1F80;
+  u32 *mxcsr_mask = (u32 *)&th->th_fp_state[28];
+  *mxcsr_mask = 0xFFFF;
 
   u64 *sp = (u64 *)kstack_top;
   *(--sp) = (u64)thread_launcher;
@@ -67,7 +77,7 @@ void thread_init_fork_stack(xiu_thread_t *th, void *entry, void *stack) {
 static void thread_launcher(void) {
   xiu_thread_t *th = current_thread();
   
-  tss_set_rsp0((u64)th->th_kernel_stack);
+  tss_set_rsp0_cpu(smp_current_cpu_id(), (u64)th->th_kernel_stack);
 
   u64 entry = (u64)th->th_context;
   u64 stack = (u64)th->th_user_stack;
@@ -78,7 +88,7 @@ static void thread_launcher(void) {
 
 static void fork_thread_launcher(void) {
   xiu_thread_t *th = current_thread();
-  tss_set_rsp0((u64)th->th_kernel_stack);
+  tss_set_rsp0_cpu(smp_current_cpu_id(), (u64)th->th_kernel_stack);
   
   u64 fork_return_value = th->th_is_fork_child ? th->th_fork_return_value : 0;
   
@@ -214,7 +224,7 @@ void scheduler_yield(void) {
 
   spinlock_unlock_irqrestore(&s_runq_lock, f);
 
-  tss_set_rsp0((u64)new_thread->th_kernel_stack);
+  tss_set_rsp0_cpu(my_cpu, (u64)new_thread->th_kernel_stack);
 
   u64 current_cr3;
   __asm__ volatile("mov %%cr3, %0" : "=r"(current_cr3));
@@ -225,7 +235,15 @@ void scheduler_yield(void) {
   void *dummy_sp = nullptr;
   void **saved_sp_ptr = old_thread ? &old_thread->th_saved_sp : &dummy_sp;
 
-  context_switch(saved_sp_ptr, new_thread->th_saved_sp, new_cr3);
+  void *old_fp = (old_thread && old_thread->th_task && !(old_thread->th_task->ta_flags & 0x01))
+                     ? old_thread->th_fp_state
+                     : nullptr;
+  void *new_fp = (new_thread && new_thread->th_task && !(new_thread->th_task->ta_flags & 0x01))
+                     ? new_thread->th_fp_state
+                     : nullptr;
+
+  context_switch(saved_sp_ptr, new_thread->th_saved_sp, new_cr3,
+                 old_fp, new_fp);
 }
 
 void thread_wake(xiu_thread_t *thread) {
@@ -271,6 +289,8 @@ XIU_NORETURN void scheduler_run(void) {
   th->th_running_cpu = 0;
   __asm__ volatile("mov %0, %%gs:0" :: "r"(th));
 
-  context_switch(&dummy_sp, th->th_saved_sp, new_cr3);
+  tss_set_rsp0_cpu(0, (u64)th->th_kernel_stack);
+
+  context_switch(&dummy_sp, th->th_saved_sp, new_cr3, nullptr, th->th_fp_state);
   XIU_UNREACHABLE();
 }

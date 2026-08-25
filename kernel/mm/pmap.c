@@ -4,6 +4,8 @@
  * ============================================================================= */
 
 #include <kernel/xiu_types.h>
+#include <kernel/spinlock.h>
+#include <kernel/smp.h>
 
 extern xiu_paddr_t pmm_alloc_page(void);
 extern void kprintf(const char *fmt, ...);
@@ -15,7 +17,6 @@ extern void kprintf(const char *fmt, ...);
 
 extern void pmm_retain_page(xiu_paddr_t addr);
 extern void pmm_release_page(xiu_paddr_t addr);
-#include <kernel/spinlock.h>
 
 static u64 s_kernel_pml4_phys = 0;
 static spinlock_t s_pmap_lock = SPINLOCK_INIT;
@@ -55,7 +56,7 @@ u64 *pmap_get_pte_ptr(u64 pml4_phys, u64 vaddr) {
     return &pt[(vaddr >> 12) & 0x1FF];
 }
 
-u64 pmap_map_user_page(u64 target_pml4_phys, u64 vaddr, u64 paddr, u32 flags) {
+static u64 pmap_map_user_page_unlocked(u64 target_pml4_phys, u64 vaddr, u64 paddr, u32 flags) {
     u64 *pml4 = get_table_ptr(target_pml4_phys & ~0xFFFULL);
 
     int pml4_idx = (vaddr >> 39) & 0x1FF;
@@ -92,6 +93,13 @@ u64 pmap_map_user_page(u64 target_pml4_phys, u64 vaddr, u64 paddr, u32 flags) {
     u64 *pt = get_table_ptr(pd[pd_idx] & ~0xFFFULL);
     pt[pt_idx] = (paddr & ~0xFFFULL) | flags | PAGE_PRESENT | PAGE_USER;
     return paddr;
+}
+
+u64 pmap_map_user_page(u64 target_pml4_phys, u64 vaddr, u64 paddr, u32 flags) {
+    irq_flags_t irq = spinlock_lock_irqsave(&s_pmap_lock);
+    u64 ret = pmap_map_user_page_unlocked(target_pml4_phys, vaddr, paddr, flags);
+    spinlock_unlock_irqrestore(&s_pmap_lock, irq);
+    return ret;
 }
 
 // pmap_extract
@@ -131,6 +139,8 @@ u64 pmap_extract(u64 pml4_phys, u64 vaddr) {
  * and child, and physical page refcounts are incremented.
  * ─────────────────────────────────────────────────────────────────────────── */
 u64 pmap_clone_user_space(u64 src_pml4_phys) {
+    irq_flags_t irq = spinlock_lock_irqsave(&s_pmap_lock);
+
     u64 dst_pml4_phys = pmm_alloc_page();
     u64 *dst_pml4 = get_table_ptr(dst_pml4_phys);
     u64 *src_pml4 = get_table_ptr(src_pml4_phys & ~0xFFFULL);
@@ -176,16 +186,16 @@ u64 pmap_clone_user_space(u64 src_pml4_phys) {
                     }
 
                     // map shared page into child with COW
-                    pmap_map_user_page(dst_pml4_phys, va, phys, flags);
+                    pmap_map_user_page_unlocked(dst_pml4_phys, va, phys, flags);
                     pmm_retain_page(phys);
                 }
             }
         }
     }
 
-    u64 cr3_val;
-    __asm__ volatile("mov %%cr3, %0; mov %0, %%cr3" : "=r"(cr3_val));
+    smp_tlb_shootdown();
 
+    spinlock_unlock_irqrestore(&s_pmap_lock, irq);
     return dst_pml4_phys;
 }
 
@@ -194,6 +204,8 @@ u64 pmap_clone_user_space(u64 src_pml4_phys) {
  * ─────────────────────────────────────────────────────────────────────────── */
 void pmap_destroy_user_space(u64 pml4_phys) {
     if (!pml4_phys) return;
+    irq_flags_t irq = spinlock_lock_irqsave(&s_pmap_lock);
+
     u64 *pml4 = get_table_ptr(pml4_phys & ~0xFFFULL);
 
     for (u64 pml4_i = 0; pml4_i < 256; pml4_i++) {
@@ -239,10 +251,14 @@ void pmap_destroy_user_space(u64 pml4_phys) {
 
     // free PML4 itself
     pmm_release_page(pml4_phys & ~0xFFFULL);
+
+    spinlock_unlock_irqrestore(&s_pmap_lock, irq);
 }
 
 void pmap_unmap_user_range(u64 pml4_phys, u64 vaddr, usize len) {
     if (!pml4_phys || len == 0) return;
+    irq_flags_t irq = spinlock_lock_irqsave(&s_pmap_lock);
+
     u64 start = vaddr & ~0xFFFULL;
     u64 end = (vaddr + len + 4095) & ~0xFFFULL;
 
@@ -252,13 +268,18 @@ void pmap_unmap_user_range(u64 pml4_phys, u64 vaddr, usize len) {
             u64 phys = *pte_ptr & ~0xFFFULL;
             *pte_ptr = 0;
             pmm_release_page(phys);
-            __asm__ volatile("invlpg (%0)" :: "r"(va) : "memory");
         }
     }
+
+    smp_tlb_flush_range(start, end - start);
+
+    spinlock_unlock_irqrestore(&s_pmap_lock, irq);
 }
 
 void pmap_clear_user_mappings(u64 pml4_phys) {
     if (!pml4_phys) return;
+    irq_flags_t irq = spinlock_lock_irqsave(&s_pmap_lock);
+
     u64 *pml4 = get_table_ptr(pml4_phys & ~0xFFFULL);
 
     // free user pages and page tables
@@ -300,9 +321,9 @@ void pmap_clear_user_mappings(u64 pml4_phys) {
         pml4[pml4_i] = 0;
     }
 
-    // flush TLB
-    u64 cr3;
-    __asm__ volatile("mov %%cr3, %0; mov %0, %%cr3" : "=r"(cr3));
+    smp_tlb_shootdown();
+
+    spinlock_unlock_irqrestore(&s_pmap_lock, irq);
 }
 
 #define PAGE_NX (1ULL << 63)
@@ -312,6 +333,8 @@ int pmap_protect_user_range(u64 pml4_phys, u64 virt_start, usize len, u32 prot) 
     u64 start_va = virt_start & ~0xFFFULL;
     u64 end_va = (virt_start + len + 0xFFFULL) & ~0xFFFULL;
     if (end_va >= 0x0000800000000000ULL) return -1;
+
+    irq_flags_t irq = spinlock_lock_irqsave(&s_pmap_lock);
 
     for (u64 va = start_va; va < end_va; va += 4096) {
         u64 *pte_ptr = pmap_get_pte_ptr(pml4_phys, va);
@@ -323,9 +346,12 @@ int pmap_protect_user_range(u64 pml4_phys, u64 virt_start, usize len, u32 prot) 
             if (!(prot & 4 /* PROT_EXEC */)) new_flags |= PAGE_NX;
             if (prot == 0 /* PROT_NONE */) new_flags &= ~PAGE_PRESENT;
             *pte_ptr = phys | new_flags;
-            __asm__ volatile("invlpg (%0)" :: "r"(va) : "memory");
         }
     }
+
+    smp_tlb_flush_range(start_va, end_va - start_va);
+
+    spinlock_unlock_irqrestore(&s_pmap_lock, irq);
     return 0;
 }
 

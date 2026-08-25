@@ -34,7 +34,7 @@ struct tss_entry {
 } XIU_PACKED;
 
 void gdt_init(void);
-void gdt_init_ap(u64 *ap_gdt, struct tss_entry *ap_tss);
+void gdt_init_ap(u64 *ap_gdt, struct tss_entry *ap_tss, u32 cpu_id);
 void tss_set_rsp0(u64 rsp0);
 void tss_set_rsp0_cpu(u32 cpu_id, u64 rsp0);
 

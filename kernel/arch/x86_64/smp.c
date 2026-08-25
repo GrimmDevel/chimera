@@ -56,14 +56,13 @@ static void smp_setup_syscall(cpu_local_t *cpu) {
     wrmsr(MSR_EFER, efer);
 
     // 2. STAR MSR: Target CS/SS for syscall and sysret
-    u64 star = ((u64)0x18 | 3ULL) << 48 | ((u64)0x08) << 32;
-    wrmsr(MSR_STAR, star);
+    wrmsr(MSR_STAR, 0x0010000800000000ULL);
 
     // 3. LSTAR: RIP entry point
     wrmsr(MSR_LSTAR, (u64)x86_64_syscall_entry);
 
-    // 4. SFMASK: Mask IF and TF
-    wrmsr(MSR_SFMASK, 0x00000300ULL);
+    // 4. SFMASK: Mask IF
+    wrmsr(MSR_SFMASK, 0x200ULL);
 
     // 5. GS Base
     wrmsr(MSR_GS_BASE, (u64)cpu);
@@ -74,26 +73,30 @@ void smp_ap_entry(struct limine_smp_info *info) {
     cpu_local_t *cpu = (cpu_local_t *)info->extra_argument;
     if (!cpu) return;
 
-    // 1. initialize per-cpu gdt, tss, fpu
-    gdt_init_ap(cpu->cpu_gdt_ptr, (struct tss_entry *)cpu->cpu_tss_ptr);
+    // 1. Setup GS base first so per-CPU access works immediately
+    wrmsr(MSR_GS_BASE, (u64)cpu);
+    wrmsr(MSR_KERNEL_GS_BASE, 0);
 
-    // 2. Load IDT
+    // 2. initialize per-cpu gdt, tss, fpu
+    gdt_init_ap(cpu->cpu_gdt_ptr, (struct tss_entry *)cpu->cpu_tss_ptr, cpu->cpu_id);
+
+    // 3. Load IDT
     idt_reload();
 
-    // 3. Setup Syscall and GS base
+    // 4. Setup Syscall
     smp_setup_syscall(cpu);
 
-    // 4. Initialize Local APIC on this core
+    // 5. Initialize Local APIC on this core
     lapic_init_ap();
 
-    // 5. Mark CPU online
+    // 6. Mark CPU online
     cpu->cpu_is_active = 1;
     __atomic_fetch_add(&g_active_cpus, 1, __ATOMIC_SEQ_CST);
 
     kprintf("  [  OK  ]  SMP: Core %u online (LAPIC ID=%u)\n",
             cpu->cpu_id, cpu->cpu_lapic_id);
 
-    // 6. Enter SMP Scheduler
+    // 7. Enter SMP Scheduler
     scheduler_ap_run();
 }
 
@@ -191,9 +194,35 @@ void smp_broadcast_reschedule(void) {
     lapic_send_ipi_all_excluding_self(VECTOR_IPI_SCHED);
 }
 
+void smp_tlb_flush_page(u64 va) {
+    __asm__ volatile("invlpg (%0)" :: "r"(va) : "memory");
+    if (g_active_cpus > 1) {
+        lapic_send_ipi_all_excluding_self(VECTOR_IPI_TLB);
+    }
+}
+
+void smp_tlb_flush_range(u64 start_va, usize size) {
+    if (size == 0) return;
+
+    if (start_va == 0 || size >= (2 * 1024 * 1024)) {
+        u64 cr3;
+        __asm__ volatile("mov %%cr3, %0; mov %0, %%cr3" : "=r"(cr3) :: "memory");
+    } else {
+        u64 end_va = start_va + size;
+        for (u64 va = (start_va & ~0xFFFULL); va < end_va; va += 4096) {
+            __asm__ volatile("invlpg (%0)" :: "r"(va) : "memory");
+        }
+    }
+
+    if (g_active_cpus > 1) {
+        lapic_send_ipi_all_excluding_self(VECTOR_IPI_TLB);
+    }
+}
+
 void smp_tlb_shootdown(void) {
-    lapic_send_ipi_all_excluding_self(VECTOR_IPI_TLB);
-    // invalidate local TLB
     u64 cr3;
-    __asm__ volatile("mov %%cr3, %0; mov %0, %%cr3" : "=r"(cr3));
+    __asm__ volatile("mov %%cr3, %0; mov %0, %%cr3" : "=r"(cr3) :: "memory");
+    if (g_active_cpus > 1) {
+        lapic_send_ipi_all_excluding_self(VECTOR_IPI_TLB);
+    }
 }

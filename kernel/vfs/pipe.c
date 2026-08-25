@@ -8,8 +8,8 @@
 #include <kernel/uio.h>
 #include <kernel/proc.h>
 #include <kernel/panic.h>
+#include <kernel/wait_queue.h>
 
-extern void scheduler_yield(void);
 extern xiu_error_t copyin(const void *uaddr, void *kaddr, usize len);
 extern xiu_error_t copyout(const void *kaddr, void *uaddr, usize len);
 extern xiu_task_t *current_task(void);
@@ -27,6 +27,8 @@ typedef struct xiu_pipe {
     u32          writers;
     bool         active;
     spinlock_t   lock;
+    wait_queue_t r_wq;
+    wait_queue_t w_wq;
     vnode_t      read_vn;
     vnode_t      write_vn;
 } xiu_pipe_t;
@@ -90,6 +92,9 @@ static xiu_error_t pipe_read_vop_read(vnode_t *vp, struct uio *uio, int flags,
 
             pipe->tail = (pipe->tail + to_read) % PIPE_BUF_SIZE;
             pipe->count -= to_read;
+            
+            // notify writers that buffer now has free space
+            wait_queue_wakeup_one(&pipe->w_wq);
             spinlock_unlock_irqrestore(&pipe->lock, irq);
 
             uio->uio_buf = (void *)((uptr)uio->uio_buf + to_read);
@@ -103,9 +108,8 @@ static xiu_error_t pipe_read_vop_read(vnode_t *vp, struct uio *uio, int flags,
             return XIU_SUCCESS;
         }
 
-        // writers still open: yield and wait for data
-        spinlock_unlock_irqrestore(&pipe->lock, irq);
-        scheduler_yield();
+        // writers still open: sleep on read wait queue
+        wait_queue_sleep_irqrestore(&pipe->r_wq, &pipe->lock, irq);
     }
 
     return XIU_SUCCESS;
@@ -122,6 +126,8 @@ static xiu_error_t pipe_read_vop_close(vnode_t *vp, int flags, vfs_context_t *ct
     if (pipe->readers == 0 && pipe->writers == 0) {
         pipe->active = false;
     }
+    // wake any writers blocked on full pipe
+    wait_queue_wakeup_all(&pipe->w_wq);
     spinlock_unlock_irqrestore(&pipe->lock, irq);
     return XIU_SUCCESS;
 }
@@ -198,6 +204,9 @@ static xiu_error_t pipe_write_vop_write(vnode_t *vp, struct uio *uio, int flags,
 
             pipe->head = (pipe->head + to_write) % PIPE_BUF_SIZE;
             pipe->count += to_write;
+
+            // wake readers
+            wait_queue_wakeup_one(&pipe->r_wq);
             spinlock_unlock_irqrestore(&pipe->lock, irq);
 
             uio->uio_buf = (void *)((uptr)uio->uio_buf + to_write);
@@ -205,9 +214,8 @@ static xiu_error_t pipe_write_vop_write(vnode_t *vp, struct uio *uio, int flags,
             continue;
         }
 
-        // buffer is full: yield and wait for readers to consume
-        spinlock_unlock_irqrestore(&pipe->lock, irq);
-        scheduler_yield();
+        // buffer is full: sleep on write wait queue
+        wait_queue_sleep_irqrestore(&pipe->w_wq, &pipe->lock, irq);
     }
 
     return XIU_SUCCESS;
@@ -224,6 +232,8 @@ static xiu_error_t pipe_write_vop_close(vnode_t *vp, int flags, vfs_context_t *c
     if (pipe->readers == 0 && pipe->writers == 0) {
         pipe->active = false;
     }
+    // wake any readers blocked on empty pipe so they see EOF (writers==0)
+    wait_queue_wakeup_all(&pipe->r_wq);
     spinlock_unlock_irqrestore(&pipe->lock, irq);
     return XIU_SUCCESS;
 }
@@ -260,6 +270,8 @@ xiu_error_t pipe_create(vnode_t **read_vp_out, vnode_t **write_vp_out) {
     pipe->writers = 1;
     pipe->active = true;
     spinlock_init(&pipe->lock);
+    wait_queue_init(&pipe->r_wq);
+    wait_queue_init(&pipe->w_wq);
 
     // setup read vnode
     __builtin_memset(&pipe->read_vn, 0, sizeof(vnode_t));

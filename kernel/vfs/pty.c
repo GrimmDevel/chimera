@@ -18,25 +18,28 @@
 #include <kernel/spinlock.h>
 #include <kernel/uio.h>
 #include <kernel/proc.h>
+#include <kernel/wait_queue.h>
 
 extern void kprintf(const char *fmt, ...);
 
 #define PTY_BUF_SIZE 4096
 
 typedef struct pty {
-    char master_buf[PTY_BUF_SIZE];
-    u32  master_head;
-    u32  master_tail;
+    char         master_buf[PTY_BUF_SIZE];
+    u32          master_head;
+    u32          master_tail;
 
-    char slave_buf[PTY_BUF_SIZE];
-    u32  slave_head;
-    u32  slave_tail;
+    char         slave_buf[PTY_BUF_SIZE];
+    u32          slave_head;
+    u32          slave_tail;
 
-    char line_buf[PTY_BUF_SIZE];
-    u32  line_len;
-    bool line_ready;
+    char         line_buf[PTY_BUF_SIZE];
+    u32          line_len;
+    bool         line_ready;
 
-    spinlock_t lock;
+    spinlock_t   lock;
+    wait_queue_t master_wq;
+    wait_queue_t slave_wq;
 } pty_t;
 
 static pty_t g_pty0;
@@ -70,9 +73,6 @@ static usize ring_read(const char *buf, u32 head, u32 *tail, u32 cap,
     }
     return len;
 }
-
-// extern scheduler_yield
-extern void scheduler_yield(void);
 
 // master operations
 static xiu_error_t pty_master_read(struct vnode *vp, struct uio *uio,
@@ -119,13 +119,9 @@ static xiu_error_t pty_master_write(struct vnode *vp, struct uio *uio,
 
     spinlock_lock(&g_pty0.lock);
     
-    kprintf("[PTY] master_write: received %lu bytes\n", to_write);
-    
     // process each character through line discipline
     for (usize i = 0; i < to_write; i++) {
         u8 ch = tmp[i];
-        
-        kprintf("[PTY] char: 0x%02x ('%c')\n", ch, (ch >= 0x20 && ch < 0x7f) ? ch : '?');
         
         // handle backspace/delete
         if (ch == 0x08 || ch == 0x7f) {
@@ -149,10 +145,7 @@ static xiu_error_t pty_master_write(struct vnode *vp, struct uio *uio,
                       g_pty0.slave_tail, PTY_BUF_SIZE,
                       (const char *)&ch, 1);
             
-            kprintf("[PTY] line_len=%u, echoed to terminal\n", g_pty0.line_len);
-            
             if (ch == '\n' || ch == '\r') {
-                kprintf("[PTY] NEWLINE! Flushing %u bytes to master_buf\n", g_pty0.line_len);
                 ring_write(g_pty0.master_buf, &g_pty0.master_head,
                           g_pty0.master_tail, PTY_BUF_SIZE,
                           g_pty0.line_buf, g_pty0.line_len);
@@ -164,6 +157,9 @@ static xiu_error_t pty_master_write(struct vnode *vp, struct uio *uio,
     
     uio->uio_buf = (void *)((uptr)uio->uio_buf + to_write);
     uio->uio_resid -= to_write;
+
+    wait_queue_wakeup_one(&g_pty0.slave_wq);
+    wait_queue_wakeup_one(&g_pty0.master_wq);
     spinlock_unlock(&g_pty0.lock);
 
     return XIU_SUCCESS;
@@ -196,8 +192,7 @@ static xiu_error_t pty_slave_read(struct vnode *vp, struct uio *uio,
             }
             return XIU_SUCCESS;
         }
-        spinlock_unlock(&g_pty0.lock);
-        scheduler_yield();
+        wait_queue_sleep(&g_pty0.slave_wq, &g_pty0.lock);
     }
 }
 
@@ -220,9 +215,10 @@ static xiu_error_t pty_slave_write(struct vnode *vp, struct uio *uio,
                          tmp, to_write);
     uio->uio_buf = (void *)((uptr)uio->uio_buf + n);
     uio->uio_resid -= n;
+
+    wait_queue_wakeup_one(&g_pty0.master_wq);
     spinlock_unlock(&g_pty0.lock);
 
-    // don't yield - let dash write all output in one go
     return XIU_SUCCESS;
 }
 
@@ -257,6 +253,8 @@ vnode_ops_t s_pty_slave_ops = {
 
 void pty_init(void) {
     spinlock_init(&g_pty0.lock);
+    wait_queue_init(&g_pty0.master_wq);
+    wait_queue_init(&g_pty0.slave_wq);
     g_pty0.master_head = g_pty0.master_tail = 0;
     g_pty0.slave_head  = g_pty0.slave_tail  = 0;
     g_pty0.line_len = 0;

@@ -229,6 +229,9 @@ xiu_error_t vnode_alloc(mount_t *mp, vtype_t type, vnode_ops_t *ops,
 xiu_error_t vfs_lookup_path(const char *path, vnode_t **vp_out,
                               vfs_context_t *ctx);
 
+xiu_error_t vfs_unregister(const char *path);
+xiu_error_t vfs_rename_node(const char *oldpath, const char *newpath);
+
 xiu_error_t vfs_register_filesystem(mount_ops_t *ops);
 
 XIU_ALWAYS_INLINE xiu_error_t

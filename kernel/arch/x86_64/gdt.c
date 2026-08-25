@@ -4,9 +4,18 @@
  * ============================================================================= */
 
 #include "gdt.h"
+#include <kernel/smp.h>
 
 static u64 gdt[7];
 static struct tss_entry tss;
+
+static u8 s_bsp_df_stack[4096] __attribute__((aligned(16)));
+static u8 s_bsp_nmi_stack[4096] __attribute__((aligned(16)));
+
+static u8 s_ap_df_stacks[XIU_MAX_CPUS][4096] __attribute__((aligned(16)));
+static u8 s_ap_nmi_stacks[XIU_MAX_CPUS][4096] __attribute__((aligned(16)));
+
+extern cpu_local_t g_cpu_data[XIU_MAX_CPUS];
 
 struct gdtr {
     u16 limit;
@@ -39,6 +48,8 @@ void gdt_init(void) {
     // tss 0x28
     __builtin_memset(&tss, 0, sizeof(tss));
     tss.iopb_offset = sizeof(tss);
+    tss.ist1 = (u64)(s_bsp_df_stack + sizeof(s_bsp_df_stack));
+    tss.ist2 = (u64)(s_bsp_nmi_stack + sizeof(s_bsp_nmi_stack));
     
     u64 tss_base = (u64)&tss;
     u32 tss_limit = sizeof(tss) - 1;
@@ -91,11 +102,14 @@ void tss_set_rsp0(u64 rsp0) {
 }
 
 void tss_set_rsp0_cpu(u32 cpu_id, u64 rsp0) {
-    (void)cpu_id;
-    tss.rsp0 = rsp0;
+    if (cpu_id == 0) {
+        tss.rsp0 = rsp0;
+    } else if (cpu_id < XIU_MAX_CPUS && g_cpu_data[cpu_id].cpu_tss_ptr) {
+        ((struct tss_entry *)g_cpu_data[cpu_id].cpu_tss_ptr)->rsp0 = rsp0;
+    }
 }
 
-void gdt_init_ap(u64 *ap_gdt, struct tss_entry *ap_tss) {
+void gdt_init_ap(u64 *ap_gdt, struct tss_entry *ap_tss, u32 cpu_id) {
     if (!ap_gdt || !ap_tss) return;
 
     ap_gdt[0] = 0;
@@ -114,6 +128,11 @@ void gdt_init_ap(u64 *ap_gdt, struct tss_entry *ap_tss) {
 
     __builtin_memset(ap_tss, 0, sizeof(*ap_tss));
     ap_tss->iopb_offset = sizeof(*ap_tss);
+
+    if (cpu_id < XIU_MAX_CPUS) {
+        ap_tss->ist1 = (u64)(s_ap_df_stacks[cpu_id] + sizeof(s_ap_df_stacks[cpu_id]));
+        ap_tss->ist2 = (u64)(s_ap_nmi_stacks[cpu_id] + sizeof(s_ap_nmi_stacks[cpu_id]));
+    }
 
     u64 tss_base = (u64)ap_tss;
     u32 tss_limit = sizeof(*ap_tss) - 1;

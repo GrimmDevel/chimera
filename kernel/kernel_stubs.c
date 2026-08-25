@@ -6,7 +6,7 @@
 
 extern xiu_thread_t *current_thread(void);
 extern void task_switch_to_user(u64 entry, u64 stack);
-extern void context_switch(void **old_sp, void *new_sp, u64 new_cr3);
+extern void context_switch(void **old_sp, void *new_sp, u64 new_cr3, void *old_fp, void *new_fp);
 
 #include <arch/x86_64/msr.h>
 

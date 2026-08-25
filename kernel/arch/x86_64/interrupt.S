@@ -57,13 +57,11 @@ interrupt_common:
     // check if returning to userspace
     testq $3, 24(%rsp)
     jz 2f
-    // returning to userspace - swap GS back to user GS BASE
     swapgs
 2:
     addq $16, %rsp
     iretq
 
-// exceptions 0-31
 INTERRUPT_STUB 0
 INTERRUPT_STUB 1
 INTERRUPT_STUB 2
@@ -96,8 +94,6 @@ INTERRUPT_STUB 28
 INTERRUPT_STUB 29
 INTERRUPT_STUB 30, 1
 INTERRUPT_STUB 31
-
-// iRQs 32-47
 INTERRUPT_STUB 32
 INTERRUPT_STUB 33
 INTERRUPT_STUB 34
@@ -114,6 +110,214 @@ INTERRUPT_STUB 44
 INTERRUPT_STUB 45
 INTERRUPT_STUB 46
 INTERRUPT_STUB 47
+INTERRUPT_STUB 48
+INTERRUPT_STUB 49
+INTERRUPT_STUB 50
+INTERRUPT_STUB 51
+INTERRUPT_STUB 52
+INTERRUPT_STUB 53
+INTERRUPT_STUB 54
+INTERRUPT_STUB 55
+INTERRUPT_STUB 56
+INTERRUPT_STUB 57
+INTERRUPT_STUB 58
+INTERRUPT_STUB 59
+INTERRUPT_STUB 60
+INTERRUPT_STUB 61
+INTERRUPT_STUB 62
+INTERRUPT_STUB 63
+INTERRUPT_STUB 64
+INTERRUPT_STUB 65
+INTERRUPT_STUB 66
+INTERRUPT_STUB 67
+INTERRUPT_STUB 68
+INTERRUPT_STUB 69
+INTERRUPT_STUB 70
+INTERRUPT_STUB 71
+INTERRUPT_STUB 72
+INTERRUPT_STUB 73
+INTERRUPT_STUB 74
+INTERRUPT_STUB 75
+INTERRUPT_STUB 76
+INTERRUPT_STUB 77
+INTERRUPT_STUB 78
+INTERRUPT_STUB 79
+INTERRUPT_STUB 80
+INTERRUPT_STUB 81
+INTERRUPT_STUB 82
+INTERRUPT_STUB 83
+INTERRUPT_STUB 84
+INTERRUPT_STUB 85
+INTERRUPT_STUB 86
+INTERRUPT_STUB 87
+INTERRUPT_STUB 88
+INTERRUPT_STUB 89
+INTERRUPT_STUB 90
+INTERRUPT_STUB 91
+INTERRUPT_STUB 92
+INTERRUPT_STUB 93
+INTERRUPT_STUB 94
+INTERRUPT_STUB 95
+INTERRUPT_STUB 96
+INTERRUPT_STUB 97
+INTERRUPT_STUB 98
+INTERRUPT_STUB 99
+INTERRUPT_STUB 100
+INTERRUPT_STUB 101
+INTERRUPT_STUB 102
+INTERRUPT_STUB 103
+INTERRUPT_STUB 104
+INTERRUPT_STUB 105
+INTERRUPT_STUB 106
+INTERRUPT_STUB 107
+INTERRUPT_STUB 108
+INTERRUPT_STUB 109
+INTERRUPT_STUB 110
+INTERRUPT_STUB 111
+INTERRUPT_STUB 112
+INTERRUPT_STUB 113
+INTERRUPT_STUB 114
+INTERRUPT_STUB 115
+INTERRUPT_STUB 116
+INTERRUPT_STUB 117
+INTERRUPT_STUB 118
+INTERRUPT_STUB 119
+INTERRUPT_STUB 120
+INTERRUPT_STUB 121
+INTERRUPT_STUB 122
+INTERRUPT_STUB 123
+INTERRUPT_STUB 124
+INTERRUPT_STUB 125
+INTERRUPT_STUB 126
+INTERRUPT_STUB 127
+INTERRUPT_STUB 128
+INTERRUPT_STUB 129
+INTERRUPT_STUB 130
+INTERRUPT_STUB 131
+INTERRUPT_STUB 132
+INTERRUPT_STUB 133
+INTERRUPT_STUB 134
+INTERRUPT_STUB 135
+INTERRUPT_STUB 136
+INTERRUPT_STUB 137
+INTERRUPT_STUB 138
+INTERRUPT_STUB 139
+INTERRUPT_STUB 140
+INTERRUPT_STUB 141
+INTERRUPT_STUB 142
+INTERRUPT_STUB 143
+INTERRUPT_STUB 144
+INTERRUPT_STUB 145
+INTERRUPT_STUB 146
+INTERRUPT_STUB 147
+INTERRUPT_STUB 148
+INTERRUPT_STUB 149
+INTERRUPT_STUB 150
+INTERRUPT_STUB 151
+INTERRUPT_STUB 152
+INTERRUPT_STUB 153
+INTERRUPT_STUB 154
+INTERRUPT_STUB 155
+INTERRUPT_STUB 156
+INTERRUPT_STUB 157
+INTERRUPT_STUB 158
+INTERRUPT_STUB 159
+INTERRUPT_STUB 160
+INTERRUPT_STUB 161
+INTERRUPT_STUB 162
+INTERRUPT_STUB 163
+INTERRUPT_STUB 164
+INTERRUPT_STUB 165
+INTERRUPT_STUB 166
+INTERRUPT_STUB 167
+INTERRUPT_STUB 168
+INTERRUPT_STUB 169
+INTERRUPT_STUB 170
+INTERRUPT_STUB 171
+INTERRUPT_STUB 172
+INTERRUPT_STUB 173
+INTERRUPT_STUB 174
+INTERRUPT_STUB 175
+INTERRUPT_STUB 176
+INTERRUPT_STUB 177
+INTERRUPT_STUB 178
+INTERRUPT_STUB 179
+INTERRUPT_STUB 180
+INTERRUPT_STUB 181
+INTERRUPT_STUB 182
+INTERRUPT_STUB 183
+INTERRUPT_STUB 184
+INTERRUPT_STUB 185
+INTERRUPT_STUB 186
+INTERRUPT_STUB 187
+INTERRUPT_STUB 188
+INTERRUPT_STUB 189
+INTERRUPT_STUB 190
+INTERRUPT_STUB 191
+INTERRUPT_STUB 192
+INTERRUPT_STUB 193
+INTERRUPT_STUB 194
+INTERRUPT_STUB 195
+INTERRUPT_STUB 196
+INTERRUPT_STUB 197
+INTERRUPT_STUB 198
+INTERRUPT_STUB 199
+INTERRUPT_STUB 200
+INTERRUPT_STUB 201
+INTERRUPT_STUB 202
+INTERRUPT_STUB 203
+INTERRUPT_STUB 204
+INTERRUPT_STUB 205
+INTERRUPT_STUB 206
+INTERRUPT_STUB 207
+INTERRUPT_STUB 208
+INTERRUPT_STUB 209
+INTERRUPT_STUB 210
+INTERRUPT_STUB 211
+INTERRUPT_STUB 212
+INTERRUPT_STUB 213
+INTERRUPT_STUB 214
+INTERRUPT_STUB 215
+INTERRUPT_STUB 216
+INTERRUPT_STUB 217
+INTERRUPT_STUB 218
+INTERRUPT_STUB 219
+INTERRUPT_STUB 220
+INTERRUPT_STUB 221
+INTERRUPT_STUB 222
+INTERRUPT_STUB 223
+INTERRUPT_STUB 224
+INTERRUPT_STUB 225
+INTERRUPT_STUB 226
+INTERRUPT_STUB 227
+INTERRUPT_STUB 228
+INTERRUPT_STUB 229
+INTERRUPT_STUB 230
+INTERRUPT_STUB 231
+INTERRUPT_STUB 232
+INTERRUPT_STUB 233
+INTERRUPT_STUB 234
+INTERRUPT_STUB 235
+INTERRUPT_STUB 236
+INTERRUPT_STUB 237
+INTERRUPT_STUB 238
+INTERRUPT_STUB 239
+INTERRUPT_STUB 240
+INTERRUPT_STUB 241
+INTERRUPT_STUB 242
+INTERRUPT_STUB 243
+INTERRUPT_STUB 244
+INTERRUPT_STUB 245
+INTERRUPT_STUB 246
+INTERRUPT_STUB 247
+INTERRUPT_STUB 248
+INTERRUPT_STUB 249
+INTERRUPT_STUB 250
+INTERRUPT_STUB 251
+INTERRUPT_STUB 252
+INTERRUPT_STUB 253
+INTERRUPT_STUB 254
+INTERRUPT_STUB 255
 
 .section .data
 .global interrupt_handlers
@@ -166,6 +370,211 @@ interrupt_handlers:
     .quad intr45
     .quad intr46
     .quad intr47
-    .rept 208
-        .quad intr31
-    .endr
+    .quad intr48
+    .quad intr49
+    .quad intr50
+    .quad intr51
+    .quad intr52
+    .quad intr53
+    .quad intr54
+    .quad intr55
+    .quad intr56
+    .quad intr57
+    .quad intr58
+    .quad intr59
+    .quad intr60
+    .quad intr61
+    .quad intr62
+    .quad intr63
+    .quad intr64
+    .quad intr65
+    .quad intr66
+    .quad intr67
+    .quad intr68
+    .quad intr69
+    .quad intr70
+    .quad intr71
+    .quad intr72
+    .quad intr73
+    .quad intr74
+    .quad intr75
+    .quad intr76
+    .quad intr77
+    .quad intr78
+    .quad intr79
+    .quad intr80
+    .quad intr81
+    .quad intr82
+    .quad intr83
+    .quad intr84
+    .quad intr85
+    .quad intr86
+    .quad intr87
+    .quad intr88
+    .quad intr89
+    .quad intr90
+    .quad intr91
+    .quad intr92
+    .quad intr93
+    .quad intr94
+    .quad intr95
+    .quad intr96
+    .quad intr97
+    .quad intr98
+    .quad intr99
+    .quad intr100
+    .quad intr101
+    .quad intr102
+    .quad intr103
+    .quad intr104
+    .quad intr105
+    .quad intr106
+    .quad intr107
+    .quad intr108
+    .quad intr109
+    .quad intr110
+    .quad intr111
+    .quad intr112
+    .quad intr113
+    .quad intr114
+    .quad intr115
+    .quad intr116
+    .quad intr117
+    .quad intr118
+    .quad intr119
+    .quad intr120
+    .quad intr121
+    .quad intr122
+    .quad intr123
+    .quad intr124
+    .quad intr125
+    .quad intr126
+    .quad intr127
+    .quad intr128
+    .quad intr129
+    .quad intr130
+    .quad intr131
+    .quad intr132
+    .quad intr133
+    .quad intr134
+    .quad intr135
+    .quad intr136
+    .quad intr137
+    .quad intr138
+    .quad intr139
+    .quad intr140
+    .quad intr141
+    .quad intr142
+    .quad intr143
+    .quad intr144
+    .quad intr145
+    .quad intr146
+    .quad intr147
+    .quad intr148
+    .quad intr149
+    .quad intr150
+    .quad intr151
+    .quad intr152
+    .quad intr153
+    .quad intr154
+    .quad intr155
+    .quad intr156
+    .quad intr157
+    .quad intr158
+    .quad intr159
+    .quad intr160
+    .quad intr161
+    .quad intr162
+    .quad intr163
+    .quad intr164
+    .quad intr165
+    .quad intr166
+    .quad intr167
+    .quad intr168
+    .quad intr169
+    .quad intr170
+    .quad intr171
+    .quad intr172
+    .quad intr173
+    .quad intr174
+    .quad intr175
+    .quad intr176
+    .quad intr177
+    .quad intr178
+    .quad intr179
+    .quad intr180
+    .quad intr181
+    .quad intr182
+    .quad intr183
+    .quad intr184
+    .quad intr185
+    .quad intr186
+    .quad intr187
+    .quad intr188
+    .quad intr189
+    .quad intr190
+    .quad intr191
+    .quad intr192
+    .quad intr193
+    .quad intr194
+    .quad intr195
+    .quad intr196
+    .quad intr197
+    .quad intr198
+    .quad intr199
+    .quad intr200
+    .quad intr201
+    .quad intr202
+    .quad intr203
+    .quad intr204
+    .quad intr205
+    .quad intr206
+    .quad intr207
+    .quad intr208
+    .quad intr209
+    .quad intr210
+    .quad intr211
+    .quad intr212
+    .quad intr213
+    .quad intr214
+    .quad intr215
+    .quad intr216
+    .quad intr217
+    .quad intr218
+    .quad intr219
+    .quad intr220
+    .quad intr221
+    .quad intr222
+    .quad intr223
+    .quad intr224
+    .quad intr225
+    .quad intr226
+    .quad intr227
+    .quad intr228
+    .quad intr229
+    .quad intr230
+    .quad intr231
+    .quad intr232
+    .quad intr233
+    .quad intr234
+    .quad intr235
+    .quad intr236
+    .quad intr237
+    .quad intr238
+    .quad intr239
+    .quad intr240
+    .quad intr241
+    .quad intr242
+    .quad intr243
+    .quad intr244
+    .quad intr245
+    .quad intr246
+    .quad intr247
+    .quad intr248
+    .quad intr249
+    .quad intr250
+    .quad intr251
+    .quad intr252
+    .quad intr253
+    .quad intr254
+    .quad intr255

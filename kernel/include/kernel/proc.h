@@ -46,6 +46,9 @@ typedef struct xiu_thread {
     struct xiu_thread  *th_next;
     struct xiu_thread  *th_task_next;
     struct xiu_thread  *th_wait_next;
+
+    u8                  th_fp_state[512] __attribute__((aligned(64)));
+    u32                 th_fp_initialized;
 } xiu_thread_t;
 
 #define XIU_THREAD_MAGIC 0x5448524541442121ULL

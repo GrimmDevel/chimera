@@ -13,11 +13,12 @@
 struct xiu_thread;
 
 typedef struct wait_queue {
+    spinlock_t         wq_lock;
     struct xiu_thread *head;
     struct xiu_thread *tail;
 } wait_queue_t;
 
-#define WAIT_QUEUE_INIT { .head = nullptr, .tail = nullptr }
+#define WAIT_QUEUE_INIT { .wq_lock = SPINLOCK_INIT, .head = nullptr, .tail = nullptr }
 
 void wait_queue_init(wait_queue_t *wq);
 
@@ -39,5 +40,10 @@ xiu_error_t wait_queue_sleep_irqrestore(wait_queue_t *wq, spinlock_t *lock,
  * wait_queue_wakeup_one — Wake the first thread in the queue.
  */
 void wait_queue_wakeup_one(wait_queue_t *wq);
+
+/*
+ * wait_queue_wakeup_all — Wake all threads blocked in the queue.
+ */
+void wait_queue_wakeup_all(wait_queue_t *wq);
 
 #endif /* XIU_WAIT_QUEUE_H */

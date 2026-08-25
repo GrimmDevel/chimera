@@ -23,11 +23,16 @@ static xiu_fileproc_t  s_fp_pool[FILEPROC_POOL_SIZE];
 static u8              s_fp_used[FILEPROC_POOL_SIZE]; // 1 = allocated
 static spinlock_t      s_fp_pool_lock = SPINLOCK_INIT;
 
+extern void *kalloc(usize size);
+extern void kfree(void *ptr);
+
+#define FP_DYNAMIC_ALLOC (1u << 31)
+
 /* ═══════════════════════════════════════════════════════════════════════════
  * fp_alloc — allocate a new fileproc backed by vp.
  *
- * Returns a fileproc with refcount=1, or NULL if the pool is exhausted.
- * The caller must call proc_fd_install() to attach it to a process.
+ * Returns a fileproc with refcount=1, or NULL if allocation fails.
+ * Falls back to dynamic kernel heap if the static pool is full.
  * ═══════════════════════════════════════════════════════════════════════════ */
 xiu_fileproc_t *fp_alloc(vnode_t *vp, u32 flags) {
     XIU_ASSERT(vp != nullptr);
@@ -45,15 +50,20 @@ xiu_fileproc_t *fp_alloc(vnode_t *vp, u32 flags) {
 
     spinlock_unlock_irqrestore(&s_fp_pool_lock, irq);
 
+    bool dynamic = false;
     if (!fp) {
-        kprintf("[fileproc] ERROR: fp_alloc pool exhausted (%u entries)\n",
-                FILEPROC_POOL_SIZE);
-        return nullptr;
+        fp = (xiu_fileproc_t *)kalloc(sizeof(xiu_fileproc_t));
+        if (!fp) {
+            kprintf("[fileproc] ERROR: fp_alloc out of memory\n");
+            return nullptr;
+        }
+        dynamic = true;
     }
 
     __builtin_memset(fp, 0, sizeof(*fp));
     fp->fp_signature = XIU_FILEPROC_MAGIC;
     fp->fp_flags     = flags | FP_READABLE;   // readable by default
+    if (dynamic) fp->fp_flags |= FP_DYNAMIC_ALLOC;
     if (flags & FP_WRITABLE) fp->fp_flags |= FP_WRITABLE;
     if (vp->v_type == VCHR || vp->v_type == VBLK) fp->fp_flags |= FP_DEVICE;
 
@@ -84,11 +94,18 @@ xiu_fileproc_t *fp_alloc_socket(struct socket *so, u32 flags) {
         }
     }
     spinlock_unlock_irqrestore(&s_fp_pool_lock, irq);
-    if (!fp) return nullptr;
+
+    bool dynamic = false;
+    if (!fp) {
+        fp = (xiu_fileproc_t *)kalloc(sizeof(xiu_fileproc_t));
+        if (!fp) return nullptr;
+        dynamic = true;
+    }
 
     __builtin_memset(fp, 0, sizeof(*fp));
     fp->fp_signature = XIU_FILEPROC_MAGIC;
     fp->fp_flags     = flags | FP_READABLE | FP_WRITABLE;
+    if (dynamic) fp->fp_flags |= FP_DYNAMIC_ALLOC;
     fp->fp_type      = DTYPE_SOCKET;
     fp->fp_socket    = so;
     fp->fp_offset    = 0;
@@ -101,7 +118,7 @@ xiu_fileproc_t *fp_alloc_socket(struct socket *so, u32 flags) {
  * fp_release — drop one reference to a fileproc.
  *
  * When refcount reaches zero the vnode iocount is decremented and the
- * pool slot is returned.
+ * pool slot is returned or freed.
  * ═══════════════════════════════════════════════════════════════════════════ */
 void fp_release(xiu_fileproc_t *fp) {
     if (!fp) return;
@@ -124,15 +141,21 @@ void fp_release(xiu_fileproc_t *fp) {
         fp->fp_vnode = nullptr;
     }
 
+    bool is_dyn = (fp->fp_flags & FP_DYNAMIC_ALLOC) != 0;
     fp->fp_signature = 0xDEADDEADDEADDEADULL;
 
-    // return to pool
-    usize idx = (usize)(fp - s_fp_pool);
-    XIU_ASSERT(idx < FILEPROC_POOL_SIZE);
+    if (is_dyn) {
+        kfree(fp);
+        return;
+    }
 
-    irq_flags_t irq = spinlock_lock_irqsave(&s_fp_pool_lock);
-    s_fp_used[idx] = 0;
-    spinlock_unlock_irqrestore(&s_fp_pool_lock, irq);
+    // return to static pool
+    usize idx = (usize)(fp - s_fp_pool);
+    if (idx < FILEPROC_POOL_SIZE) {
+        irq_flags_t irq = spinlock_lock_irqsave(&s_fp_pool_lock);
+        s_fp_used[idx] = 0;
+        spinlock_unlock_irqrestore(&s_fp_pool_lock, irq);
+    }
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════

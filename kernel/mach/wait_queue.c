@@ -12,6 +12,7 @@ extern void scheduler_yield(void);
 extern void thread_wake(xiu_thread_t *thread);
 
 void wait_queue_init(wait_queue_t *wq) {
+  spinlock_init(&wq->wq_lock);
   wq->head = nullptr;
   wq->tail = nullptr;
 }
@@ -20,11 +21,12 @@ xiu_error_t wait_queue_sleep(wait_queue_t *wq, spinlock_t *lock) {
   xiu_thread_t *curr = current_thread();
   XIU_ASSERT(curr != nullptr);
 
-  // mark as waiting
+  irq_flags_t wq_flags = spinlock_lock_irqsave(&wq->wq_lock);
+
   curr->th_state = THREAD_STATE_WAITING;
   curr->th_wait_next = nullptr;
+  curr->th_wait_result = XIU_SUCCESS;
 
-  // add to queue
   if (wq->tail) {
     wq->tail->th_wait_next = curr;
   } else {
@@ -32,10 +34,11 @@ xiu_error_t wait_queue_sleep(wait_queue_t *wq, spinlock_t *lock) {
   }
   wq->tail = curr;
 
-  // unlock and yield
   if (lock) {
     spinlock_unlock(lock);
   }
+
+  spinlock_unlock_irqrestore(&wq->wq_lock, wq_flags);
 
   scheduler_yield();
 
@@ -47,8 +50,11 @@ xiu_error_t wait_queue_sleep_irqrestore(wait_queue_t *wq, spinlock_t *lock,
   xiu_thread_t *curr = current_thread();
   XIU_ASSERT(curr != nullptr);
 
+  irq_flags_t wq_flags = spinlock_lock_irqsave(&wq->wq_lock);
+
   curr->th_state = THREAD_STATE_WAITING;
   curr->th_wait_next = nullptr;
+  curr->th_wait_result = XIU_SUCCESS;
 
   if (wq->tail) {
     wq->tail->th_wait_next = curr;
@@ -63,14 +69,21 @@ xiu_error_t wait_queue_sleep_irqrestore(wait_queue_t *wq, spinlock_t *lock,
     irq_restore(flags);
   }
 
+  spinlock_unlock_irqrestore(&wq->wq_lock, wq_flags);
+
   scheduler_yield();
 
   return curr->th_wait_result;
 }
 
 void wait_queue_wakeup_one(wait_queue_t *wq) {
-  if (!wq->head)
+  if (!wq) return;
+  irq_flags_t wq_flags = spinlock_lock_irqsave(&wq->wq_lock);
+
+  if (!wq->head) {
+    spinlock_unlock_irqrestore(&wq->wq_lock, wq_flags);
     return;
+  }
 
   xiu_thread_t *th = wq->head;
   wq->head = th->th_wait_next;
@@ -78,9 +91,30 @@ void wait_queue_wakeup_one(wait_queue_t *wq) {
     wq->tail = nullptr;
   }
   th->th_wait_next = nullptr;
-
   th->th_state = THREAD_STATE_READY;
   th->th_wait_result = XIU_SUCCESS;
 
+  spinlock_unlock_irqrestore(&wq->wq_lock, wq_flags);
+
   thread_wake(th);
+}
+
+void wait_queue_wakeup_all(wait_queue_t *wq) {
+  if (!wq) return;
+  irq_flags_t wq_flags = spinlock_lock_irqsave(&wq->wq_lock);
+
+  xiu_thread_t *list = wq->head;
+  wq->head = nullptr;
+  wq->tail = nullptr;
+
+  spinlock_unlock_irqrestore(&wq->wq_lock, wq_flags);
+
+  while (list) {
+    xiu_thread_t *next = list->th_wait_next;
+    list->th_wait_next = nullptr;
+    list->th_state = THREAD_STATE_READY;
+    list->th_wait_result = XIU_SUCCESS;
+    thread_wake(list);
+    list = next;
+  }
 }

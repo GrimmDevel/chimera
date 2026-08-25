@@ -297,6 +297,62 @@ xiu_error_t vfs_register(const char *path, vnode_t *vp) {
   return XIU_ERR_OVERFLOW;
 }
 
+xiu_error_t vfs_unregister(const char *path) {
+  if (!path) return XIU_ERR_INVALID;
+  char norm[256];
+  vfs_normalize_path(path, norm, sizeof(norm));
+
+  irq_flags_t irq = spinlock_lock_irqsave(&s_registry_lock);
+  u32 idx = vfs_hash(norm) % VFS_REGISTRY_SIZE;
+  u32 probe = 0;
+
+  while (probe < VFS_REGISTRY_SIZE) {
+    vfs_entry_t *e = &s_registry[idx];
+    if (e->ve_vnode && __builtin_strcmp(e->ve_path, norm) == 0) {
+      e->ve_vnode = nullptr;
+      e->ve_path[0] = '\0';
+      spinlock_unlock_irqrestore(&s_registry_lock, irq);
+      return XIU_SUCCESS;
+    }
+    if (e->ve_vnode == nullptr && e->ve_path[0] == '\0') {
+      break;
+    }
+    idx = (idx + 1) % VFS_REGISTRY_SIZE;
+    probe++;
+  }
+  spinlock_unlock_irqrestore(&s_registry_lock, irq);
+  return XIU_ERR_NOTFOUND;
+}
+
+xiu_error_t vfs_rename_node(const char *oldpath, const char *newpath) {
+  if (!oldpath || !newpath) return XIU_ERR_INVALID;
+
+  char norm_old[256], norm_new[256];
+  vfs_normalize_path(oldpath, norm_old, sizeof(norm_old));
+  vfs_normalize_path(newpath, norm_new, sizeof(norm_new));
+
+  vnode_t *vp = nullptr;
+  xiu_error_t err = vfs_lookup(norm_old, &vp);
+  if (err != XIU_SUCCESS || !vp) return XIU_ERR_NOTFOUND;
+
+  // register under new path
+  err = vfs_register(norm_new, vp);
+  if (err != XIU_SUCCESS) return err;
+
+  // unregister old path
+  vfs_unregister(norm_old);
+
+  // update basename in vnode
+  const char *base = norm_new;
+  for (const char *p = norm_new; *p; p++) {
+    if (*p == '/' && *(p + 1) != '\0') base = p + 1;
+  }
+  __builtin_strncpy(vp->v_name, base, sizeof(vp->v_name) - 1);
+  vp->v_name[sizeof(vp->v_name) - 1] = '\0';
+
+  return XIU_SUCCESS;
+}
+
 static void vfs_path_to_83(const char *in, char *out, usize cap) {
   if (!in || !out || cap == 0)
     return;

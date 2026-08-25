@@ -13,12 +13,12 @@
 #include <kernel/syscall.h>
 #include <kernel/uio.h>
 
-#include <kernel/mach_o.h>
 #include <kernel/fb.h>
+#include <kernel/mach_o.h>
 #include <kernel/vfs_node.h>
 #include <kernel/xiu_types.h>
-#include <net/socket.h>
 #include <net/protocols.h>
+#include <net/socket.h>
 
 extern xiu_error_t copyin(const void *uaddr, void *kaddr, usize len);
 extern xiu_error_t copyout(const void *kaddr, void *uaddr, usize len);
@@ -107,7 +107,8 @@ static i64 sys_log(u64 ptr, u64 len, u64 a3, u64 a4, u64 a5, u64 a6) {
 }
 
 /* ── sys_exit ────────────────────────────────────────────────────────────── *
- * Marks the task as exited, frees descriptors, unlinks from scheduler, and yields.
+ * Marks the task as exited, frees descriptors, unlinks from scheduler, and
+ * yields.
  * ───────────────────────────────────────────────────────────────────────────
  */
 void sys_exit_direct(u64 code) {
@@ -136,7 +137,8 @@ static i64 sys_exit(u64 code, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
   return 0;
 }
 
-static void resolve_relative_path(xiu_proc_t *proc, const char *path, char *out_buf, usize out_max);
+static void resolve_relative_path(xiu_proc_t *proc, const char *path,
+                                  char *out_buf, usize out_max);
 
 // sys_chdir
 static i64 sys_chdir(u64 path_ptr, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
@@ -198,7 +200,8 @@ static i64 sys_write(u64 fd, u64 buf, u64 len, u64 a4, u64 a5, u64 a6) {
     xiu_fileproc_t *fp = proc_fd_lookup(proc, ifd);
     if (fp) {
       if (fp->fp_type == DTYPE_SOCKET && fp->fp_socket) {
-        xiu_error_t err = sosend(fp->fp_socket, nullptr, (const void *)buf, len, 0);
+        xiu_error_t err =
+            sosend(fp->fp_socket, nullptr, (const void *)buf, len, 0);
         fp_release(fp);
         return (err == XIU_SUCCESS) ? (i64)len : -1;
       }
@@ -229,18 +232,23 @@ static i64 sys_write(u64 fd, u64 buf, u64 len, u64 a4, u64 a5, u64 a6) {
   return -1;
 }
 
-static i64 sys_lseek(u64 fd_u, u64 offset_u, u64 whence_u, u64 a4, u64 a5, u64 a6) {
-  (void)a4; (void)a5; (void)a6;
+static i64 sys_lseek(u64 fd_u, u64 offset_u, u64 whence_u, u64 a4, u64 a5,
+                     u64 a6) {
+  (void)a4;
+  (void)a5;
+  (void)a6;
   int fd = (int)fd_u;
   i64 offset = (i64)offset_u;
   int whence = (int)whence_u;
 
   xiu_task_t *task = current_task();
   xiu_proc_t *proc = task ? task->ta_proc : nullptr;
-  if (!proc || fd < 0 || fd >= XIU_PROC_MAX_FDS) return -9; // ebadf
+  if (!proc || fd < 0 || fd >= XIU_PROC_MAX_FDS)
+    return -9; // ebadf
 
   xiu_fileproc_t *fp = proc_fd_lookup(proc, fd);
-  if (!fp) return -9; // ebadf
+  if (!fp)
+    return -9; // ebadf
 
   vnode_t *vp = fp->fp_vnode;
   if (!vp) {
@@ -399,19 +407,25 @@ static i64 sys_close(u64 fd_u, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
 }
 
 static i64 sys_dup2(u64 oldfd_u, u64 newfd_u, u64 a3, u64 a4, u64 a5, u64 a6) {
-  (void)a3; (void)a4; (void)a5; (void)a6;
+  (void)a3;
+  (void)a4;
+  (void)a5;
+  (void)a6;
   int oldfd = (int)oldfd_u;
   int newfd = (int)newfd_u;
 
   xiu_task_t *task = current_task();
   xiu_proc_t *proc = task ? task->ta_proc : nullptr;
-  if (!proc || oldfd < 0 || oldfd >= XIU_PROC_MAX_FDS || newfd < 0 || newfd >= XIU_PROC_MAX_FDS) {
+  if (!proc || oldfd < 0 || oldfd >= XIU_PROC_MAX_FDS || newfd < 0 ||
+      newfd >= XIU_PROC_MAX_FDS) {
     return -1;
   }
-  if (oldfd == newfd) return newfd;
+  if (oldfd == newfd)
+    return newfd;
 
   xiu_fileproc_t *old_fp = proc_fd_lookup(proc, oldfd);
-  if (!old_fp) return -1;
+  if (!old_fp)
+    return -1;
 
   // close existing newfd if open
   proc_fd_close(proc, newfd);
@@ -423,11 +437,14 @@ static i64 sys_dup2(u64 oldfd_u, u64 newfd_u, u64 a3, u64 a4, u64 a5, u64 a6) {
   return (i64)newfd;
 }
 
-static void resolve_relative_path(xiu_proc_t *proc, const char *path, char *out_buf, usize out_max) {
-  if (!path || !out_buf || out_max < 2) return;
+static void resolve_relative_path(xiu_proc_t *proc, const char *path,
+                                  char *out_buf, usize out_max) {
+  if (!path || !out_buf || out_max < 2)
+    return;
   if (path[0] == '/') {
     usize len = __builtin_strlen(path);
-    if (len >= out_max) len = out_max - 1;
+    if (len >= out_max)
+      len = out_max - 1;
     __builtin_memcpy(out_buf, path, len);
     out_buf[len] = '\0';
     return;
@@ -435,7 +452,8 @@ static void resolve_relative_path(xiu_proc_t *proc, const char *path, char *out_
 
   const char *cwd_str = "/";
   if (proc && proc->p_cwd) {
-    if (proc->p_cwd->v_op && __builtin_strcmp(proc->p_cwd->v_op->vop_name, "fat32_dir") == 0) {
+    if (proc->p_cwd->v_op &&
+        __builtin_strcmp(proc->p_cwd->v_op->vop_name, "fat32_dir") == 0) {
       typedef struct {
         u32 start_cluster;
         u32 file_size;
@@ -443,28 +461,33 @@ static void resolve_relative_path(xiu_proc_t *proc, const char *path, char *out_
         char path[256];
       } fat32_path_info_t;
       fat32_path_info_t *nd = (fat32_path_info_t *)proc->p_cwd->v_data;
-      if (nd && nd->path[0]) cwd_str = nd->path;
+      if (nd && nd->path[0])
+        cwd_str = nd->path;
     } else if (proc->p_cwd->v_name[0] == '/') {
       cwd_str = proc->p_cwd->v_name;
     }
   }
 
   const char *sub = path;
-  if (sub[0] == '.' && sub[1] == '/') sub += 2;
+  if (sub[0] == '.' && sub[1] == '/')
+    sub += 2;
 
   if (__builtin_strcmp(cwd_str, "/") == 0) {
     out_buf[0] = '/';
     usize slen = __builtin_strlen(sub);
-    if (1 + slen >= out_max) slen = out_max - 2;
+    if (1 + slen >= out_max)
+      slen = out_max - 2;
     __builtin_memcpy(out_buf + 1, sub, slen);
     out_buf[1 + slen] = '\0';
   } else {
     usize clen = __builtin_strlen(cwd_str);
-    if (clen >= out_max - 2) clen = out_max - 2;
+    if (clen >= out_max - 2)
+      clen = out_max - 2;
     __builtin_memcpy(out_buf, cwd_str, clen);
     out_buf[clen] = '/';
     usize slen = __builtin_strlen(sub);
-    if (clen + 1 + slen >= out_max) slen = out_max - clen - 2;
+    if (clen + 1 + slen >= out_max)
+      slen = out_max - clen - 2;
     __builtin_memcpy(out_buf + clen + 1, sub, slen);
     out_buf[clen + 1 + slen] = '\0';
   }
@@ -498,7 +521,8 @@ static i64 sys_open(u64 path_ptr, u64 flags, u64 mode, u64 a4, u64 a5, u64 a6) {
     resolve_relative_path(proc, path, norm_path, sizeof(norm_path));
     vfs_lookup(norm_path, &vp);
 
-    if (!vp && (flags & 0x0200 || flags & 0x0040 || flags & 0x0100 || (flags & 1) || (flags & 2))) {
+    if (!vp && (flags & 0x0200 || flags & 0x0040 || flags & 0x0100 ||
+                (flags & 1) || (flags & 2))) {
       extern xiu_error_t fat32_create_file(const char *path, vnode_t **out_vp);
       fat32_create_file(norm_path, &vp);
     }
@@ -574,8 +598,10 @@ static i64 sys_read(u64 fd_u, u64 buf, u64 len, u64 a4, u64 a5, u64 a6) {
       usize to_read = len < sizeof(tmp) ? len : sizeof(tmp);
       extern i64 console_read(char *dst, usize len);
       i64 n = console_read(tmp, to_read);
-      if (n <= 0) return 0;
-      if (copyout(tmp, (void *)buf, n) != XIU_SUCCESS) return -1;
+      if (n <= 0)
+        return 0;
+      if (copyout(tmp, (void *)buf, n) != XIU_SUCCESS)
+        return -1;
       return n;
     }
     kprintf("[sys_read] fd=%d: EBADF\n", fd);
@@ -584,7 +610,8 @@ static i64 sys_read(u64 fd_u, u64 buf, u64 len, u64 a4, u64 a5, u64 a6) {
 
   if (fp->fp_type == DTYPE_SOCKET && fp->fp_socket) {
     usize bytes_read = 0;
-    xiu_error_t err = soreceive(fp->fp_socket, nullptr, (void *)buf, len, &bytes_read, 0);
+    xiu_error_t err =
+        soreceive(fp->fp_socket, nullptr, (void *)buf, len, &bytes_read, 0);
     fp_release(fp);
     return (err == XIU_SUCCESS) ? (i64)bytes_read : -1;
   }
@@ -624,18 +651,21 @@ static i64 sys_pipe(u64 pipefd_ptr, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
   (void)a4;
   (void)a5;
   (void)a6;
-  if (!pipefd_ptr) return -22; // einval
+  if (!pipefd_ptr)
+    return -22; // einval
 
   xiu_task_t *task = current_task();
   xiu_proc_t *proc = task ? task->ta_proc : nullptr;
   if (!proc)
     return -1;
 
-  extern xiu_error_t pipe_create(vnode_t **read_vp_out, vnode_t **write_vp_out);
+  extern xiu_error_t pipe_create(vnode_t * *read_vp_out,
+                                 vnode_t * *write_vp_out);
   vnode_t *read_vp = nullptr;
   vnode_t *write_vp = nullptr;
 
-  if (pipe_create(&read_vp, &write_vp) != XIU_SUCCESS || !read_vp || !write_vp) {
+  if (pipe_create(&read_vp, &write_vp) != XIU_SUCCESS || !read_vp ||
+      !write_vp) {
     return -23; // enfile
   }
 
@@ -654,8 +684,10 @@ static i64 sys_pipe(u64 pipefd_ptr, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
   fp_release(rfp);
   fp_release(wfp);
   if (rfd < 0 || wfd < 0) {
-    if (rfd >= 0) proc_fd_close(proc, rfd);
-    if (wfd >= 0) proc_fd_close(proc, wfd);
+    if (rfd >= 0)
+      proc_fd_close(proc, rfd);
+    if (wfd >= 0)
+      proc_fd_close(proc, wfd);
     return -24; // emfile
   }
 
@@ -840,15 +872,18 @@ static i64 sys_fork(u64 a1, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
   spinlock_unlock_irqrestore(&child->p_fdlock, cirq);
   spinlock_unlock_irqrestore(&parent->p_fdlock, irq);
 
-  // clone parent's ipc_space entries into child so child threads/processes inherit Mach ports
+  // clone parent's ipc_space entries into child so child threads/processes
+  // inherit Mach ports
   if (parent_task && parent_task->ta_ipc_space && child->p_task->ta_ipc_space) {
     irq_flags_t pf = spinlock_lock_irqsave(&parent_task->ta_ipc_space->is_lock);
-    irq_flags_t cf = spinlock_lock_irqsave(&child->p_task->ta_ipc_space->is_lock);
+    irq_flags_t cf =
+        spinlock_lock_irqsave(&child->p_task->ta_ipc_space->is_lock);
 
     for (u32 i = 1; i < parent_task->ta_ipc_space->is_table_used; i++) {
       ipc_entry_t *pe = &parent_task->ta_ipc_space->is_table[i];
       if (pe->ie_object && pe->ie_bits != MACH_PORT_TYPE_NONE) {
-        // Mach semantics: RECEIVE rights belong strictly to receiver space and are NEVER inherited by child!
+        // Mach semantics: RECEIVE rights belong strictly to receiver space and
+        // are NEVER inherited by child!
         if (pe->ie_bits & MACH_PORT_TYPE_RECEIVE) {
           continue;
         }
@@ -986,12 +1021,13 @@ static i64 sys_execve(u64 path_ptr, u64 argv_ptr, u64 envp_ptr, u64 a4, u64 a5,
   xiu_paddr_t temp_phys = (xiu_paddr_t)-1;
   usize temp_pages = 0;
 
-  if (elf_vp->v_op && __builtin_strcmp(elf_vp->v_op->vop_name, "fat32_file") == 0) {
+  if (elf_vp->v_op &&
+      __builtin_strcmp(elf_vp->v_op->vop_name, "fat32_file") == 0) {
     typedef struct {
-        u32 start_cluster;
-        u32 file_size;
-        bool is_dir;
-        char path[256];
+      u32 start_cluster;
+      u32 file_size;
+      bool is_dir;
+      char path[256];
     } fat32_node_info_t;
 
     fat32_node_info_t *nd = (fat32_node_info_t *)elf_vp->v_data;
@@ -1004,16 +1040,21 @@ static i64 sys_execve(u64 path_ptr, u64 argv_ptr, u64 envp_ptr, u64 a4, u64 a5,
     temp_pages = (nd->file_size + 4095) / 4096;
     temp_phys = pmm_alloc_pages(temp_pages);
     if (temp_phys == (xiu_paddr_t)-1) {
-      kprintf("[sys_execve] ERROR: failed to alloc %zu pages for ELF\n", temp_pages);
+      kprintf("[sys_execve] ERROR: failed to alloc %zu pages for ELF\n",
+              temp_pages);
       return -1;
     }
     extern u64 g_hhdm_base;
     elf_ptr = (void *)(temp_phys + g_hhdm_base);
     u32 actual_read = 0;
-    extern xiu_error_t fat32_read_file(u32 start_cluster, u32 file_size, u32 offset, void *dst, u32 len, u32 *bytes_read);
-    xiu_error_t err = fat32_read_file(nd->start_cluster, nd->file_size, 0, elf_ptr, nd->file_size, &actual_read);
+    extern xiu_error_t fat32_read_file(u32 start_cluster, u32 file_size,
+                                       u32 offset, void *dst, u32 len,
+                                       u32 *bytes_read);
+    xiu_error_t err = fat32_read_file(nd->start_cluster, nd->file_size, 0,
+                                      elf_ptr, nd->file_size, &actual_read);
     if (err != XIU_SUCCESS || actual_read == 0) {
-      kprintf("[sys_execve] ERROR: failed to read ELF from disk (err=%d)\n", err);
+      kprintf("[sys_execve] ERROR: failed to read ELF from disk (err=%d)\n",
+              err);
       pmm_free_contiguous(temp_phys, temp_pages);
       return -1;
     }
@@ -1044,7 +1085,7 @@ static i64 sys_execve(u64 path_ptr, u64 argv_ptr, u64 envp_ptr, u64 a4, u64 a5,
   // clean old user address space and allocate fresh PML4 for the new binary
   extern void pmap_destroy_user_space(u64 pml4_phys);
   extern xiu_paddr_t pmm_alloc_page(void);
-  #define get_table_ptr_exec(p) ((u64 *)((p) + g_hhdm_base))
+#define get_table_ptr_exec(p) ((u64 *)((p) + g_hhdm_base))
 
   u64 old_pml4 = (u64)task->ta_vm_map;
   u64 new_pml4 = pmm_alloc_page();
@@ -1054,14 +1095,14 @@ static i64 sys_execve(u64 path_ptr, u64 argv_ptr, u64 envp_ptr, u64 a4, u64 a5,
   u64 *new_pml4_v = get_table_ptr_exec(new_pml4);
   u64 *old_pml4_v = get_table_ptr_exec(old_pml4);
   for (int i = 256; i < 512; i++) {
-      new_pml4_v[i] = old_pml4_v[i];
+    new_pml4_v[i] = old_pml4_v[i];
   }
 
   pmap_destroy_user_space(old_pml4);
 
   // assign fresh PML4 to task and flush TLB
   task->ta_vm_map = (void *)new_pml4;
-  __asm__ volatile("mov %0, %%cr3" :: "r"(new_pml4) : "memory");
+  __asm__ volatile("mov %0, %%cr3" ::"r"(new_pml4) : "memory");
 
   // reset mmap base for the new process
   task->ta_mmap_next = 0;
@@ -1216,7 +1257,8 @@ static i64 sys_mmap(u64 addr, u64 len, u64 prot, u64 flags, u64 fd,
         if (shm->pages[page_idx] == 0) {
           shm->pages[page_idx] = pmm_alloc_page();
           if (g_hhdm_base && shm->pages[page_idx] != (u64)-1) {
-            __builtin_memset((void *)(g_hhdm_base + shm->pages[page_idx]), 0, 4096);
+            __builtin_memset((void *)(g_hhdm_base + shm->pages[page_idx]), 0,
+                             4096);
           }
         }
         paddr = shm->pages[page_idx];
@@ -1268,11 +1310,16 @@ static i64 sys_mmap(u64 addr, u64 len, u64 prot, u64 flags, u64 fd,
 }
 
 static i64 sys_munmap(u64 addr, u64 len, u64 a3, u64 a4, u64 a5, u64 a6) {
-  (void)a3; (void)a4; (void)a5; (void)a6;
-  if (!addr || !len) return -22; // einval
+  (void)a3;
+  (void)a4;
+  (void)a5;
+  (void)a6;
+  if (!addr || !len)
+    return -22; // einval
 
   xiu_task_t *task = current_task();
-  if (!task || !task->ta_vm_map) return -1;
+  if (!task || !task->ta_vm_map)
+    return -1;
 
   extern void pmap_unmap_user_range(u64 pml4_phys, u64 vaddr, usize len);
   pmap_unmap_user_range((u64)task->ta_vm_map, addr, (usize)len);
@@ -1312,22 +1359,24 @@ static i64 sys_mach_msg(u64 msg_ptr, u64 option, u64 send_sz, u64 rcv_sz,
     mach_msg_header_t user_hdr;
     if (copyin((const void *)msg_ptr, &user_hdr, sizeof(user_hdr)) !=
         XIU_SUCCESS) {
-      kprintf("[IPC-ERR] sys_mach_msg SEND copyin header failed for msg_ptr=0x%llx (pid=%u)\n", msg_ptr, cur_pid);
+      kprintf("[IPC-ERR] sys_mach_msg SEND copyin header failed for "
+              "msg_ptr=0x%llx (pid=%u)\n",
+              msg_ptr, cur_pid);
       return -1;
     }
 
     ipc_kmsg_t *kmsg = ipc_kmsg_alloc(send_sz);
     if (ipc_kmsg_copyin(kmsg, msg_ptr, task->ta_ipc_space) != XIU_SUCCESS) {
-      kprintf("[IPC-ERR] sys_mach_msg SEND ipc_kmsg_copyin failed for pid=%u msg_ptr=0x%llx send_sz=%llu\n",
+      kprintf("[IPC-ERR] sys_mach_msg SEND ipc_kmsg_copyin failed for pid=%u "
+              "msg_ptr=0x%llx send_sz=%llu\n",
               cur_pid, msg_ptr, send_sz);
       ipc_kmsg_free(kmsg);
       return -1;
     }
 
     ipc_port_t *port = kmsg->ikm_remote_port;
-    kprintf("[IPC] sys_mach_msg SEND: pid=%u to_port=%p msgh_id=%u\n",
-            cur_pid, (void *)port,
-            ((mach_msg_header_t *)kmsg->ikm_header)->msgh_id);
+    kprintf("[IPC] sys_mach_msg SEND: pid=%u to_port=%p msgh_id=%u\n", cur_pid,
+            (void *)port, ((mach_msg_header_t *)kmsg->ikm_header)->msgh_id);
     xiu_error_t err = ipc_mqueue_send(port, kmsg, (u32)timeout);
 
     if (err != XIU_SUCCESS) {
@@ -1352,8 +1401,9 @@ static i64 sys_mach_msg(u64 msg_ptr, u64 option, u64 send_sz, u64 rcv_sz,
 
     if (err != XIU_SUCCESS) {
       if (timeout != 0) {
-        kprintf("[IPC] sys_mach_msg RCV: pid=%u port=%p timeout_ms=%llu err=%d\n",
-                cur_pid, (void *)port, timeout, err);
+        kprintf(
+            "[IPC] sys_mach_msg RCV: pid=%u port=%p timeout_ms=%llu err=%d\n",
+            cur_pid, (void *)port, timeout, err);
       }
       return -1;
     }
@@ -1364,8 +1414,9 @@ static i64 sys_mach_msg(u64 msg_ptr, u64 option, u64 send_sz, u64 rcv_sz,
 
     if (ipc_kmsg_copyout(kmsg, msg_ptr, (u32)rcv_sz, task->ta_ipc_space) !=
         XIU_SUCCESS) {
-      kprintf("[IPC-ERR] sys_mach_msg RCV copyout failed for pid=%u rcv_sz=%llu\n",
-              cur_pid, rcv_sz);
+      kprintf(
+          "[IPC-ERR] sys_mach_msg RCV copyout failed for pid=%u rcv_sz=%llu\n",
+          cur_pid, rcv_sz);
       ipc_kmsg_free(kmsg);
       return -1;
     }
@@ -1374,7 +1425,6 @@ static i64 sys_mach_msg(u64 msg_ptr, u64 option, u64 send_sz, u64 rcv_sz,
 
   return 0;
 }
-
 
 static i64 sys_mach_port_allocate(u64 space_ptr, u64 right, u64 name_out_ptr,
                                   u64 a4, u64 a5, u64 a6) {
@@ -1480,29 +1530,54 @@ static i64 sys_mach_lookup_service(u64 name_ptr, u64 name_out_ptr, u64 a3,
   return 0;
 }
 
-static i64 sys_mach_port_deallocate(u64 space_ptr, u64 name, u64 a3, u64 a4, u64 a5, u64 a6) {
-  (void)space_ptr; (void)a3; (void)a4; (void)a5; (void)a6;
+static i64 sys_mach_port_deallocate(u64 space_ptr, u64 name, u64 a3, u64 a4,
+                                    u64 a5, u64 a6) {
+  (void)space_ptr;
+  (void)a3;
+  (void)a4;
+  (void)a5;
+  (void)a6;
   xiu_task_t *task = current_task();
-  if (!task || !task->ta_ipc_space) return -1;
-  extern xiu_error_t mach_port_deallocate_kernel(ipc_space_t *space, mach_port_name_t name);
-  return (mach_port_deallocate_kernel(task->ta_ipc_space, (mach_port_name_t)name) == XIU_SUCCESS) ? 0 : -1;
+  if (!task || !task->ta_ipc_space)
+    return -1;
+  extern xiu_error_t mach_port_deallocate_kernel(ipc_space_t * space,
+                                                 mach_port_name_t name);
+  return (mach_port_deallocate_kernel(task->ta_ipc_space,
+                                      (mach_port_name_t)name) == XIU_SUCCESS)
+             ? 0
+             : -1;
 }
 
-static i64 sys_mach_port_type(u64 space_ptr, u64 name, u64 ptype_out, u64 a4, u64 a5, u64 a6) {
-  (void)space_ptr; (void)a4; (void)a5; (void)a6;
+static i64 sys_mach_port_type(u64 space_ptr, u64 name, u64 ptype_out, u64 a4,
+                              u64 a5, u64 a6) {
+  (void)space_ptr;
+  (void)a4;
+  (void)a5;
+  (void)a6;
   xiu_task_t *task = current_task();
-  if (!task || !task->ta_ipc_space) return -1;
+  if (!task || !task->ta_ipc_space)
+    return -1;
   mach_port_type_t ptype = 0;
-  extern xiu_error_t mach_port_type_kernel(ipc_space_t *space, mach_port_name_t name, mach_port_type_t *ptype);
-  if (mach_port_type_kernel(task->ta_ipc_space, (mach_port_name_t)name, &ptype) != XIU_SUCCESS) return -1;
-  if (copyout(&ptype, (void *)ptype_out, sizeof(ptype)) != XIU_SUCCESS) return -1;
+  extern xiu_error_t mach_port_type_kernel(
+      ipc_space_t * space, mach_port_name_t name, mach_port_type_t * ptype);
+  if (mach_port_type_kernel(task->ta_ipc_space, (mach_port_name_t)name,
+                            &ptype) != XIU_SUCCESS)
+    return -1;
+  if (copyout(&ptype, (void *)ptype_out, sizeof(ptype)) != XIU_SUCCESS)
+    return -1;
   return 0;
 }
 
 static i64 sys_task_self(u64 a1, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
-  (void)a1; (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+  (void)a1;
+  (void)a2;
+  (void)a3;
+  (void)a4;
+  (void)a5;
+  (void)a6;
   xiu_task_t *task = current_task();
-  if (!task || !task->ta_ipc_space) return MACH_PORT_NAME_NULL;
+  if (!task || !task->ta_ipc_space)
+    return MACH_PORT_NAME_NULL;
   return (i64)task->ta_task_port;
 }
 
@@ -1576,10 +1651,11 @@ static i64 sys_getcwd(u64 buf, u64 size, u64 a3, u64 a4, u64 a5, u64 a6) {
     return (copyout(cwd, (void *)buf, sizeof(cwd)) == XIU_SUCCESS) ? 0 : -1;
   }
 
-  extern const char *vfs_path_for_vnode(vnode_t *vp);
+  extern const char *vfs_path_for_vnode(vnode_t * vp);
   const char *path = vfs_path_for_vnode(proc->p_cwd);
   if (!path || path[0] == '\0') {
-    if (proc->p_cwd->v_op && __builtin_strcmp(proc->p_cwd->v_op->vop_name, "fat32_dir") == 0) {
+    if (proc->p_cwd->v_op &&
+        __builtin_strcmp(proc->p_cwd->v_op->vop_name, "fat32_dir") == 0) {
       typedef struct {
         u32 start_cluster;
         u32 file_size;
@@ -1587,7 +1663,8 @@ static i64 sys_getcwd(u64 buf, u64 size, u64 a3, u64 a4, u64 a5, u64 a6) {
         char path[256];
       } fat32_path_info_t;
       fat32_path_info_t *nd = (fat32_path_info_t *)proc->p_cwd->v_data;
-      if (nd && nd->path[0]) path = nd->path;
+      if (nd && nd->path[0])
+        path = nd->path;
     }
     if (!path || path[0] == '\0') {
       if (proc->p_cwd->v_name[0] != '\0') {
@@ -1605,8 +1682,13 @@ static i64 sys_getcwd(u64 buf, u64 size, u64 a3, u64 a4, u64 a5, u64 a6) {
 }
 
 static i64 sys_mkdir(u64 path_ptr, u64 mode, u64 a3, u64 a4, u64 a5, u64 a6) {
-  (void)mode; (void)a3; (void)a4; (void)a5; (void)a6;
-  if (!path_ptr) return -1;
+  (void)mode;
+  (void)a3;
+  (void)a4;
+  (void)a5;
+  (void)a6;
+  if (!path_ptr)
+    return -1;
   const char *path = (const char *)path_ptr;
   xiu_task_t *task = current_task();
   xiu_proc_t *proc = task ? task->ta_proc : nullptr;
@@ -1621,8 +1703,13 @@ static i64 sys_mkdir(u64 path_ptr, u64 mode, u64 a3, u64 a4, u64 a5, u64 a6) {
 }
 
 static i64 sys_rmdir(u64 path_ptr, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
-  (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
-  if (!path_ptr) return -1;
+  (void)a2;
+  (void)a3;
+  (void)a4;
+  (void)a5;
+  (void)a6;
+  if (!path_ptr)
+    return -1;
   const char *path = (const char *)path_ptr;
   xiu_task_t *task = current_task();
   xiu_proc_t *proc = task ? task->ta_proc : nullptr;
@@ -1720,7 +1807,7 @@ static i64 sys_wait4(u64 pid_u, u64 status_ptr, u64 options, u64 rusage, u64 a5,
       int status = (int)(child->p_exit_code << 8);
       xiu_pid_t child_pid = child->p_pid;
 
-      extern void proc_reap(xiu_proc_t *proc);
+      extern void proc_reap(xiu_proc_t * proc);
       proc_reap(child);
 
       if (status_ptr)
@@ -1734,7 +1821,8 @@ static i64 sys_wait4(u64 pid_u, u64 status_ptr, u64 options, u64 rusage, u64 a5,
       return child_pid;
     }
 
-    /* WNOHANG (0x01): return 0 immediately if children exist but none have exited */
+    /* WNOHANG (0x01): return 0 immediately if children exist but none have
+     * exited */
     if (options & 0x01) {
       return 0;
     }
@@ -1766,9 +1854,15 @@ struct xiu_timespec {
   i64 tv_nsec;
 };
 
-static i64 sys_nanosleep(u64 req_ptr, u64 rem_ptr, u64 a3, u64 a4, u64 a5, u64 a6) {
-  (void)rem_ptr; (void)a3; (void)a4; (void)a5; (void)a6;
-  if (!req_ptr) return -14; // EFAULT
+static i64 sys_nanosleep(u64 req_ptr, u64 rem_ptr, u64 a3, u64 a4, u64 a5,
+                         u64 a6) {
+  (void)rem_ptr;
+  (void)a3;
+  (void)a4;
+  (void)a5;
+  (void)a6;
+  if (!req_ptr)
+    return -14; // EFAULT
 
   struct xiu_timespec ts;
   extern xiu_error_t copyin(const void *uaddr, void *kaddr, usize len);
@@ -1780,17 +1874,17 @@ static i64 sys_nanosleep(u64 req_ptr, u64 rem_ptr, u64 a3, u64 a4, u64 a5, u64 a
     return -22; // EINVAL
   }
 
-  extern volatile u64 g_system_ticks;
+  extern u64 timer_get_uptime_ms(void);
   extern void scheduler_yield(void);
 
-  u64 target_ticks = (u64)ts.tv_sec * 100 + (u64)ts.tv_nsec / 10000000ULL;
-  if (target_ticks == 0 && (ts.tv_sec > 0 || ts.tv_nsec > 0)) {
-    target_ticks = 1;
+  u64 target_ms = (u64)ts.tv_sec * 1000 + (u64)ts.tv_nsec / 1000000ULL;
+  if (target_ms == 0 && (ts.tv_sec > 0 || ts.tv_nsec > 0)) {
+    target_ms = 1;
   }
 
-  u64 start_ticks = g_system_ticks;
-  while ((g_system_ticks - start_ticks) < target_ticks) {
-    __asm__ volatile("sti; hlt");
+  u64 start_ms = timer_get_uptime_ms();
+  while ((timer_get_uptime_ms() - start_ms) < target_ms) {
+    scheduler_yield();
   }
 
   return 0;
@@ -1947,15 +2041,20 @@ static i64 sys_proclist(u64 buf_ptr, u64 max_count, u64 a3, u64 a4, u64 a5,
 }
 
 static i64 sys_kill(u64 pid_u, u64 sig_u, u64 a3, u64 a4, u64 a5, u64 a6) {
-  (void)a3; (void)a4; (void)a5; (void)a6;
+  (void)a3;
+  (void)a4;
+  (void)a5;
+  (void)a6;
   xiu_pid_t pid = (xiu_pid_t)pid_u;
   int sig = (int)sig_u;
-  if (sig <= 0 || sig >= 32) return -22; // einval
+  if (sig <= 0 || sig >= 32)
+    return -22; // einval
 
   xiu_proc_t *target = proc_find_by_pid(pid);
-  if (!target) return -3; // esrch
+  if (!target)
+    return -3; // esrch
 
-  extern xiu_error_t proc_signal(xiu_proc_t *proc, int sig);
+  extern xiu_error_t proc_signal(xiu_proc_t * proc, int sig);
   proc_signal(target, sig);
   return 0;
 }
@@ -1966,8 +2065,11 @@ struct xiu_sigaction_layout {
   int sa_flags;
 };
 
-static i64 sys_sigaction(u64 signum_u, u64 act_ptr, u64 oldact_ptr, u64 a4, u64 a5, u64 a6) {
-  (void)a4; (void)a5; (void)a6;
+static i64 sys_sigaction(u64 signum_u, u64 act_ptr, u64 oldact_ptr, u64 a4,
+                         u64 a5, u64 a6) {
+  (void)a4;
+  (void)a5;
+  (void)a6;
   int sig = (int)signum_u;
   if (sig <= 0 || sig >= 32 || sig == 9 || sig == 19) {
     return -22;
@@ -1975,7 +2077,8 @@ static i64 sys_sigaction(u64 signum_u, u64 act_ptr, u64 oldact_ptr, u64 a4, u64 
 
   xiu_task_t *task = current_task();
   xiu_proc_t *proc = task ? task->ta_proc : nullptr;
-  if (!proc) return -1;
+  if (!proc)
+    return -1;
 
   irq_flags_t irq = spinlock_lock_irqsave(&proc->p_lock);
 
@@ -2006,11 +2109,15 @@ static i64 sys_sigaction(u64 signum_u, u64 act_ptr, u64 oldact_ptr, u64 a4, u64 
   return 0;
 }
 
-static i64 sys_sigprocmask(u64 how_u, u64 set_ptr, u64 oldset_ptr, u64 a4, u64 a5, u64 a6) {
-  (void)a4; (void)a5; (void)a6;
+static i64 sys_sigprocmask(u64 how_u, u64 set_ptr, u64 oldset_ptr, u64 a4,
+                           u64 a5, u64 a6) {
+  (void)a4;
+  (void)a5;
+  (void)a6;
   xiu_task_t *task = current_task();
   xiu_proc_t *proc = task ? task->ta_proc : nullptr;
-  if (!proc) return -1;
+  if (!proc)
+    return -1;
 
   irq_flags_t irq = spinlock_lock_irqsave(&proc->p_lock);
   if (oldset_ptr) {
@@ -2027,9 +2134,12 @@ static i64 sys_sigprocmask(u64 how_u, u64 set_ptr, u64 oldset_ptr, u64 a4, u64 a
       set &= ~((1U << 9) | (1U << 19)); // cannot mask SIGKILL or SIGSTOP
       irq = spinlock_lock_irqsave(&proc->p_lock);
       int how = (int)how_u;
-      if (how == 0) proc->p_sigmask |= set;
-      else if (how == 1) proc->p_sigmask &= ~set;
-      else if (how == 2) proc->p_sigmask = set;
+      if (how == 0)
+        proc->p_sigmask |= set;
+      else if (how == 1)
+        proc->p_sigmask &= ~set;
+      else if (how == 2)
+        proc->p_sigmask = set;
       spinlock_unlock_irqrestore(&proc->p_lock, irq);
     }
     return 0;
@@ -2041,14 +2151,18 @@ static i64 sys_sigprocmask(u64 how_u, u64 set_ptr, u64 oldset_ptr, u64 a4, u64 a
 
 // socket system calls
 static i64 sys_socket(u64 dom, u64 type, u64 proto, u64 a4, u64 a5, u64 a6) {
-  (void)a4; (void)a5; (void)a6;
+  (void)a4;
+  (void)a5;
+  (void)a6;
   xiu_task_t *task = current_task();
   xiu_proc_t *proc = task ? task->ta_proc : nullptr;
-  if (!proc) return -1;
+  if (!proc)
+    return -1;
 
   socket_t *so = nullptr;
   xiu_error_t err = socreate((int)dom, &so, (int)type, (int)proto);
-  if (err != XIU_SUCCESS || !so) return -1;
+  if (err != XIU_SUCCESS || !so)
+    return -1;
 
   xiu_fileproc_t *fp = fp_alloc_socket(so, FP_READABLE | FP_WRITABLE);
   if (!fp) {
@@ -2064,21 +2178,27 @@ static i64 sys_socket(u64 dom, u64 type, u64 proto, u64 a4, u64 a5, u64 a6) {
   return fd;
 }
 
-static i64 sys_bind(u64 fd_u, u64 addr_ptr, u64 addrlen, u64 a4, u64 a5, u64 a6) {
-  (void)a4; (void)a5; (void)a6;
+static i64 sys_bind(u64 fd_u, u64 addr_ptr, u64 addrlen, u64 a4, u64 a5,
+                    u64 a6) {
+  (void)a4;
+  (void)a5;
+  (void)a6;
   xiu_task_t *task = current_task();
   xiu_proc_t *proc = task ? task->ta_proc : nullptr;
-  if (!proc) return -1;
+  if (!proc)
+    return -1;
 
   xiu_fileproc_t *fp = proc_fd_lookup(proc, (int)fd_u);
-  if (!fp) return -1;
+  if (!fp)
+    return -1;
   if (fp->fp_type != DTYPE_SOCKET || !fp->fp_socket) {
     fp_release(fp);
     return -1; // enotsock
   }
 
   struct sockaddr_in sin;
-  if (addrlen < sizeof(struct sockaddr_in) || copyin((const void *)addr_ptr, &sin, sizeof(sin)) != XIU_SUCCESS) {
+  if (addrlen < sizeof(struct sockaddr_in) ||
+      copyin((const void *)addr_ptr, &sin, sizeof(sin)) != XIU_SUCCESS) {
     fp_release(fp);
     return -1;
   }
@@ -2088,21 +2208,27 @@ static i64 sys_bind(u64 fd_u, u64 addr_ptr, u64 addrlen, u64 a4, u64 a5, u64 a6)
   return (err == XIU_SUCCESS) ? 0 : -1;
 }
 
-static i64 sys_connect(u64 fd_u, u64 addr_ptr, u64 addrlen, u64 a4, u64 a5, u64 a6) {
-  (void)a4; (void)a5; (void)a6;
+static i64 sys_connect(u64 fd_u, u64 addr_ptr, u64 addrlen, u64 a4, u64 a5,
+                       u64 a6) {
+  (void)a4;
+  (void)a5;
+  (void)a6;
   xiu_task_t *task = current_task();
   xiu_proc_t *proc = task ? task->ta_proc : nullptr;
-  if (!proc) return -1;
+  if (!proc)
+    return -1;
 
   xiu_fileproc_t *fp = proc_fd_lookup(proc, (int)fd_u);
-  if (!fp) return -1;
+  if (!fp)
+    return -1;
   if (fp->fp_type != DTYPE_SOCKET || !fp->fp_socket) {
     fp_release(fp);
     return -1;
   }
 
   struct sockaddr_in sin;
-  if (addrlen < sizeof(struct sockaddr_in) || copyin((const void *)addr_ptr, &sin, sizeof(sin)) != XIU_SUCCESS) {
+  if (addrlen < sizeof(struct sockaddr_in) ||
+      copyin((const void *)addr_ptr, &sin, sizeof(sin)) != XIU_SUCCESS) {
     fp_release(fp);
     return -1;
   }
@@ -2113,13 +2239,18 @@ static i64 sys_connect(u64 fd_u, u64 addr_ptr, u64 addrlen, u64 a4, u64 a5, u64 
 }
 
 static i64 sys_listen(u64 fd_u, u64 backlog, u64 a3, u64 a4, u64 a5, u64 a6) {
-  (void)a3; (void)a4; (void)a5; (void)a6;
+  (void)a3;
+  (void)a4;
+  (void)a5;
+  (void)a6;
   xiu_task_t *task = current_task();
   xiu_proc_t *proc = task ? task->ta_proc : nullptr;
-  if (!proc) return -1;
+  if (!proc)
+    return -1;
 
   xiu_fileproc_t *fp = proc_fd_lookup(proc, (int)fd_u);
-  if (!fp) return -1;
+  if (!fp)
+    return -1;
   if (fp->fp_type != DTYPE_SOCKET || !fp->fp_socket) {
     fp_release(fp);
     return -1;
@@ -2130,25 +2261,35 @@ static i64 sys_listen(u64 fd_u, u64 backlog, u64 a3, u64 a4, u64 a5, u64 a6) {
   return (err == XIU_SUCCESS) ? 0 : -1;
 }
 
-static i64 sys_accept(u64 fd_u, u64 addr_out, u64 addrlen_out, u64 a4, u64 a5, u64 a6) {
-  (void)addr_out; (void)addrlen_out; (void)a4; (void)a5; (void)a6;
+static i64 sys_accept(u64 fd_u, u64 addr_out, u64 addrlen_out, u64 a4, u64 a5,
+                      u64 a6) {
+  (void)addr_out;
+  (void)addrlen_out;
+  (void)a4;
+  (void)a5;
+  (void)a6;
   xiu_task_t *task = current_task();
   xiu_proc_t *proc = task ? task->ta_proc : nullptr;
-  if (!proc) return -1;
+  if (!proc)
+    return -1;
 
   xiu_fileproc_t *fp = proc_fd_lookup(proc, (int)fd_u);
-  if (!fp) return -1;
+  if (!fp)
+    return -1;
   fp_release(fp);
   return -1; // enotsup
 }
 
-static i64 sys_sendto(u64 fd_u, u64 buf_ptr, u64 len, u64 flags_u, u64 dest_ptr, u64 addrlen) {
+static i64 sys_sendto(u64 fd_u, u64 buf_ptr, u64 len, u64 flags_u, u64 dest_ptr,
+                      u64 addrlen) {
   xiu_task_t *task = current_task();
   xiu_proc_t *proc = task ? task->ta_proc : nullptr;
-  if (!proc) return -1;
+  if (!proc)
+    return -1;
 
   xiu_fileproc_t *fp = proc_fd_lookup(proc, (int)fd_u);
-  if (!fp) return -1;
+  if (!fp)
+    return -1;
   if (fp->fp_type != DTYPE_SOCKET || !fp->fp_socket) {
     fp_release(fp);
     return -1;
@@ -2174,14 +2315,18 @@ static i64 sys_sendto(u64 fd_u, u64 buf_ptr, u64 len, u64 flags_u, u64 dest_ptr,
   return (err == XIU_SUCCESS) ? (i64)clen : -1;
 }
 
-static i64 sys_recvfrom(u64 fd_u, u64 buf_ptr, u64 len, u64 flags_u, u64 src_ptr, u64 addrlen_ptr) {
-  (void)src_ptr; (void)addrlen_ptr;
+static i64 sys_recvfrom(u64 fd_u, u64 buf_ptr, u64 len, u64 flags_u,
+                        u64 src_ptr, u64 addrlen_ptr) {
+  (void)src_ptr;
+  (void)addrlen_ptr;
   xiu_task_t *task = current_task();
   xiu_proc_t *proc = task ? task->ta_proc : nullptr;
-  if (!proc) return -1;
+  if (!proc)
+    return -1;
 
   xiu_fileproc_t *fp = proc_fd_lookup(proc, (int)fd_u);
-  if (!fp) return -1;
+  if (!fp)
+    return -1;
   if (fp->fp_type != DTYPE_SOCKET || !fp->fp_socket) {
     fp_release(fp);
     return -1;
@@ -2190,7 +2335,8 @@ static i64 sys_recvfrom(u64 fd_u, u64 buf_ptr, u64 len, u64 flags_u, u64 src_ptr
   char kbuf[1500];
   usize clen = (len > sizeof(kbuf)) ? sizeof(kbuf) : len;
   usize bytes_read = 0;
-  xiu_error_t err = soreceive(fp->fp_socket, nullptr, kbuf, clen, &bytes_read, (int)flags_u);
+  xiu_error_t err =
+      soreceive(fp->fp_socket, nullptr, kbuf, clen, &bytes_read, (int)flags_u);
   if (err == XIU_SUCCESS && bytes_read > 0) {
     copyout(kbuf, (void *)buf_ptr, bytes_read);
   }
@@ -2199,13 +2345,18 @@ static i64 sys_recvfrom(u64 fd_u, u64 buf_ptr, u64 len, u64 flags_u, u64 src_ptr
 }
 
 static i64 sys_shutdown(u64 fd_u, u64 how, u64 a3, u64 a4, u64 a5, u64 a6) {
-  (void)a3; (void)a4; (void)a5; (void)a6;
+  (void)a3;
+  (void)a4;
+  (void)a5;
+  (void)a6;
   xiu_task_t *task = current_task();
   xiu_proc_t *proc = task ? task->ta_proc : nullptr;
-  if (!proc) return -1;
+  if (!proc)
+    return -1;
 
   xiu_fileproc_t *fp = proc_fd_lookup(proc, (int)fd_u);
-  if (!fp) return -1;
+  if (!fp)
+    return -1;
   if (fp->fp_type != DTYPE_SOCKET || !fp->fp_socket) {
     fp_release(fp);
     return -1;
@@ -2216,14 +2367,17 @@ static i64 sys_shutdown(u64 fd_u, u64 how, u64 a3, u64 a4, u64 a5, u64 a6) {
   return (err == XIU_SUCCESS) ? 0 : -1;
 }
 
-static i64 sys_setsockopt(u64 fd_u, u64 level, u64 optname, u64 optval, u64 optlen, u64 a6) {
+static i64 sys_setsockopt(u64 fd_u, u64 level, u64 optname, u64 optval,
+                          u64 optlen, u64 a6) {
   (void)a6;
   xiu_task_t *task = current_task();
   xiu_proc_t *proc = task ? task->ta_proc : nullptr;
-  if (!proc) return -1;
+  if (!proc)
+    return -1;
 
   xiu_fileproc_t *fp = proc_fd_lookup(proc, (int)fd_u);
-  if (!fp) return -9; // EBADF
+  if (!fp)
+    return -9; // EBADF
   if (fp->fp_type != DTYPE_SOCKET || !fp->fp_socket) {
     fp_release(fp);
     return -88; // ENOTSOCK
@@ -2240,23 +2394,30 @@ static i64 sys_setsockopt(u64 fd_u, u64 level, u64 optname, u64 optval, u64 optl
     return -14; // EFAULT
   }
 
-  extern xiu_error_t sosetopt(socket_t *so, int level, int optname, const void *optval, usize optlen);
-  xiu_error_t err = sosetopt(fp->fp_socket, (int)level, (int)optname, koptbuf, (usize)optlen);
+  extern xiu_error_t sosetopt(socket_t * so, int level, int optname,
+                              const void *optval, usize optlen);
+  xiu_error_t err =
+      sosetopt(fp->fp_socket, (int)level, (int)optname, koptbuf, (usize)optlen);
   fp_release(fp);
 
-  if (err == XIU_SUCCESS) return 0;
-  if (err == XIU_ERR_NOTSUP) return -92; // ENOPROTOOPT
-  return -22; // EINVAL
+  if (err == XIU_SUCCESS)
+    return 0;
+  if (err == XIU_ERR_NOTSUP)
+    return -92; // ENOPROTOOPT
+  return -22;   // EINVAL
 }
 
-static i64 sys_getsockopt(u64 fd_u, u64 level, u64 optname, u64 optval, u64 optlen_ptr, u64 a6) {
+static i64 sys_getsockopt(u64 fd_u, u64 level, u64 optname, u64 optval,
+                          u64 optlen_ptr, u64 a6) {
   (void)a6;
   xiu_task_t *task = current_task();
   xiu_proc_t *proc = task ? task->ta_proc : nullptr;
-  if (!proc) return -1;
+  if (!proc)
+    return -1;
 
   xiu_fileproc_t *fp = proc_fd_lookup(proc, (int)fd_u);
-  if (!fp) return -9; // EBADF
+  if (!fp)
+    return -9; // EBADF
   if (fp->fp_type != DTYPE_SOCKET || !fp->fp_socket) {
     fp_release(fp);
     return -88; // ENOTSOCK
@@ -2280,18 +2441,23 @@ static i64 sys_getsockopt(u64 fd_u, u64 level, u64 optname, u64 optval, u64 optl
 
   u8 koptbuf[256];
   usize optlen = (usize)ulen;
-  extern xiu_error_t sogetopt(socket_t *so, int level, int optname, void *optval, usize *optlen);
-  xiu_error_t err = sogetopt(fp->fp_socket, (int)level, (int)optname, koptbuf, &optlen);
+  extern xiu_error_t sogetopt(socket_t * so, int level, int optname,
+                              void *optval, usize *optlen);
+  xiu_error_t err =
+      sogetopt(fp->fp_socket, (int)level, (int)optname, koptbuf, &optlen);
   fp_release(fp);
 
   if (err != XIU_SUCCESS) {
-    if (err == XIU_ERR_NOTSUP) return -92; // ENOPROTOOPT
-    return -22; // EINVAL
+    if (err == XIU_ERR_NOTSUP)
+      return -92; // ENOPROTOOPT
+    return -22;   // EINVAL
   }
 
-  if (copyout(koptbuf, (void *)optval, optlen) != XIU_SUCCESS) return -14;
+  if (copyout(koptbuf, (void *)optval, optlen) != XIU_SUCCESS)
+    return -14;
   u32 final_len = (u32)optlen;
-  if (copyout(&final_len, (void *)optlen_ptr, sizeof(u32)) != XIU_SUCCESS) return -14;
+  if (copyout(&final_len, (void *)optlen_ptr, sizeof(u32)) != XIU_SUCCESS)
+    return -14;
 
   return 0;
 }
@@ -2299,10 +2465,14 @@ static i64 sys_getsockopt(u64 fd_u, u64 level, u64 optname, u64 optval, u64 optl
 // ── POSIX Access, Dup, Vector I/O, Credentials, and Sysctl ──────────────────
 
 static i64 sys_access(u64 path_ptr, u64 mode, u64 a3, u64 a4, u64 a5, u64 a6) {
-  (void)a3; (void)a4; (void)a5; (void)a6;
+  (void)a3;
+  (void)a4;
+  (void)a5;
+  (void)a6;
   xiu_task_t *task = current_task();
   xiu_proc_t *proc = task ? task->ta_proc : nullptr;
-  if (!proc || !path_ptr) return -14; // EFAULT
+  if (!proc || !path_ptr)
+    return -14; // EFAULT
 
   char path[256];
   if (copyin((const void *)path_ptr, path, sizeof(path)) != XIU_SUCCESS)
@@ -2331,17 +2501,26 @@ static i64 sys_access(u64 path_ptr, u64 mode, u64 a3, u64 a4, u64 a5, u64 a6) {
 
   u32 granted = 0;
   if (proc->p_uid == vp->v_attr.va_uid) {
-    if (vmode & 0400) granted |= 4;
-    if (vmode & 0200) granted |= 2;
-    if (vmode & 0100) granted |= 1;
+    if (vmode & 0400)
+      granted |= 4;
+    if (vmode & 0200)
+      granted |= 2;
+    if (vmode & 0100)
+      granted |= 1;
   } else if (proc->p_gid == vp->v_attr.va_gid) {
-    if (vmode & 0040) granted |= 4;
-    if (vmode & 0020) granted |= 2;
-    if (vmode & 0010) granted |= 1;
+    if (vmode & 0040)
+      granted |= 4;
+    if (vmode & 0020)
+      granted |= 2;
+    if (vmode & 0010)
+      granted |= 1;
   } else {
-    if (vmode & 0004) granted |= 4;
-    if (vmode & 0002) granted |= 2;
-    if (vmode & 0001) granted |= 1;
+    if (vmode & 0004)
+      granted |= 4;
+    if (vmode & 0002)
+      granted |= 2;
+    if (vmode & 0001)
+      granted |= 1;
   }
 
   if ((mode & granted) != mode) {
@@ -2352,14 +2531,20 @@ static i64 sys_access(u64 path_ptr, u64 mode, u64 a3, u64 a4, u64 a5, u64 a6) {
 }
 
 static i64 sys_dup(u64 fd_u, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
-  (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+  (void)a2;
+  (void)a3;
+  (void)a4;
+  (void)a5;
+  (void)a6;
   int fd = (int)fd_u;
   xiu_task_t *task = current_task();
   xiu_proc_t *proc = task ? task->ta_proc : nullptr;
-  if (!proc || fd < 0 || fd >= XIU_PROC_MAX_FDS) return -9; // EBADF
+  if (!proc || fd < 0 || fd >= XIU_PROC_MAX_FDS)
+    return -9; // EBADF
 
   xiu_fileproc_t *fp = proc_fd_lookup(proc, fd);
-  if (!fp) return -9;
+  if (!fp)
+    return -9;
 
   int newfd = proc_fd_alloc_from(proc, fp, 0);
   fp_release(fp);
@@ -2371,61 +2556,80 @@ struct xiu_iovec {
   u64 iov_len;
 };
 
-static i64 sys_readv(u64 fd_u, u64 iov_ptr, u64 iovcnt_u, u64 a4, u64 a5, u64 a6) {
-  (void)a4; (void)a5; (void)a6;
-  if (!iov_ptr || iovcnt_u == 0 || iovcnt_u > 1024) return -22; // EINVAL
+static i64 sys_readv(u64 fd_u, u64 iov_ptr, u64 iovcnt_u, u64 a4, u64 a5,
+                     u64 a6) {
+  (void)a4;
+  (void)a5;
+  (void)a6;
+  if (!iov_ptr || iovcnt_u == 0 || iovcnt_u > 1024)
+    return -22; // EINVAL
 
   struct xiu_iovec iov[16];
   usize cnt = (iovcnt_u > 16) ? 16 : (usize)iovcnt_u;
-  if (copyin((const void *)iov_ptr, iov, cnt * sizeof(struct xiu_iovec)) != XIU_SUCCESS)
+  if (copyin((const void *)iov_ptr, iov, cnt * sizeof(struct xiu_iovec)) !=
+      XIU_SUCCESS)
     return -14;
 
   i64 total = 0;
   for (usize i = 0; i < cnt; i++) {
-    if (iov[i].iov_len == 0) continue;
+    if (iov[i].iov_len == 0)
+      continue;
     i64 ret = sys_read(fd_u, iov[i].iov_base, iov[i].iov_len, 0, 0, 0);
     if (ret < 0) {
-      if (total > 0) return total;
+      if (total > 0)
+        return total;
       return ret;
     }
     total += ret;
-    if ((usize)ret < iov[i].iov_len) break;
+    if ((usize)ret < iov[i].iov_len)
+      break;
   }
   return total;
 }
 
-static i64 sys_writev(u64 fd_u, u64 iov_ptr, u64 iovcnt_u, u64 a4, u64 a5, u64 a6) {
-  (void)a4; (void)a5; (void)a6;
-  if (!iov_ptr || iovcnt_u == 0 || iovcnt_u > 1024) return -22; // EINVAL
+static i64 sys_writev(u64 fd_u, u64 iov_ptr, u64 iovcnt_u, u64 a4, u64 a5,
+                      u64 a6) {
+  (void)a4;
+  (void)a5;
+  (void)a6;
+  if (!iov_ptr || iovcnt_u == 0 || iovcnt_u > 1024)
+    return -22; // EINVAL
 
   struct xiu_iovec iov[16];
   usize cnt = (iovcnt_u > 16) ? 16 : (usize)iovcnt_u;
-  if (copyin((const void *)iov_ptr, iov, cnt * sizeof(struct xiu_iovec)) != XIU_SUCCESS)
+  if (copyin((const void *)iov_ptr, iov, cnt * sizeof(struct xiu_iovec)) !=
+      XIU_SUCCESS)
     return -14;
 
   i64 total = 0;
   for (usize i = 0; i < cnt; i++) {
-    if (iov[i].iov_len == 0) continue;
+    if (iov[i].iov_len == 0)
+      continue;
     i64 ret = sys_write(fd_u, iov[i].iov_base, iov[i].iov_len, 0, 0, 0);
     if (ret < 0) {
-      if (total > 0) return total;
+      if (total > 0)
+        return total;
       return ret;
     }
     total += ret;
-    if ((usize)ret < iov[i].iov_len) break;
+    if ((usize)ret < iov[i].iov_len)
+      break;
   }
   return total;
 }
 
 static i64 sys_pread(u64 fd_u, u64 buf, u64 len, u64 offset_u, u64 a5, u64 a6) {
-  (void)a5; (void)a6;
+  (void)a5;
+  (void)a6;
   int fd = (int)fd_u;
   xiu_task_t *task = current_task();
   xiu_proc_t *proc = task ? task->ta_proc : nullptr;
-  if (!proc || fd < 0 || fd >= XIU_PROC_MAX_FDS) return -9;
+  if (!proc || fd < 0 || fd >= XIU_PROC_MAX_FDS)
+    return -9;
 
   xiu_fileproc_t *fp = proc_fd_lookup(proc, fd);
-  if (!fp) return -9;
+  if (!fp)
+    return -9;
   vnode_t *vp = fp->fp_vnode;
   if (!vp || !vp->v_op || !vp->v_op->vop_read) {
     fp_release(fp);
@@ -2441,15 +2645,19 @@ static i64 sys_pread(u64 fd_u, u64 buf, u64 len, u64 offset_u, u64 a5, u64 a6) {
   return (err == XIU_SUCCESS) ? (i64)(len - uio.uio_resid) : -1;
 }
 
-static i64 sys_pwrite(u64 fd_u, u64 buf, u64 len, u64 offset_u, u64 a5, u64 a6) {
-  (void)a5; (void)a6;
+static i64 sys_pwrite(u64 fd_u, u64 buf, u64 len, u64 offset_u, u64 a5,
+                      u64 a6) {
+  (void)a5;
+  (void)a6;
   int fd = (int)fd_u;
   xiu_task_t *task = current_task();
   xiu_proc_t *proc = task ? task->ta_proc : nullptr;
-  if (!proc || fd < 0 || fd >= XIU_PROC_MAX_FDS) return -9;
+  if (!proc || fd < 0 || fd >= XIU_PROC_MAX_FDS)
+    return -9;
 
   xiu_fileproc_t *fp = proc_fd_lookup(proc, fd);
-  if (!fp) return -9;
+  if (!fp)
+    return -9;
   vnode_t *vp = fp->fp_vnode;
   if (!vp || !vp->v_op || !vp->v_op->vop_write) {
     fp_release(fp);
@@ -2466,14 +2674,19 @@ static i64 sys_pwrite(u64 fd_u, u64 buf, u64 len, u64 offset_u, u64 a5, u64 a6) 
 }
 
 static i64 sys_fstat(u64 fd_u, u64 statbuf, u64 a3, u64 a4, u64 a5, u64 a6) {
-  (void)a3; (void)a4; (void)a5; (void)a6;
+  (void)a3;
+  (void)a4;
+  (void)a5;
+  (void)a6;
   int fd = (int)fd_u;
   xiu_task_t *task = current_task();
   xiu_proc_t *proc = task ? task->ta_proc : nullptr;
-  if (!proc || fd < 0 || fd >= XIU_PROC_MAX_FDS || !statbuf) return -9;
+  if (!proc || fd < 0 || fd >= XIU_PROC_MAX_FDS || !statbuf)
+    return -9;
 
   xiu_fileproc_t *fp = proc_fd_lookup(proc, fd);
-  if (!fp) return -9;
+  if (!fp)
+    return -9;
 
   xiu_user_stat_t st;
   __builtin_memset(&st, 0, sizeof(st));
@@ -2500,57 +2713,78 @@ static i64 sys_fstat(u64 fd_u, u64 statbuf, u64 a3, u64 a4, u64 a5, u64 a6) {
 }
 
 static i64 sys_chmod(u64 path_ptr, u64 mode, u64 a3, u64 a4, u64 a5, u64 a6) {
-  (void)a3; (void)a4; (void)a5; (void)a6;
+  (void)a3;
+  (void)a4;
+  (void)a5;
+  (void)a6;
   xiu_task_t *task = current_task();
   xiu_proc_t *proc = task ? task->ta_proc : nullptr;
-  if (!proc || !path_ptr) return -14;
+  if (!proc || !path_ptr)
+    return -14;
   char path[256], norm[256];
-  if (copyin((const void *)path_ptr, path, sizeof(path)) != XIU_SUCCESS) return -14;
+  if (copyin((const void *)path_ptr, path, sizeof(path)) != XIU_SUCCESS)
+    return -14;
   path[sizeof(path) - 1] = '\0';
   resolve_relative_path(proc, path, norm, sizeof(norm));
   vnode_t *vp = nullptr;
-  if (vfs_lookup(norm, &vp) != XIU_SUCCESS || !vp) return -2;
+  if (vfs_lookup(norm, &vp) != XIU_SUCCESS || !vp)
+    return -2;
   vp->v_attr.va_mode = (u16)(mode & 0777);
   return 0;
 }
 
 static i64 sys_fchmod(u64 fd_u, u64 mode, u64 a3, u64 a4, u64 a5, u64 a6) {
-  (void)a3; (void)a4; (void)a5; (void)a6;
+  (void)a3;
+  (void)a4;
+  (void)a5;
+  (void)a6;
   int fd = (int)fd_u;
   xiu_task_t *task = current_task();
   xiu_proc_t *proc = task ? task->ta_proc : nullptr;
-  if (!proc || fd < 0 || fd >= XIU_PROC_MAX_FDS) return -9;
+  if (!proc || fd < 0 || fd >= XIU_PROC_MAX_FDS)
+    return -9;
   xiu_fileproc_t *fp = proc_fd_lookup(proc, fd);
-  if (!fp) return -9;
-  if (fp->fp_vnode) fp->fp_vnode->v_attr.va_mode = (u16)(mode & 0777);
+  if (!fp)
+    return -9;
+  if (fp->fp_vnode)
+    fp->fp_vnode->v_attr.va_mode = (u16)(mode & 0777);
   fp_release(fp);
   return 0;
 }
 
 static i64 sys_chown(u64 path_ptr, u64 uid, u64 gid, u64 a4, u64 a5, u64 a6) {
-  (void)a4; (void)a5; (void)a6;
+  (void)a4;
+  (void)a5;
+  (void)a6;
   xiu_task_t *task = current_task();
   xiu_proc_t *proc = task ? task->ta_proc : nullptr;
-  if (!proc || !path_ptr) return -14;
+  if (!proc || !path_ptr)
+    return -14;
   char path[256], norm[256];
-  if (copyin((const void *)path_ptr, path, sizeof(path)) != XIU_SUCCESS) return -14;
+  if (copyin((const void *)path_ptr, path, sizeof(path)) != XIU_SUCCESS)
+    return -14;
   path[sizeof(path) - 1] = '\0';
   resolve_relative_path(proc, path, norm, sizeof(norm));
   vnode_t *vp = nullptr;
-  if (vfs_lookup(norm, &vp) != XIU_SUCCESS || !vp) return -2;
+  if (vfs_lookup(norm, &vp) != XIU_SUCCESS || !vp)
+    return -2;
   vp->v_attr.va_uid = (xiu_uid_t)uid;
   vp->v_attr.va_gid = (xiu_gid_t)gid;
   return 0;
 }
 
 static i64 sys_fchown(u64 fd_u, u64 uid, u64 gid, u64 a4, u64 a5, u64 a6) {
-  (void)a4; (void)a5; (void)a6;
+  (void)a4;
+  (void)a5;
+  (void)a6;
   int fd = (int)fd_u;
   xiu_task_t *task = current_task();
   xiu_proc_t *proc = task ? task->ta_proc : nullptr;
-  if (!proc || fd < 0 || fd >= XIU_PROC_MAX_FDS) return -9;
+  if (!proc || fd < 0 || fd >= XIU_PROC_MAX_FDS)
+    return -9;
   xiu_fileproc_t *fp = proc_fd_lookup(proc, fd);
-  if (!fp) return -9;
+  if (!fp)
+    return -9;
   if (fp->fp_vnode) {
     fp->fp_vnode->v_attr.va_uid = (xiu_uid_t)uid;
     fp->fp_vnode->v_attr.va_gid = (xiu_gid_t)gid;
@@ -2559,35 +2793,47 @@ static i64 sys_fchown(u64 fd_u, u64 uid, u64 gid, u64 a4, u64 a5, u64 a6) {
   return 0;
 }
 
-static i64 sys_truncate(u64 path_ptr, u64 length, u64 a3, u64 a4, u64 a5, u64 a6) {
-  (void)a3; (void)a4; (void)a5; (void)a6;
+static i64 sys_truncate(u64 path_ptr, u64 length, u64 a3, u64 a4, u64 a5,
+                        u64 a6) {
+  (void)a3;
+  (void)a4;
+  (void)a5;
+  (void)a6;
   xiu_task_t *task = current_task();
   xiu_proc_t *proc = task ? task->ta_proc : nullptr;
-  if (!proc || !path_ptr) return -14;
+  if (!proc || !path_ptr)
+    return -14;
 
   char path[256];
-  if (copyin((const void *)path_ptr, path, sizeof(path)) != XIU_SUCCESS) return -14;
+  if (copyin((const void *)path_ptr, path, sizeof(path)) != XIU_SUCCESS)
+    return -14;
   path[sizeof(path) - 1] = '\0';
 
   char norm_path[256];
   resolve_relative_path(proc, path, norm_path, sizeof(norm_path));
 
   vnode_t *vp = nullptr;
-  if (vfs_lookup(norm_path, &vp) != XIU_SUCCESS || !vp) return -2;
+  if (vfs_lookup(norm_path, &vp) != XIU_SUCCESS || !vp)
+    return -2;
 
   vp->v_attr.va_size = length;
   return 0;
 }
 
 static i64 sys_ftruncate(u64 fd_u, u64 length, u64 a3, u64 a4, u64 a5, u64 a6) {
-  (void)a3; (void)a4; (void)a5; (void)a6;
+  (void)a3;
+  (void)a4;
+  (void)a5;
+  (void)a6;
   int fd = (int)fd_u;
   xiu_task_t *task = current_task();
   xiu_proc_t *proc = task ? task->ta_proc : nullptr;
-  if (!proc || fd < 0 || fd >= XIU_PROC_MAX_FDS) return -9;
+  if (!proc || fd < 0 || fd >= XIU_PROC_MAX_FDS)
+    return -9;
 
   xiu_fileproc_t *fp = proc_fd_lookup(proc, fd);
-  if (!fp) return -9;
+  if (!fp)
+    return -9;
   if (fp->fp_vnode) {
     fp->fp_vnode->v_attr.va_size = length;
   }
@@ -2595,11 +2841,16 @@ static i64 sys_ftruncate(u64 fd_u, u64 length, u64 a3, u64 a4, u64 a5, u64 a6) {
   return 0;
 }
 
-static i64 sys_rename(u64 old_ptr, u64 new_ptr, u64 a3, u64 a4, u64 a5, u64 a6) {
-  (void)a3; (void)a4; (void)a5; (void)a6;
+static i64 sys_rename(u64 old_ptr, u64 new_ptr, u64 a3, u64 a4, u64 a5,
+                      u64 a6) {
+  (void)a3;
+  (void)a4;
+  (void)a5;
+  (void)a6;
   xiu_task_t *task = current_task();
   xiu_proc_t *proc = task ? task->ta_proc : nullptr;
-  if (!proc || !old_ptr || !new_ptr) return -14;
+  if (!proc || !old_ptr || !new_ptr)
+    return -14;
 
   char oldpath[256], newpath[256];
   if (copyin((const void *)old_ptr, oldpath, sizeof(oldpath)) != XIU_SUCCESS ||
@@ -2612,14 +2863,20 @@ static i64 sys_rename(u64 old_ptr, u64 new_ptr, u64 a3, u64 a4, u64 a5, u64 a6) 
   resolve_relative_path(proc, oldpath, norm_old, sizeof(norm_old));
   resolve_relative_path(proc, newpath, norm_new, sizeof(norm_new));
 
-  vnode_t *vp = nullptr;
-  if (vfs_lookup(norm_old, &vp) != XIU_SUCCESS || !vp) return -2; // ENOENT
+  extern xiu_error_t vfs_rename_node(const char *oldpath, const char *newpath);
+  xiu_error_t err = vfs_rename_node(norm_old, norm_new);
+  if (err != XIU_SUCCESS)
+    return -2; // ENOENT
   return 0;
 }
 
 static i64 sys_link(u64 old_ptr, u64 new_ptr, u64 a3, u64 a4, u64 a5, u64 a6) {
-  (void)a3; (void)a4; (void)a5; (void)a6;
-  if (!old_ptr || !new_ptr) return -14; // EFAULT
+  (void)a3;
+  (void)a4;
+  (void)a5;
+  (void)a6;
+  if (!old_ptr || !new_ptr)
+    return -14; // EFAULT
   char oldpath[256], newpath[256];
   if (copyin((const void *)old_ptr, oldpath, sizeof(oldpath)) != XIU_SUCCESS ||
       copyin((const void *)new_ptr, newpath, sizeof(newpath)) != XIU_SUCCESS)
@@ -2629,45 +2886,61 @@ static i64 sys_link(u64 old_ptr, u64 new_ptr, u64 a3, u64 a4, u64 a5, u64 a6) {
 
   xiu_task_t *task = current_task();
   xiu_proc_t *proc = task ? task->ta_proc : nullptr;
-  if (!proc) return -1;
+  if (!proc)
+    return -1;
 
   char norm_old[256];
   resolve_relative_path(proc, oldpath, norm_old, sizeof(norm_old));
   vnode_t *vp = nullptr;
-  if (vfs_lookup(norm_old, &vp) != XIU_SUCCESS || !vp) return -2; // ENOENT
+  if (vfs_lookup(norm_old, &vp) != XIU_SUCCESS || !vp)
+    return -2; // ENOENT
 
   // FAT32 does not support hard links -> POSIX requires -EPERM or -ENOTSUP
   return -1; // -EPERM
 }
 
 static i64 sys_mknod(u64 path_ptr, u64 mode, u64 dev, u64 a4, u64 a5, u64 a6) {
-  (void)dev; (void)a4; (void)a5; (void)a6;
-  if (!path_ptr) return -14; // EFAULT
+  (void)dev;
+  (void)a4;
+  (void)a5;
+  (void)a6;
+  if (!path_ptr)
+    return -14; // EFAULT
   char path[256];
-  if (copyin((const void *)path_ptr, path, sizeof(path)) != XIU_SUCCESS) return -14;
+  if (copyin((const void *)path_ptr, path, sizeof(path)) != XIU_SUCCESS)
+    return -14;
   path[sizeof(path) - 1] = '\0';
 
   xiu_task_t *task = current_task();
   xiu_proc_t *proc = task ? task->ta_proc : nullptr;
-  if (!proc) return -1;
+  if (!proc)
+    return -1;
 
-  if (proc->p_uid != 0) return -1; // -EPERM
+  if (proc->p_uid != 0)
+    return -1; // -EPERM
 
-  if ((mode & 0170000) == 0040000) return -22; // EINVAL
+  if ((mode & 0170000) == 0040000)
+    return -22; // EINVAL
 
   // FAT32 does not support creating special device/fifo nodes on disk
   return -1; // -EPERM
 }
 
 static i64 sys_fsync(u64 fd_u, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
-  (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+  (void)a2;
+  (void)a3;
+  (void)a4;
+  (void)a5;
+  (void)a6;
   int fd = (int)fd_u;
   xiu_task_t *task = current_task();
   xiu_proc_t *proc = task ? task->ta_proc : nullptr;
-  if (!proc || fd < 0 || fd >= XIU_PROC_MAX_FDS) return -9; // EBADF
+  if (!proc || fd < 0 || fd >= XIU_PROC_MAX_FDS)
+    return -9; // EBADF
 
   xiu_fileproc_t *fp = proc_fd_lookup(proc, fd);
-  if (!fp) return -9;
+  if (!fp)
+    return -9;
 
   if (fp->fp_type == DTYPE_VNODE && fp->fp_vnode) {
     vnode_t *vp = fp->fp_vnode;
@@ -2681,26 +2954,45 @@ static i64 sys_fsync(u64 fd_u, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
 }
 
 static i64 sys_umask(u64 newmask, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
-  (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+  (void)a2;
+  (void)a3;
+  (void)a4;
+  (void)a5;
+  (void)a6;
   xiu_task_t *t = current_task();
-  if (!t || !t->ta_proc) return 022;
+  if (!t || !t->ta_proc)
+    return 022;
   u32 old = t->ta_proc->p_umask;
   t->ta_proc->p_umask = (u32)(newmask & 0777);
   return (i64)old;
 }
 
 static i64 sys_getuid(u64 a1, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
-  (void)a1; (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+  (void)a1;
+  (void)a2;
+  (void)a3;
+  (void)a4;
+  (void)a5;
+  (void)a6;
   xiu_task_t *t = current_task();
   return (t && t->ta_proc) ? (i64)t->ta_proc->p_uid : 0;
 }
 static i64 sys_geteuid(u64 a1, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
-  (void)a1; (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+  (void)a1;
+  (void)a2;
+  (void)a3;
+  (void)a4;
+  (void)a5;
+  (void)a6;
   xiu_task_t *t = current_task();
   return (t && t->ta_proc) ? (i64)t->ta_proc->p_euid : 0;
 }
 static i64 sys_setuid(u64 uid, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
-  (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+  (void)a2;
+  (void)a3;
+  (void)a4;
+  (void)a5;
+  (void)a6;
   xiu_task_t *t = current_task();
   if (t && t->ta_proc) {
     t->ta_proc->p_uid = (xiu_uid_t)uid;
@@ -2710,7 +3002,11 @@ static i64 sys_setuid(u64 uid, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
   return -1;
 }
 static i64 sys_seteuid(u64 euid, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
-  (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+  (void)a2;
+  (void)a3;
+  (void)a4;
+  (void)a5;
+  (void)a6;
   xiu_task_t *t = current_task();
   if (t && t->ta_proc) {
     t->ta_proc->p_euid = (xiu_uid_t)euid;
@@ -2719,17 +3015,31 @@ static i64 sys_seteuid(u64 euid, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
   return -1;
 }
 static i64 sys_getgid(u64 a1, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
-  (void)a1; (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+  (void)a1;
+  (void)a2;
+  (void)a3;
+  (void)a4;
+  (void)a5;
+  (void)a6;
   xiu_task_t *t = current_task();
   return (t && t->ta_proc) ? (i64)t->ta_proc->p_gid : 0;
 }
 static i64 sys_getegid(u64 a1, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
-  (void)a1; (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+  (void)a1;
+  (void)a2;
+  (void)a3;
+  (void)a4;
+  (void)a5;
+  (void)a6;
   xiu_task_t *t = current_task();
   return (t && t->ta_proc) ? (i64)t->ta_proc->p_egid : 0;
 }
 static i64 sys_setgid(u64 gid, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
-  (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+  (void)a2;
+  (void)a3;
+  (void)a4;
+  (void)a5;
+  (void)a6;
   xiu_task_t *t = current_task();
   if (t && t->ta_proc) {
     t->ta_proc->p_gid = (xiu_gid_t)gid;
@@ -2739,7 +3049,11 @@ static i64 sys_setgid(u64 gid, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
   return -1;
 }
 static i64 sys_setegid(u64 egid, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
-  (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+  (void)a2;
+  (void)a3;
+  (void)a4;
+  (void)a5;
+  (void)a6;
   xiu_task_t *t = current_task();
   if (t && t->ta_proc) {
     t->ta_proc->p_egid = (xiu_gid_t)egid;
@@ -2747,10 +3061,15 @@ static i64 sys_setegid(u64 egid, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
   }
   return -1;
 }
-static i64 sys_getlogin(u64 name_ptr, u64 namelen, u64 a3, u64 a4, u64 a5, u64 a6) {
-  (void)a3; (void)a4; (void)a5; (void)a6;
+static i64 sys_getlogin(u64 name_ptr, u64 namelen, u64 a3, u64 a4, u64 a5,
+                        u64 a6) {
+  (void)a3;
+  (void)a4;
+  (void)a5;
+  (void)a6;
   xiu_task_t *t = current_task();
-  if (!t || !t->ta_proc || !name_ptr || namelen == 0) return -1;
+  if (!t || !t->ta_proc || !name_ptr || namelen == 0)
+    return -1;
   xiu_proc_t *p = t->ta_proc;
   usize len = 0;
   while (len < 31 && len < namelen - 1 && p->p_login[len]) {
@@ -2766,14 +3085,21 @@ static i64 sys_getlogin(u64 name_ptr, u64 namelen, u64 a3, u64 a4, u64 a5, u64 a
 }
 
 static i64 sys_setlogin(u64 name_ptr, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
-  (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+  (void)a2;
+  (void)a3;
+  (void)a4;
+  (void)a5;
+  (void)a6;
   xiu_task_t *t = current_task();
-  if (!t || !t->ta_proc || !name_ptr) return -1;
+  if (!t || !t->ta_proc || !name_ptr)
+    return -1;
   xiu_proc_t *p = t->ta_proc;
-  if (p->p_uid != 0 && p->p_euid != 0) return -1;
+  if (p->p_uid != 0 && p->p_euid != 0)
+    return -1;
   char buf[32];
   usize copied = 0;
-  if (copyinstr((const void *)name_ptr, buf, sizeof(buf), &copied) != XIU_SUCCESS) {
+  if (copyinstr((const void *)name_ptr, buf, sizeof(buf), &copied) !=
+      XIU_SUCCESS) {
     return -1;
   }
   buf[31] = '\0';
@@ -2781,55 +3107,94 @@ static i64 sys_setlogin(u64 name_ptr, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
   return 0;
 }
 
-static i64 sys_getgroups(u64 size, u64 list_ptr, u64 a3, u64 a4, u64 a5, u64 a6) {
-  (void)a3; (void)a4; (void)a5; (void)a6;
+static i64 sys_getgroups(u64 size, u64 list_ptr, u64 a3, u64 a4, u64 a5,
+                         u64 a6) {
+  (void)a3;
+  (void)a4;
+  (void)a5;
+  (void)a6;
   xiu_task_t *t = current_task();
-  if (!t || !t->ta_proc) return -1;
+  if (!t || !t->ta_proc)
+    return -1;
   xiu_proc_t *p = t->ta_proc;
-  if (size == 0) return (i64)p->p_ngroups;
-  if (!list_ptr) return -14;
+  if (size == 0)
+    return (i64)p->p_ngroups;
+  if (!list_ptr)
+    return -14;
   u32 to_copy = (p->p_ngroups < (u32)size) ? p->p_ngroups : (u32)size;
-  if (copyout(p->p_groups, (void *)list_ptr, to_copy * sizeof(xiu_gid_t)) != XIU_SUCCESS)
+  if (copyout(p->p_groups, (void *)list_ptr, to_copy * sizeof(xiu_gid_t)) !=
+      XIU_SUCCESS)
     return -14;
   return (i64)to_copy;
 }
-static i64 sys_setgroups(u64 size, u64 list_ptr, u64 a3, u64 a4, u64 a5, u64 a6) {
-  (void)a3; (void)a4; (void)a5; (void)a6;
+static i64 sys_setgroups(u64 size, u64 list_ptr, u64 a3, u64 a4, u64 a5,
+                         u64 a6) {
+  (void)a3;
+  (void)a4;
+  (void)a5;
+  (void)a6;
   xiu_task_t *t = current_task();
-  if (!t || !t->ta_proc) return -1;
-  if (size > 16) return -22;
-  if (size > 0 && !list_ptr) return -14;
+  if (!t || !t->ta_proc)
+    return -1;
+  if (size > 16)
+    return -22;
+  if (size > 0 && !list_ptr)
+    return -14;
   xiu_proc_t *p = t->ta_proc;
   p->p_ngroups = (u32)size;
   if (size > 0) {
-    if (copyin((const void *)list_ptr, p->p_groups, size * sizeof(xiu_gid_t)) != XIU_SUCCESS)
+    if (copyin((const void *)list_ptr, p->p_groups, size * sizeof(xiu_gid_t)) !=
+        XIU_SUCCESS)
       return -14;
   }
   return 0;
 }
 static i64 sys_getppid(u64 a1, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
-  (void)a1; (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+  (void)a1;
+  (void)a2;
+  (void)a3;
+  (void)a4;
+  (void)a5;
+  (void)a6;
   xiu_task_t *t = current_task();
   return (t && t->ta_proc) ? (i64)t->ta_proc->p_ppid : 0;
 }
 static i64 sys_getpgrp(u64 a1, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
-  (void)a1; (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+  (void)a1;
+  (void)a2;
+  (void)a3;
+  (void)a4;
+  (void)a5;
+  (void)a6;
   xiu_task_t *t = current_task();
   return (t && t->ta_proc) ? (i64)t->ta_proc->p_pgrp : 0;
 }
 static i64 sys_setpgid(u64 pid_u, u64 pgrp_u, u64 a3, u64 a4, u64 a5, u64 a6) {
-  (void)a3; (void)a4; (void)a5; (void)a6;
+  (void)a3;
+  (void)a4;
+  (void)a5;
+  (void)a6;
   xiu_task_t *t = current_task();
-  if (!t || !t->ta_proc) return -1;
-  xiu_proc_t *target = (pid_u == 0 || pid_u == t->ta_proc->p_pid) ? t->ta_proc : proc_find_by_pid((xiu_pid_t)pid_u);
-  if (!target) return -3;
+  if (!t || !t->ta_proc)
+    return -1;
+  xiu_proc_t *target = (pid_u == 0 || pid_u == t->ta_proc->p_pid)
+                           ? t->ta_proc
+                           : proc_find_by_pid((xiu_pid_t)pid_u);
+  if (!target)
+    return -3;
   target->p_pgrp = (pgrp_u == 0) ? target->p_pid : (xiu_pid_t)pgrp_u;
   return 0;
 }
 static i64 sys_setsid(u64 a1, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
-  (void)a1; (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+  (void)a1;
+  (void)a2;
+  (void)a3;
+  (void)a4;
+  (void)a5;
+  (void)a6;
   xiu_task_t *t = current_task();
-  if (!t || !t->ta_proc) return -1;
+  if (!t || !t->ta_proc)
+    return -1;
   t->ta_proc->p_sid = t->ta_proc->p_pid;
   t->ta_proc->p_pgrp = t->ta_proc->p_pid;
   return (i64)t->ta_proc->p_pid;
@@ -2843,33 +3208,53 @@ struct xiu_timeval {
 static i64 s_time_base_sec = 1700000000ULL;
 static i64 s_time_base_usec = 0;
 
-static i64 sys_gettimeofday(u64 tv_ptr, u64 tz_ptr, u64 a3, u64 a4, u64 a5, u64 a6) {
-  (void)tz_ptr; (void)a3; (void)a4; (void)a5; (void)a6;
-  if (!tv_ptr) return -14;
+static i64 sys_gettimeofday(u64 tv_ptr, u64 tz_ptr, u64 a3, u64 a4, u64 a5,
+                            u64 a6) {
+  (void)tz_ptr;
+  (void)a3;
+  (void)a4;
+  (void)a5;
+  (void)a6;
+  if (!tv_ptr)
+    return -14;
 
-  extern volatile u64 g_system_ticks;
-  u64 ticks = g_system_ticks;
+  extern u64 timer_get_uptime_seconds(void);
+  extern u64 timer_get_uptime_ns(void);
+
+  u64 uptime_sec = timer_get_uptime_seconds();
+  u64 uptime_ns = timer_get_uptime_ns();
+  u64 uptime_usec = (uptime_ns % 1000000000ULL) / 1000ULL;
+
   struct xiu_timeval tv;
-  i64 total_usec = s_time_base_usec + (i64)((ticks % 100) * 10000);
-  tv.tv_sec = s_time_base_sec + (i64)(ticks / 100) + (total_usec / 1000000);
+  i64 total_usec = s_time_base_usec + (i64)uptime_usec;
+  tv.tv_sec = s_time_base_sec + (i64)uptime_sec + (total_usec / 1000000);
   tv.tv_usec = total_usec % 1000000;
 
   return (copyout(&tv, (void *)tv_ptr, sizeof(tv)) == XIU_SUCCESS) ? 0 : -14;
 }
 
-static i64 sys_settimeofday(u64 tv_ptr, u64 tz_ptr, u64 a3, u64 a4, u64 a5, u64 a6) {
-  (void)tz_ptr; (void)a3; (void)a4; (void)a5; (void)a6;
+static i64 sys_settimeofday(u64 tv_ptr, u64 tz_ptr, u64 a3, u64 a4, u64 a5,
+                            u64 a6) {
+  (void)tz_ptr;
+  (void)a3;
+  (void)a4;
+  (void)a5;
+  (void)a6;
   xiu_task_t *task = current_task();
   xiu_proc_t *proc = task ? task->ta_proc : nullptr;
-  if (!proc || proc->p_uid != 0) return -1; // -EPERM
+  if (!proc || proc->p_uid != 0)
+    return -1; // -EPERM
 
   if (tv_ptr) {
     struct xiu_timeval tv;
-    if (copyin((const void *)tv_ptr, &tv, sizeof(tv)) != XIU_SUCCESS) return -14;
-    extern volatile u64 g_system_ticks;
-    u64 ticks = g_system_ticks;
-    s_time_base_sec = tv.tv_sec - (i64)(ticks / 100);
-    s_time_base_usec = tv.tv_usec - (i64)((ticks % 100) * 10000);
+    if (copyin((const void *)tv_ptr, &tv, sizeof(tv)) != XIU_SUCCESS)
+      return -14;
+    extern u64 timer_get_uptime_seconds(void);
+    extern u64 timer_get_uptime_ns(void);
+    u64 uptime_sec = timer_get_uptime_seconds();
+    u64 uptime_usec = (timer_get_uptime_ns() % 1000000000ULL) / 1000ULL;
+    s_time_base_sec = tv.tv_sec - (i64)uptime_sec;
+    s_time_base_usec = tv.tv_usec - (i64)uptime_usec;
     while (s_time_base_usec < 0) {
       s_time_base_usec += 1000000;
       s_time_base_sec -= 1;
@@ -2884,37 +3269,43 @@ struct xiu_pollfd {
   i16 revents;
 };
 
-#define XIU_POLLIN   0x0001
-#define XIU_POLLPRI  0x0002
-#define XIU_POLLOUT  0x0004
-#define XIU_POLLERR  0x0008
-#define XIU_POLLHUP  0x0010
+#define XIU_POLLIN 0x0001
+#define XIU_POLLPRI 0x0002
+#define XIU_POLLOUT 0x0004
+#define XIU_POLLERR 0x0008
+#define XIU_POLLHUP 0x0010
 #define XIU_POLLNVAL 0x0020
 
 extern i16 fileproc_poll(xiu_fileproc_t *fp, i16 events);
 extern void xiukit_hid_poll(void);
 
-static i64 sys_poll(u64 fds_ptr, u64 nfds_u, u64 timeout_ms_u, u64 a4, u64 a5, u64 a6) {
-  (void)a4; (void)a5; (void)a6;
-  if (!fds_ptr && nfds_u > 0) return -14; // EFAULT
+static i64 sys_poll(u64 fds_ptr, u64 nfds_u, u64 timeout_ms_u, u64 a4, u64 a5,
+                    u64 a6) {
+  (void)a4;
+  (void)a5;
+  (void)a6;
+  if (!fds_ptr && nfds_u > 0)
+    return -14; // EFAULT
   u32 nfds = (u32)nfds_u;
-  if (nfds > 256) return -22; // EINVAL
+  if (nfds > 256)
+    return -22; // EINVAL
 
   struct xiu_pollfd fds[32];
   u32 count = (nfds > 32) ? 32 : nfds;
   if (count > 0) {
-    if (copyin((const void *)fds_ptr, fds, count * sizeof(struct xiu_pollfd)) != XIU_SUCCESS)
+    if (copyin((const void *)fds_ptr, fds, count * sizeof(struct xiu_pollfd)) !=
+        XIU_SUCCESS)
       return -14;
   }
 
   xiu_task_t *task = current_task();
   xiu_proc_t *proc = task ? task->ta_proc : nullptr;
-  if (!proc) return -1;
+  if (!proc)
+    return -1;
 
-  extern volatile u64 g_system_ticks;
+  extern u64 timer_get_uptime_ms(void);
   i32 timeout_ms = (i32)timeout_ms_u;
-  u64 start_ticks = g_system_ticks;
-  u64 max_ticks = (timeout_ms < 0) ? (u64)-1 : (((u64)timeout_ms + 9) / 10);
+  u64 start_ms = timer_get_uptime_ms();
 
   for (;;) {
     if (proc->p_sigpending & ~proc->p_sigmask) {
@@ -2924,7 +3315,8 @@ static i64 sys_poll(u64 fds_ptr, u64 nfds_u, u64 timeout_ms_u, u64 a4, u64 a5, u
     i32 ready_count = 0;
     for (u32 i = 0; i < count; i++) {
       fds[i].revents = 0;
-      if (fds[i].fd < 0) continue;
+      if (fds[i].fd < 0)
+        continue;
       if (fds[i].fd >= XIU_PROC_MAX_FDS) {
         fds[i].revents = XIU_POLLNVAL;
         ready_count++;
@@ -2954,7 +3346,8 @@ static i64 sys_poll(u64 fds_ptr, u64 nfds_u, u64 timeout_ms_u, u64 a4, u64 a5, u
       return ready_count;
     }
 
-    if (timeout_ms > 0 && (g_system_ticks - start_ticks) >= max_ticks) {
+    if (timeout_ms > 0 &&
+        (timer_get_uptime_ms() - start_ms) >= (u64)timeout_ms) {
       if (count > 0) {
         copyout(fds, (void *)fds_ptr, count * sizeof(struct xiu_pollfd));
       }
@@ -2970,34 +3363,43 @@ typedef struct {
   u32 fds_bits[8];
 } xiu_fd_set;
 
-static i64 sys_select(u64 nfds_u, u64 readfds_ptr, u64 writefds_ptr, u64 exceptfds_ptr, u64 timeout_ptr, u64 a6) {
+static i64 sys_select(u64 nfds_u, u64 readfds_ptr, u64 writefds_ptr,
+                      u64 exceptfds_ptr, u64 timeout_ptr, u64 a6) {
   (void)a6;
   int nfds = (int)nfds_u;
-  if (nfds < 0 || nfds > XIU_PROC_MAX_FDS) return -22; // EINVAL
+  if (nfds < 0 || nfds > XIU_PROC_MAX_FDS)
+    return -22; // EINVAL
 
   xiu_fd_set rfds, wfds, efds;
   __builtin_memset(&rfds, 0, sizeof(rfds));
   __builtin_memset(&wfds, 0, sizeof(wfds));
   __builtin_memset(&efds, 0, sizeof(efds));
 
-  if (readfds_ptr && copyin((const void *)readfds_ptr, &rfds, sizeof(rfds)) != XIU_SUCCESS) return -14;
-  if (writefds_ptr && copyin((const void *)writefds_ptr, &wfds, sizeof(wfds)) != XIU_SUCCESS) return -14;
-  if (exceptfds_ptr && copyin((const void *)exceptfds_ptr, &efds, sizeof(efds)) != XIU_SUCCESS) return -14;
+  if (readfds_ptr &&
+      copyin((const void *)readfds_ptr, &rfds, sizeof(rfds)) != XIU_SUCCESS)
+    return -14;
+  if (writefds_ptr &&
+      copyin((const void *)writefds_ptr, &wfds, sizeof(wfds)) != XIU_SUCCESS)
+    return -14;
+  if (exceptfds_ptr &&
+      copyin((const void *)exceptfds_ptr, &efds, sizeof(efds)) != XIU_SUCCESS)
+    return -14;
 
   struct xiu_timeval tv;
   i32 timeout_ms = -1;
   if (timeout_ptr) {
-    if (copyin((const void *)timeout_ptr, &tv, sizeof(tv)) != XIU_SUCCESS) return -14;
+    if (copyin((const void *)timeout_ptr, &tv, sizeof(tv)) != XIU_SUCCESS)
+      return -14;
     timeout_ms = (i32)(tv.tv_sec * 1000 + tv.tv_usec / 1000);
   }
 
   xiu_task_t *task = current_task();
   xiu_proc_t *proc = task ? task->ta_proc : nullptr;
-  if (!proc) return -1;
+  if (!proc)
+    return -1;
 
-  extern volatile u64 g_system_ticks;
-  u64 start_ticks = g_system_ticks;
-  u64 max_ticks = (timeout_ms < 0) ? (u64)-1 : (((u64)timeout_ms + 9) / 10);
+  extern u64 timer_get_uptime_ms(void);
+  u64 start_ms = timer_get_uptime_ms();
 
   for (;;) {
     if (proc->p_sigpending & ~proc->p_sigmask) {
@@ -3015,11 +3417,15 @@ static i64 sys_select(u64 nfds_u, u64 readfds_ptr, u64 writefds_ptr, u64 exceptf
       int bit = fd % 32;
 
       i16 events = 0;
-      if (readfds_ptr && (rfds.fds_bits[idx] & (1U << bit))) events |= XIU_POLLIN;
-      if (writefds_ptr && (wfds.fds_bits[idx] & (1U << bit))) events |= XIU_POLLOUT;
-      if (exceptfds_ptr && (efds.fds_bits[idx] & (1U << bit))) events |= XIU_POLLPRI;
+      if (readfds_ptr && (rfds.fds_bits[idx] & (1U << bit)))
+        events |= XIU_POLLIN;
+      if (writefds_ptr && (wfds.fds_bits[idx] & (1U << bit)))
+        events |= XIU_POLLOUT;
+      if (exceptfds_ptr && (efds.fds_bits[idx] & (1U << bit)))
+        events |= XIU_POLLPRI;
 
-      if (!events) continue;
+      if (!events)
+        continue;
 
       xiu_fileproc_t *fp = proc_fd_lookup(proc, fd);
       if (!fp) {
@@ -3029,7 +3435,8 @@ static i64 sys_select(u64 nfds_u, u64 readfds_ptr, u64 writefds_ptr, u64 exceptf
       i16 rev = fileproc_poll(fp, events);
       fp_release(fp);
 
-      if ((events & XIU_POLLIN) && (rev & (XIU_POLLIN | XIU_POLLHUP | XIU_POLLERR))) {
+      if ((events & XIU_POLLIN) &&
+          (rev & (XIU_POLLIN | XIU_POLLHUP | XIU_POLLERR))) {
         out_rfds.fds_bits[idx] |= (1U << bit);
         ready_count++;
       }
@@ -3044,16 +3451,23 @@ static i64 sys_select(u64 nfds_u, u64 readfds_ptr, u64 writefds_ptr, u64 exceptf
     }
 
     if (ready_count > 0 || timeout_ms == 0) {
-      if (readfds_ptr) copyout(&out_rfds, (void *)readfds_ptr, sizeof(out_rfds));
-      if (writefds_ptr) copyout(&out_wfds, (void *)writefds_ptr, sizeof(out_wfds));
-      if (exceptfds_ptr) copyout(&out_efds, (void *)exceptfds_ptr, sizeof(out_efds));
+      if (readfds_ptr)
+        copyout(&out_rfds, (void *)readfds_ptr, sizeof(out_rfds));
+      if (writefds_ptr)
+        copyout(&out_wfds, (void *)writefds_ptr, sizeof(out_wfds));
+      if (exceptfds_ptr)
+        copyout(&out_efds, (void *)exceptfds_ptr, sizeof(out_efds));
       return ready_count;
     }
 
-    if (timeout_ms > 0 && (g_system_ticks - start_ticks) >= max_ticks) {
-      if (readfds_ptr) copyout(&out_rfds, (void *)readfds_ptr, sizeof(out_rfds));
-      if (writefds_ptr) copyout(&out_wfds, (void *)writefds_ptr, sizeof(out_wfds));
-      if (exceptfds_ptr) copyout(&out_efds, (void *)exceptfds_ptr, sizeof(out_efds));
+    if (timeout_ms > 0 &&
+        (timer_get_uptime_ms() - start_ms) >= (u64)timeout_ms) {
+      if (readfds_ptr)
+        copyout(&out_rfds, (void *)readfds_ptr, sizeof(out_rfds));
+      if (writefds_ptr)
+        copyout(&out_wfds, (void *)writefds_ptr, sizeof(out_wfds));
+      if (exceptfds_ptr)
+        copyout(&out_efds, (void *)exceptfds_ptr, sizeof(out_efds));
       return 0;
     }
 
@@ -3062,65 +3476,94 @@ static i64 sys_select(u64 nfds_u, u64 readfds_ptr, u64 writefds_ptr, u64 exceptf
   }
 }
 
-static i64 sys_socketpair(u64 dom, u64 type, u64 proto, u64 sv_ptr, u64 a5, u64 a6) {
-  (void)dom; (void)type; (void)proto; (void)a5; (void)a6;
-  if (!sv_ptr) return -14;
+static i64 sys_socketpair(u64 dom, u64 type, u64 proto, u64 sv_ptr, u64 a5,
+                          u64 a6) {
+  (void)dom;
+  (void)type;
+  (void)proto;
+  (void)a5;
+  (void)a6;
+  if (!sv_ptr)
+    return -14;
   return sys_pipe(sv_ptr, 0, 0, 0, 0, 0);
 }
 
 #define CTL_KERN 1
-#define CTL_HW   6
+#define CTL_HW 6
 
-#define KERN_OSTYPE     1
-#define KERN_OSRELEASE  2
-#define KERN_OSREV      3
-#define KERN_VERSION    4
-#define KERN_MAXVNODES  5
-#define KERN_MAXPROC    6
-#define KERN_ARGMAX     8
-#define KERN_HOSTNAME   10
+#define KERN_OSTYPE 1
+#define KERN_OSRELEASE 2
+#define KERN_OSREV 3
+#define KERN_VERSION 4
+#define KERN_MAXVNODES 5
+#define KERN_MAXPROC 6
+#define KERN_ARGMAX 8
+#define KERN_HOSTNAME 10
 
-#define HW_MACHINE      1
-#define HW_MODEL        2
-#define HW_NCPU         3
-#define HW_BYTEORDER    4
-#define HW_PHYSMEM      5
-#define HW_USERMEM      6
-#define HW_PAGESIZE     7
-#define HW_MEMSIZE      24
-#define HW_AVAILCPU     25
+#define HW_MACHINE 1
+#define HW_MODEL 2
+#define HW_NCPU 3
+#define HW_BYTEORDER 4
+#define HW_PHYSMEM 5
+#define HW_USERMEM 6
+#define HW_PAGESIZE 7
+#define HW_MEMSIZE 24
+#define HW_AVAILCPU 25
 
 static char s_kernel_hostname[64] = "Mac";
 
 static i64 sys_mprotect(u64 addr, u64 len, u64 prot, u64 a4, u64 a5, u64 a6) {
-  (void)a4; (void)a5; (void)a6;
+  (void)a4;
+  (void)a5;
+  (void)a6;
   xiu_task_t *task = current_task();
-  if (!task || !task->ta_vm_map || len == 0) return -22;
-  extern int pmap_protect_user_range(u64 pml4_phys, u64 virt_start, usize len, u32 prot);
-  int rc = pmap_protect_user_range((u64)task->ta_vm_map, addr, (usize)len, (u32)prot);
+  if (!task || !task->ta_vm_map || len == 0)
+    return -22;
+  extern int pmap_protect_user_range(u64 pml4_phys, u64 virt_start, usize len,
+                                     u32 prot);
+  int rc = pmap_protect_user_range((u64)task->ta_vm_map, addr, (usize)len,
+                                   (u32)prot);
   return (rc == 0) ? 0 : -14;
 }
 
 static i64 sys_getpgid(u64 pid_u, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
-  (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+  (void)a2;
+  (void)a3;
+  (void)a4;
+  (void)a5;
+  (void)a6;
   xiu_task_t *t = current_task();
-  if (!t || !t->ta_proc) return -1;
-  xiu_proc_t *target = (pid_u == 0 || pid_u == t->ta_proc->p_pid) ? t->ta_proc : proc_find_by_pid((xiu_pid_t)pid_u);
-  if (!target) return -3;
+  if (!t || !t->ta_proc)
+    return -1;
+  xiu_proc_t *target = (pid_u == 0 || pid_u == t->ta_proc->p_pid)
+                           ? t->ta_proc
+                           : proc_find_by_pid((xiu_pid_t)pid_u);
+  if (!target)
+    return -3;
   return (i64)target->p_pgrp;
 }
 
 static i64 sys_getsid(u64 pid_u, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
-  (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+  (void)a2;
+  (void)a3;
+  (void)a4;
+  (void)a5;
+  (void)a6;
   xiu_task_t *t = current_task();
-  if (!t || !t->ta_proc) return -1;
-  xiu_proc_t *target = (pid_u == 0 || pid_u == t->ta_proc->p_pid) ? t->ta_proc : proc_find_by_pid((xiu_pid_t)pid_u);
-  if (!target) return -3;
+  if (!t || !t->ta_proc)
+    return -1;
+  xiu_proc_t *target = (pid_u == 0 || pid_u == t->ta_proc->p_pid)
+                           ? t->ta_proc
+                           : proc_find_by_pid((xiu_pid_t)pid_u);
+  if (!target)
+    return -3;
   return (i64)target->p_sid;
 }
 
-static i64 sys_sysctl(u64 name_ptr, u64 namelen, u64 oldp, u64 oldlenp, u64 newp, u64 newlen) {
-  if (!name_ptr || namelen < 2) return -22;
+static i64 sys_sysctl(u64 name_ptr, u64 namelen, u64 oldp, u64 oldlenp,
+                      u64 newp, u64 newlen) {
+  if (!name_ptr || namelen < 2)
+    return -22;
 
   int mib[8];
   usize mib_len = (namelen > 8) ? 8 : (usize)namelen;
@@ -3139,10 +3582,15 @@ static i64 sys_sysctl(u64 name_ptr, u64 namelen, u64 oldp, u64 oldlenp, u64 newp
   // handle write requests (e.g. sethostname)
   if (newp && newlen > 0) {
     xiu_task_t *t = current_task();
-    if (!t || !t->ta_proc || t->ta_proc->p_uid != 0) return -1; // -EPERM
+    if (!t || !t->ta_proc || t->ta_proc->p_uid != 0)
+      return -1; // -EPERM
     if (ctl == CTL_KERN && sub == KERN_HOSTNAME) {
-      usize copy_len = (newlen < sizeof(s_kernel_hostname) - 1) ? newlen : (sizeof(s_kernel_hostname) - 1);
-      if (copyin((const void *)newp, s_kernel_hostname, copy_len) != XIU_SUCCESS) return -14;
+      usize copy_len = (newlen < sizeof(s_kernel_hostname) - 1)
+                           ? newlen
+                           : (sizeof(s_kernel_hostname) - 1);
+      if (copyin((const void *)newp, s_kernel_hostname, copy_len) !=
+          XIU_SUCCESS)
+        return -14;
       s_kernel_hostname[copy_len] = '\0';
       return 0;
     }
@@ -3190,7 +3638,8 @@ static i64 sys_sysctl(u64 name_ptr, u64 namelen, u64 oldp, u64 oldlenp, u64 newp
     } else if (sub == HW_NCPU || sub == HW_AVAILCPU) {
       extern u32 smp_get_active_cpus(void);
       int_val = (int)smp_get_active_cpus();
-      if (int_val <= 0) int_val = 4;
+      if (int_val <= 0)
+        int_val = 4;
       res_ptr = &int_val;
       res_sz = sizeof(int);
     } else if (sub == HW_PAGESIZE) {
@@ -3209,27 +3658,37 @@ static i64 sys_sysctl(u64 name_ptr, u64 namelen, u64 oldp, u64 oldlenp, u64 newp
     }
   }
 
-  if (!res_ptr) return -2;
+  if (!res_ptr)
+    return -2;
 
   if (oldp && oldlen > 0) {
     usize to_copy = (oldlen < res_sz) ? oldlen : res_sz;
-    if (copyout(res_ptr, (void *)oldp, to_copy) != XIU_SUCCESS) return -14;
+    if (copyout(res_ptr, (void *)oldp, to_copy) != XIU_SUCCESS)
+      return -14;
   }
   if (oldlenp) {
-    if (copyout(&res_sz, (void *)oldlenp, sizeof(usize)) != XIU_SUCCESS) return -14;
+    if (copyout(&res_sz, (void *)oldlenp, sizeof(usize)) != XIU_SUCCESS)
+      return -14;
   }
   return 0;
 }
 
 static i64 sys_sigpending(u64 set_ptr, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
-  (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
-  if (!set_ptr) return -14;
+  (void)a2;
+  (void)a3;
+  (void)a4;
+  (void)a5;
+  (void)a6;
+  if (!set_ptr)
+    return -14;
   xiu_task_t *task = current_task();
   xiu_proc_t *proc = task ? task->ta_proc : nullptr;
-  if (!proc) return -1;
+  if (!proc)
+    return -1;
 
   u32 pending = proc->p_sigpending;
-  return (copyout(&pending, (void *)set_ptr, sizeof(u32)) == XIU_SUCCESS) ? 0 : -14;
+  return (copyout(&pending, (void *)set_ptr, sizeof(u32)) == XIU_SUCCESS) ? 0
+                                                                          : -14;
 }
 
 typedef struct xiu_stack {
@@ -3238,18 +3697,25 @@ typedef struct xiu_stack {
   i32 ss_flags;
 } xiu_stack_t;
 
-static i64 sys_sigaltstack(u64 ss_ptr, u64 oss_ptr, u64 a3, u64 a4, u64 a5, u64 a6) {
-  (void)a3; (void)a4; (void)a5; (void)a6;
+static i64 sys_sigaltstack(u64 ss_ptr, u64 oss_ptr, u64 a3, u64 a4, u64 a5,
+                           u64 a6) {
+  (void)a3;
+  (void)a4;
+  (void)a5;
+  (void)a6;
   if (oss_ptr) {
     xiu_stack_t oss;
     __builtin_memset(&oss, 0, sizeof(oss));
     oss.ss_flags = 2; // SS_DISABLE
-    if (copyout(&oss, (void *)oss_ptr, sizeof(oss)) != XIU_SUCCESS) return -14;
+    if (copyout(&oss, (void *)oss_ptr, sizeof(oss)) != XIU_SUCCESS)
+      return -14;
   }
   if (ss_ptr) {
     xiu_stack_t ss;
-    if (copyin((const void *)ss_ptr, &ss, sizeof(ss)) != XIU_SUCCESS) return -14;
-    if (!(ss.ss_flags & 2) && ss.ss_size < 2048) return -22; // EINVAL (MINSIGSTKSZ)
+    if (copyin((const void *)ss_ptr, &ss, sizeof(ss)) != XIU_SUCCESS)
+      return -14;
+    if (!(ss.ss_flags & 2) && ss.ss_size < 2048)
+      return -22; // EINVAL (MINSIGSTKSZ)
   }
   return 0;
 }
@@ -3257,109 +3723,108 @@ static i64 sys_sigaltstack(u64 ss_ptr, u64 oss_ptr, u64 a3, u64 a4, u64 a5, u64 
 // ── Standard Apple XNU Syscall Dispatch Table ────────────────────────────────
 
 const syscall_fn_t g_syscall_table[512] = {
-    [SYS_exit]            = sys_exit,
-    [SYS_fork]            = sys_fork,
-    [SYS_read]            = sys_read,
-    [SYS_write]           = sys_write,
-    [SYS_open]            = sys_open,
-    [SYS_close]           = sys_close,
-    [SYS_wait4]           = sys_wait4,
-    [SYS_link]            = sys_link,
-    [SYS_unlink]          = sys_unlink,
-    [SYS_chdir]           = sys_chdir,
-    [SYS_fchdir]          = sys_chdir,
-    [SYS_mknod]           = sys_mknod,
-    [SYS_chmod]           = sys_chmod,
-    [SYS_chown]           = sys_chown,
-    [SYS_getpid]          = sys_getpid,
-    [SYS_setuid]          = sys_setuid,
-    [SYS_getuid]          = sys_getuid,
-    [SYS_geteuid]         = sys_geteuid,
-    [SYS_recvfrom]        = sys_recvfrom,
-    [SYS_accept]          = sys_accept,
-    [SYS_access]          = sys_access,
-    [SYS_kill]            = sys_kill,
-    [SYS_getppid]         = sys_getppid,
-    [SYS_dup]             = sys_dup,
-    [SYS_pipe]            = sys_pipe,
-    [SYS_getegid]         = sys_getegid,
-    [SYS_sigaction]       = sys_sigaction,
-    [SYS_getgid]          = sys_getgid,
-    [SYS_sigprocmask]     = sys_sigprocmask,
-    [SYS_getlogin]        = sys_getlogin,
-    [SYS_setlogin]        = sys_setlogin,
-    [SYS_sigpending]      = sys_sigpending,
-    [SYS_sigaltstack]     = sys_sigaltstack,
-    [SYS_ioctl]           = sys_ioctl,
-    [SYS_execve]          = sys_execve,
-    [SYS_umask]           = sys_umask,
-    [SYS_munmap]          = sys_munmap,
-    [SYS_mprotect]        = sys_mprotect,
-    [SYS_getgroups]       = sys_getgroups,
-    [SYS_setgroups]       = sys_setgroups,
-    [SYS_getpgrp]         = sys_getpgrp,
-    [SYS_setpgid]         = sys_setpgid,
-    [SYS_dup2]            = sys_dup2,
-    [SYS_fcntl]           = sys_fcntl,
-    [SYS_select]          = sys_select,
-    [SYS_fsync]           = sys_fsync,
-    [SYS_socket]          = sys_socket,
-    [SYS_connect]         = sys_connect,
-    [SYS_bind]            = sys_bind,
-    [SYS_setsockopt]      = sys_setsockopt,
-    [SYS_listen]          = sys_listen,
-    [SYS_gettimeofday]    = sys_gettimeofday,
-    [SYS_getsockopt]      = sys_getsockopt,
-    [SYS_readv]           = sys_readv,
-    [SYS_writev]          = sys_writev,
-    [SYS_settimeofday]    = sys_settimeofday,
-    [SYS_fchown]          = sys_fchown,
-    [SYS_fchmod]          = sys_fchmod,
-    [SYS_rename]          = sys_rename,
-    [SYS_sendto]          = sys_sendto,
-    [SYS_shutdown]        = sys_shutdown,
-    [SYS_socketpair]      = sys_socketpair,
-    [SYS_mkdir]           = sys_mkdir,
-    [SYS_rmdir]           = sys_rmdir,
-    [SYS_setsid]          = sys_setsid,
-    [SYS_getpgid]         = sys_getpgid,
-    [SYS_getsid]          = sys_getsid,
-    [SYS_pread]           = sys_pread,
-    [SYS_pwrite]          = sys_pwrite,
-    [SYS_setgid]          = sys_setgid,
-    [SYS_setegid]         = sys_setegid,
-    [SYS_seteuid]         = sys_seteuid,
-    [SYS_stat]            = sys_stat,
-    [SYS_fstat]           = sys_fstat,
-    [SYS_lstat]           = sys_stat,
-    [SYS_getdirentries]   = sys_getdents,
-    [SYS_mmap]            = sys_mmap,
-    [SYS_lseek]           = sys_lseek,
-    [SYS_truncate]        = sys_truncate,
-    [SYS_ftruncate]       = sys_ftruncate,
-    [SYS_sysctl]          = sys_sysctl,
-    [SYS_poll]            = sys_poll,
-    [SYS_nanosleep]       = sys_nanosleep,
-    [SYS_posix_spawn]     = sys_spawn,
-    [SYS_sched_yield]     = sys_yield,
-    [SYS_spawn]           = sys_spawn,
-    [SYS_sysinfo]         = sys_sysinfo,
-    [SYS_proclist]        = sys_proclist,
-    [SYSCALL_LOG]         = sys_log,
-    [SYS_stat64]          = sys_stat,
-    [SYS_fstat64]         = sys_fstat,
-    [SYS_lstat64]         = sys_stat,
-    [SYS_getcwd]          = sys_getcwd,
-
+    [SYS_exit] = sys_exit,
+    [SYS_fork] = sys_fork,
+    [SYS_read] = sys_read,
+    [SYS_write] = sys_write,
+    [SYS_open] = sys_open,
+    [SYS_close] = sys_close,
+    [SYS_wait4] = sys_wait4,
+    [SYS_link] = sys_link,
+    [SYS_unlink] = sys_unlink,
+    [SYS_chdir] = sys_chdir,
+    [SYS_fchdir] = sys_chdir,
+    [SYS_mknod] = sys_mknod,
+    [SYS_chmod] = sys_chmod,
+    [SYS_chown] = sys_chown,
+    [SYS_getpid] = sys_getpid,
+    [SYS_setuid] = sys_setuid,
+    [SYS_getuid] = sys_getuid,
+    [SYS_geteuid] = sys_geteuid,
+    [SYS_recvfrom] = sys_recvfrom,
+    [SYS_accept] = sys_accept,
+    [SYS_access] = sys_access,
+    [SYS_kill] = sys_kill,
+    [SYS_getppid] = sys_getppid,
+    [SYS_dup] = sys_dup,
+    [SYS_pipe] = sys_pipe,
+    [SYS_getegid] = sys_getegid,
+    [SYS_sigaction] = sys_sigaction,
+    [SYS_getgid] = sys_getgid,
+    [SYS_sigprocmask] = sys_sigprocmask,
+    [SYS_getlogin] = sys_getlogin,
+    [SYS_setlogin] = sys_setlogin,
+    [SYS_sigpending] = sys_sigpending,
+    [SYS_sigaltstack] = sys_sigaltstack,
+    [SYS_ioctl] = sys_ioctl,
+    [SYS_execve] = sys_execve,
+    [SYS_umask] = sys_umask,
+    [SYS_munmap] = sys_munmap,
+    [SYS_mprotect] = sys_mprotect,
+    [SYS_getgroups] = sys_getgroups,
+    [SYS_setgroups] = sys_setgroups,
+    [SYS_getpgrp] = sys_getpgrp,
+    [SYS_setpgid] = sys_setpgid,
+    [SYS_dup2] = sys_dup2,
+    [SYS_fcntl] = sys_fcntl,
+    [SYS_select] = sys_select,
+    [SYS_fsync] = sys_fsync,
+    [SYS_socket] = sys_socket,
+    [SYS_connect] = sys_connect,
+    [SYS_bind] = sys_bind,
+    [SYS_setsockopt] = sys_setsockopt,
+    [SYS_listen] = sys_listen,
+    [SYS_gettimeofday] = sys_gettimeofday,
+    [SYS_getsockopt] = sys_getsockopt,
+    [SYS_readv] = sys_readv,
+    [SYS_writev] = sys_writev,
+    [SYS_settimeofday] = sys_settimeofday,
+    [SYS_fchown] = sys_fchown,
+    [SYS_fchmod] = sys_fchmod,
+    [SYS_rename] = sys_rename,
+    [SYS_sendto] = sys_sendto,
+    [SYS_shutdown] = sys_shutdown,
+    [SYS_socketpair] = sys_socketpair,
+    [SYS_mkdir] = sys_mkdir,
+    [SYS_rmdir] = sys_rmdir,
+    [SYS_setsid] = sys_setsid,
+    [SYS_getpgid] = sys_getpgid,
+    [SYS_getsid] = sys_getsid,
+    [SYS_pread] = sys_pread,
+    [SYS_pwrite] = sys_pwrite,
+    [SYS_setgid] = sys_setgid,
+    [SYS_setegid] = sys_setegid,
+    [SYS_seteuid] = sys_seteuid,
+    [SYS_stat] = sys_stat,
+    [SYS_fstat] = sys_fstat,
+    [SYS_lstat] = sys_stat,
+    [SYS_getdirentries] = sys_getdents,
+    [SYS_mmap] = sys_mmap,
+    [SYS_lseek] = sys_lseek,
+    [SYS_truncate] = sys_truncate,
+    [SYS_ftruncate] = sys_ftruncate,
+    [SYS_sysctl] = sys_sysctl,
+    [SYS_poll] = sys_poll,
+    [SYS_nanosleep] = sys_nanosleep,
+    [SYS_posix_spawn] = sys_spawn,
+    [SYS_sched_yield] = sys_yield,
+    [SYS_spawn] = sys_spawn,
+    [SYS_sysinfo] = sys_sysinfo,
+    [SYS_proclist] = sys_proclist,
+    [SYSCALL_LOG] = sys_log,
+    [SYS_stat64] = sys_stat,
+    [SYS_fstat64] = sys_fstat,
+    [SYS_lstat64] = sys_stat,
+    [SYS_getcwd] = sys_getcwd,
 
     // Mach IPC & system traps
-    [SYS_mach_msg]        = sys_mach_msg,
+    [SYS_mach_msg] = sys_mach_msg,
     [SYS_mach_port_alloc] = sys_mach_port_allocate,
-    [SYS_mach_register]   = sys_mach_register_service,
-    [SYS_mach_lookup]     = sys_mach_lookup_service,
+    [SYS_mach_register] = sys_mach_register_service,
+    [SYS_mach_lookup] = sys_mach_lookup_service,
     [SYS_mach_port_dealloc] = sys_mach_port_deallocate,
-    [SYS_mach_port_type]  = sys_mach_port_type,
-    [SYS_task_self]       = sys_task_self,
+    [SYS_mach_port_type] = sys_mach_port_type,
+    [SYS_task_self] = sys_task_self,
 };
 
 const u32 g_syscall_count = 512;
@@ -3375,16 +3840,13 @@ i64 syscall_dispatch(u64 num, u64 arg1, u64 arg2, u64 arg3, u64 arg4, u64 arg5,
 
   if (num >= g_syscall_count || g_syscall_table[num] == nullptr) {
     kprintf("[SYSCALL] Invalid syscall %llu from '%s' (PID %d)\n",
-            (unsigned long long)num, proc ? proc->p_comm : "?", proc ? proc->p_pid : 0);
+            (unsigned long long)num, proc ? proc->p_comm : "?",
+            proc ? proc->p_pid : 0);
     g_syscall_frame = 0;
     return -78; // ENOSYS
   }
 
   i64 ret = g_syscall_table[num](arg1, arg2, arg3, arg4, arg5, arg6);
-
-
-
-
 
   if (frame) {
     extern void proc_deliver_signals(void *frame_ptr);
@@ -3394,5 +3856,3 @@ i64 syscall_dispatch(u64 num, u64 arg1, u64 arg2, u64 arg3, u64 arg4, u64 arg5,
   g_syscall_frame = 0;
   return ret;
 }
-
-

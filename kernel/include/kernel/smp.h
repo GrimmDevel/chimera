@@ -28,6 +28,8 @@ u32  smp_current_cpu_id(void);
 void smp_send_reschedule(u32 cpu_id);
 void smp_broadcast_reschedule(void);
 void smp_tlb_shootdown(void);
+void smp_tlb_flush_range(u64 start_va, usize size);
+void smp_tlb_flush_page(u64 va);
 
 #ifdef __cplusplus
 }
