@@ -2670,16 +2670,15 @@ struct kinfo_proc *kvm_getprocs(kvm_t *kd, int op, int arg, int *cnt) {
 
     memset(s_kinfo_procs, 0, sizeof(s_kinfo_procs));
     for (int i = 0; i < n; i++) {
-        s_kinfo_procs[i].ki_pid = (pid_t)raw_procs[i].pid;
-        s_kinfo_procs[i].ki_ppid = (pid_t)raw_procs[i].ppid;
-        s_kinfo_procs[i].ki_uid = 0;
-        s_kinfo_procs[i].ki_rgid = 0;
-        s_kinfo_procs[i].ki_stat = (char)raw_procs[i].state;
-        strncpy(s_kinfo_procs[i].ki_comm, raw_procs[i].name, sizeof(s_kinfo_procs[i].ki_comm) - 1);
+        s_kinfo_procs[i].kp_proc.p_pid = (pid_t)raw_procs[i].pid;
+        s_kinfo_procs[i].kp_eproc.e_ppid = (pid_t)raw_procs[i].ppid;
+        s_kinfo_procs[i].kp_proc.p_stat = (char)raw_procs[i].state;
+        strncpy(s_kinfo_procs[i].kp_proc.p_comm, raw_procs[i].name, sizeof(s_kinfo_procs[i].kp_proc.p_comm) - 1);
     }
     if (cnt) *cnt = n;
     return s_kinfo_procs;
 }
+
 
 
 
@@ -3571,6 +3570,179 @@ void __assert_rtn(const char *func, const char *file, int line, const char *fail
     }
     abort();
 }
+
+int _NSGetExecutablePath(char *buf, uint32_t *bufsize) {
+    if (!buf || !bufsize) return -1;
+    const char *p = getprogname();
+    char path[1024];
+    if (p && p[0] == '/') {
+        strncpy(path, p, sizeof(path) - 1);
+        path[sizeof(path) - 1] = '\0';
+    } else {
+        snprintf(path, sizeof(path), "/usr/bin/%s", (p && p[0]) ? p : "fastfetch");
+    }
+    size_t len = strlen(path);
+    if (*bufsize <= len) {
+        *bufsize = (uint32_t)(len + 1);
+        return -1;
+    }
+    strcpy(buf, path);
+    *bufsize = (uint32_t)len;
+    return 0;
+}
+
+int proc_pidpath(int pid, void *buffer, uint32_t buffersize) {
+    (void)pid;
+    if (!buffer || buffersize == 0) return 0;
+    const char *p = getprogname();
+    snprintf((char *)buffer, buffersize, "/usr/bin/%s", (p && p[0]) ? p : "fastfetch");
+    return (int)strlen((char *)buffer);
+}
+
+#include <glob.h>
+
+char *strcasestr(const char *haystack, const char *needle) {
+    if (!haystack || !needle) return NULL;
+    if (!*needle) return (char *)haystack;
+    for (; *haystack; haystack++) {
+        const char *h = haystack;
+        const char *n = needle;
+        while (*h && *n && ((tolower)((unsigned char)*h) == (tolower)((unsigned char)*n))) {
+            h++;
+            n++;
+        }
+        if (!*n) return (char *)haystack;
+    }
+    return NULL;
+}
+
+void *memmem(const void *haystack, size_t haystacklen, const void *needle, size_t needlelen) {
+    if (!haystack || !needle || needlelen == 0 || haystacklen < needlelen) return NULL;
+    const unsigned char *h = (const unsigned char *)haystack;
+    const unsigned char *n = (const unsigned char *)needle;
+    for (size_t i = 0; i <= haystacklen - needlelen; i++) {
+        if (memcmp(h + i, n, needlelen) == 0) return (void *)(h + i);
+    }
+    return NULL;
+}
+
+int posix_spawn_file_actions_init(void *file_actions) {
+    if (file_actions) *(void **)file_actions = NULL;
+    return 0;
+}
+
+int posix_spawn_file_actions_destroy(void *file_actions) {
+    if (file_actions) *(void **)file_actions = NULL;
+    return 0;
+}
+
+int posix_spawn_file_actions_adddup2(void *file_actions, int fildes, int newfildes) {
+    (void)file_actions; (void)fildes; (void)newfildes;
+    return 0;
+}
+
+int posix_spawnp(pid_t *pid, const char *file,
+                 const void *file_actions,
+                 const void *attrp,
+                 char *const argv[], char *const envp[]) {
+    (void)file_actions; (void)attrp;
+    pid_t p = fork();
+    if (p == 0) {
+        execve(file, argv, envp ? envp : environ);
+        exit(127);
+    }
+    if (p < 0) return errno;
+    if (pid) *pid = p;
+    return 0;
+}
+
+int getaddrinfo(const char *node, const char *service, const struct addrinfo *hints, struct addrinfo **res) {
+    (void)node; (void)service; (void)hints;
+    if (!res) return -1;
+    *res = NULL;
+    return -1;
+}
+
+void freeaddrinfo(struct addrinfo *res) {
+    while (res) {
+        struct addrinfo *next = res->ai_next;
+        free(res);
+        res = next;
+    }
+}
+
+const char *gai_strerror(int errcode) {
+    (void)errcode;
+    return "Name or service not known";
+}
+
+int connectx(int s, const sa_endpoints_t *endpoints, sae_associd_t associd, unsigned int flags,
+             const struct iovec *iov, unsigned int iovcnt, size_t *bytes, sae_connid_t *token) {
+    (void)s; (void)endpoints; (void)associd; (void)flags; (void)iov; (void)iovcnt; (void)bytes; (void)token;
+    return -1;
+}
+
+int dirfd(DIR *dirp) {
+    if (!dirp) return -1;
+    return *(int *)dirp;
+}
+
+DIR *fdopendir(int fd) {
+    (void)fd;
+    return NULL;
+}
+
+int fstatat(int fd, const char *path, struct stat *buf, int flag) {
+    (void)fd; (void)flag;
+    return stat(path, buf);
+}
+
+
+int fnmatch(const char *pattern, const char *string, int flags) {
+    (void)flags;
+    if (!pattern || !string) return 1;
+    while (*pattern) {
+        if (*pattern == '*') {
+            while (*pattern == '*') pattern++;
+            if (!*pattern) return 0;
+            while (*string) {
+                if (fnmatch(pattern, string, flags) == 0) return 0;
+                string++;
+            }
+            return 1;
+        } else if (*pattern == '?' || *pattern == *string) {
+            if (!*string) return 1;
+            pattern++;
+            string++;
+        } else {
+            return 1;
+        }
+    }
+    return *string ? 1 : 0;
+}
+
+int glob(const char *pattern, int flags, int (*errfunc)(const char *epath, int eerrno), glob_t *pglob) {
+    (void)flags; (void)errfunc;
+    if (!pglob || !pattern) return -1;
+    pglob->gl_pathc = 0;
+    pglob->gl_pathv = NULL;
+    return 0;
+}
+
+void globfree(glob_t *pglob) {
+    if (pglob && pglob->gl_pathv) {
+        for (size_t i = 0; i < pglob->gl_pathc; i++) {
+            free(pglob->gl_pathv[i]);
+        }
+        free(pglob->gl_pathv);
+        pglob->gl_pathv = NULL;
+        pglob->gl_pathc = 0;
+    }
+}
+
+
+
+
 
 
 

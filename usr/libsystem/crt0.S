@@ -37,3 +37,12 @@ _xiu_syscall:
     movq 8(%rsp), %r9
     syscall
     retq
+
+.globl ____chkstk_darwin
+____chkstk_darwin:
+    retq
+
+.globl ___chkstk_darwin
+___chkstk_darwin:
+    retq
+

@@ -367,6 +367,8 @@ BIN_MAP = {
     "su": "usr/bin",
     "id": "usr/bin",
     "whoami": "usr/bin",
+    "fastfetch": "usr/bin",
+    "flashfetch": "usr/bin",
 }
 
 

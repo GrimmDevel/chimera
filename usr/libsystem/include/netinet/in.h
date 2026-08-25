@@ -34,4 +34,24 @@ struct sockaddr_in {
     char            sin_zero[8];
 };
 
+struct in6_addr {
+    union {
+        uint8_t   __u6_addr8[16];
+        uint16_t  __u6_addr16[8];
+        uint32_t  __u6_addr32[4];
+    } __u6_addr;
+};
+#define s6_addr   __u6_addr.__u6_addr8
+#define s6_addr16 __u6_addr.__u6_addr16
+#define s6_addr32 __u6_addr.__u6_addr32
+
+struct sockaddr_in6 {
+    uint8_t         sin6_len;
+    sa_family_t     sin6_family;
+    in_port_t       sin6_port;
+    uint32_t        sin6_flowinfo;
+    struct in6_addr sin6_addr;
+    uint32_t        sin6_scope_id;
+};
+
 #endif /* _NETINET_IN_H_ */

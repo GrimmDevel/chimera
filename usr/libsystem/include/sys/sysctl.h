@@ -718,7 +718,8 @@ SYSCTL_DECL(_hw_features);
 #define KERN_PROC_UID           5       /* by effective uid */
 #define KERN_PROC_RUID          6       /* by real uid */
 #define KERN_PROC_LCID          7       /* by login context id */
-#define KERN_PROC_PATHNAME      12      /* path to executable */
+#define KERN_PROC_PATHNAME      12      /* path to process executable */
+
 
 /*
  * KERN_VFSNSPACE subtypes
@@ -748,7 +749,34 @@ struct _ucred {
 	gid_t   cr_groups[NGROUPS];     /* groups */
 };
 
-#include <sys/user.h>
+struct kinfo_proc {
+	struct  extern_proc kp_proc;                    /* proc structure */
+	struct  eproc {
+		struct  proc *e_paddr;          /* address of proc */
+		struct  session *e_sess;        /* session pointer */
+		struct  _pcred e_pcred;         /* process credentials */
+		struct  _ucred e_ucred;         /* current credentials */
+		struct   vmspace e_vm;          /* address space */
+		pid_t   e_ppid;                 /* parent process id */
+		pid_t   e_pgid;                 /* process group id */
+		short   e_jobc;                 /* job control counter */
+		dev_t   e_tdev;                 /* controlling tty dev */
+		pid_t   e_tpgid;                /* tty process group id */
+		struct  session *e_tsess;       /* tty session pointer */
+#define WMESGLEN        7
+		char    e_wmesg[WMESGLEN + 1];    /* wchan message */
+		segsz_t e_xsize;                /* text size */
+		short   e_xrssize;              /* text rss */
+		short   e_xccount;              /* text references */
+		short   e_xswrss;
+		int32_t e_flag;
+#define EPROC_CTTY      0x01    /* controlling tty vnode active */
+#define EPROC_SLEADER   0x02    /* session leader */
+#define COMAPT_MAXLOGNAME       12
+		char    e_login[COMAPT_MAXLOGNAME];     /* short setlogin() name */
+		int32_t e_spare[4];
+	} kp_eproc;
+};
 
 #endif /* defined(XNU_KERNEL_PRIVATE) || !defined(KERNEL) */
 

@@ -32,5 +32,16 @@
 #define SYS_getdents    217
 #define SYS_spawn       250
 #define SYS_sysinfo     251
+#define SYS_proclist    252
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+int syscall(int num, ...);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* SYS_SYSCALL_H */
