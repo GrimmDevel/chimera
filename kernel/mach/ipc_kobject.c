@@ -12,7 +12,7 @@ extern void pmm_release_page(xiu_paddr_t addr);
 extern u64 pmap_map_user_page(u64 target_pml4_phys, u64 vaddr, u64 paddr, u32 flags);
 extern void pmap_unmap_user_range(u64 pml4_phys, u64 vaddr, usize len);
 
-void ipc_kobject_set(ipc_port_t *port, void *kobject, ipc_kobject_type_t type) {
+void ipc_kobject_set(struct ipc_port *port, void *kobject, ipc_kobject_type_t type) {
     if (!port) return;
     irq_flags_t f = spinlock_lock_irqsave(&port->ip_lock);
     port->ip_kobject = kobject;
@@ -20,7 +20,7 @@ void ipc_kobject_set(ipc_port_t *port, void *kobject, ipc_kobject_type_t type) {
     spinlock_unlock_irqrestore(&port->ip_lock, f);
 }
 
-static void send_mig_reply_ret(ipc_port_t *reply_port, mach_msg_id_t reply_id, i32 ret_code) {
+static void send_mig_reply_ret(struct ipc_port *reply_port, mach_msg_id_t reply_id, i32 ret_code) {
     if (!reply_port) return;
 
     typedef struct XIU_PACKED {
@@ -45,12 +45,12 @@ static void send_mig_reply_ret(ipc_port_t *reply_port, mach_msg_id_t reply_id, i
     }
 }
 
-xiu_error_t ipc_kobject_server(ipc_port_t *port, ipc_kmsg_t *kmsg) {
+xiu_error_t ipc_kobject_server(struct ipc_port *port, ipc_kmsg_t *kmsg) {
     if (!port || !kmsg) return XIU_ERR_INVALID;
 
     mach_msg_header_t *hdr = kmsg->ikm_header;
     mach_msg_id_t msg_id = hdr->msgh_id;
-    ipc_port_t *reply_port = kmsg->ikm_local_port;
+    struct ipc_port *reply_port = kmsg->ikm_local_port;
     u8 *req_data = (u8 *)(hdr + 1);
 
     if (port->ip_kotype == IKOT_TASK) {

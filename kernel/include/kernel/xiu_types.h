@@ -3,6 +3,13 @@
 #ifndef XIU_TYPES_H
 #define XIU_TYPES_H
 
+#ifndef KERNEL
+#define KERNEL 1
+#endif
+#ifndef KERNEL_PRIVATE
+#define KERNEL_PRIVATE 1
+#endif
+
 #include <stdint.h>
 #include <stddef.h>
 #include <stdbool.h>

@@ -110,8 +110,8 @@ typedef struct ipc_kmsg {
     mach_msg_size_t         ikm_header_offset;
     mach_msg_header_t      *ikm_header;
 
-    ipc_port_t             *ikm_remote_port;
-    ipc_port_t             *ikm_local_port;
+    struct ipc_port        *ikm_remote_port;
+    struct ipc_port        *ikm_local_port;
     mach_port_type_t        ikm_remote_right;
     mach_port_type_t        ikm_local_right;
 
@@ -145,11 +145,11 @@ xiu_error_t ipc_kmsg_copyout(ipc_kmsg_t *kmsg,
                               ipc_space_t *space);
 
 XIU_WARN_UNUSED
-xiu_error_t ipc_mqueue_send(ipc_port_t *port, ipc_kmsg_t *kmsg,
+xiu_error_t ipc_mqueue_send(struct ipc_port *port, ipc_kmsg_t *kmsg,
                              mach_msg_timeout_t timeout_ms);
 
 XIU_WARN_UNUSED
-xiu_error_t ipc_mqueue_receive(ipc_port_t *port, ipc_kmsg_t **kmsg_out,
+xiu_error_t ipc_mqueue_receive(struct ipc_port *port, ipc_kmsg_t **kmsg_out,
                                 mach_msg_timeout_t timeout_ms);
 
 #endif

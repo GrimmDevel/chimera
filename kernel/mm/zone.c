@@ -1,17 +1,22 @@
 /* =============================================================================
- * XIU Operating System — Zone Allocator & Kernel Dynamic Memory
+ * XIU Operating System — Darwin Mach Zone Allocator & Kernel Dynamic Memory
  * kernel/mm/zone.c
+ *
+ * Implements Darwin zinit/zalloc/zfree zone subsystem and kalloc/kfree.
+ * Elements are carved from physical pages allocated via PMM.
  * ============================================================================= */
 
-#include <kernel/xiu_types.h>
-#include <kernel/spinlock.h>
+#include <kernel/zone.h>
 #include <kernel/panic.h>
+#include <kernel/spinlock.h>
+#include <kernel/xiu_types.h>
 
 extern void kprintf(const char *fmt, ...);
 extern xiu_paddr_t pmm_alloc_page(void);
 extern xiu_paddr_t pmm_alloc_pages(usize count);
-extern void pmm_free_page(xiu_paddr_t addr);
+extern void pmm_release_page(xiu_paddr_t addr);
 extern void pmm_free_contiguous(xiu_paddr_t addr, usize count);
+extern u64 g_hhdm_base;
 
 #define ZONE_MAGIC   0x585A4F4E45484452ULL
 #define LARGE_MAGIC  0x584C415247454844ULL
@@ -28,43 +33,134 @@ typedef struct {
     xiu_paddr_t phys_base;
 } large_header_t;
 
-typedef struct zone_free_block {
-    struct zone_free_block *next;
-} zone_free_block_t;
+typedef struct zone_link {
+    struct zone_link *next;
+} zone_link_t;
 
-typedef struct {
-    const char         *name;
-    usize               elem_size;
-    spinlock_t          lock;
-    zone_free_block_t  *free_list;
-    usize               total_pages;
-    usize               free_count;
-} zone_t;
+#define MAX_ZONES 32
+static zone_struct_t s_zone_table[MAX_ZONES];
+static u32           s_zone_table_count = 0;
+static spinlock_t    s_zone_table_lock = SPINLOCK_INIT;
 
-#define ZONE_COUNT 9
-static const usize s_zone_sizes[ZONE_COUNT] = {
+#define KALLOC_ZONE_COUNT 9
+static const usize s_kalloc_sizes[KALLOC_ZONE_COUNT] = {
     16, 32, 64, 128, 256, 512, 1024, 2048, 4096
 };
 
-static const char *s_zone_names[ZONE_COUNT] = {
-    "zone.16", "zone.32", "zone.64", "zone.128",
-    "zone.256", "zone.512", "zone.1024", "zone.2048", "zone.4096"
+static const char *s_kalloc_names[KALLOC_ZONE_COUNT] = {
+    "kalloc.16", "kalloc.32", "kalloc.64", "kalloc.128",
+    "kalloc.256", "kalloc.512", "kalloc.1024", "kalloc.2048", "kalloc.4096"
 };
 
-static zone_t s_zones[ZONE_COUNT];
-static bool   s_zone_initialized = false;
+static bool s_zone_initialized = false;
+
+zone_t zinit(vm_size_t size, vm_size_t max, vm_size_t alloc, const char *name) {
+    (void)max;
+    if (size == 0) return ZONE_NULL;
+
+    // align element size to 8 bytes minimum
+    if (size < sizeof(void *)) size = sizeof(void *);
+    size = (size + 7) & ~7ULL;
+
+    if (alloc == 0) alloc = 4096;
+
+    irq_flags_t irq = spinlock_lock_irqsave(&s_zone_table_lock);
+    if (s_zone_table_count >= MAX_ZONES) {
+        spinlock_unlock_irqrestore(&s_zone_table_lock, irq);
+        return ZONE_NULL;
+    }
+
+    u32 idx = s_zone_table_count++;
+    zone_t z = &s_zone_table[idx];
+    z->z_name = name;
+    z->z_elem_size = size;
+    z->z_alloc_size = alloc;
+    z->z_max_size = max;
+    z->z_cur_size = 0;
+    z->z_count = 0;
+    z->z_free_count = 0;
+    z->z_free_list = nullptr;
+    spinlock_init(&z->z_lock);
+
+    spinlock_unlock_irqrestore(&s_zone_table_lock, irq);
+    return z;
+}
+
+zone_t zone_create(const char *name, vm_size_t size, vm_size_t flags) {
+    (void)flags;
+    return zinit(size, 0, 4096, name);
+}
+
+void *zalloc(zone_t zone) {
+    if (!zone) return nullptr;
+
+    irq_flags_t irq = spinlock_lock_irqsave(&zone->z_lock);
+
+    if (!zone->z_free_list) {
+        // allocate new page for zone elements
+        xiu_paddr_t phys = pmm_alloc_page();
+        if (phys == 0 || phys == (xiu_paddr_t)-1) {
+            spinlock_unlock_irqrestore(&zone->z_lock, irq);
+            return nullptr;
+        }
+
+        u8 *page_virt = (u8 *)(phys + g_hhdm_base);
+        usize elem_size = zone->z_elem_size;
+        usize count = 4096 / elem_size;
+
+        for (usize i = 0; i < count; i++) {
+            zone_link_t *link = (zone_link_t *)(page_virt + (i * elem_size));
+            link->next = (zone_link_t *)zone->z_free_list;
+            zone->z_free_list = link;
+            zone->z_free_count++;
+        }
+        zone->z_cur_size += 4096;
+    }
+
+    zone_link_t *item = (zone_link_t *)zone->z_free_list;
+    zone->z_free_list = item->next;
+    zone->z_free_count--;
+    zone->z_count++;
+
+    spinlock_unlock_irqrestore(&zone->z_lock, irq);
+
+    __builtin_memset(item, 0, zone->z_elem_size);
+    return (void *)item;
+}
+
+void *zalloc_noblock(zone_t zone) {
+    return zalloc(zone);
+}
+
+void zfree(zone_t zone, void *elem) {
+    if (!zone || !elem) return;
+
+    irq_flags_t irq = spinlock_lock_irqsave(&zone->z_lock);
+
+    zone_link_t *link = (zone_link_t *)elem;
+    link->next = (zone_link_t *)zone->z_free_list;
+    zone->z_free_list = link;
+    zone->z_free_count++;
+    if (zone->z_count > 0) {
+        zone->z_count--;
+    }
+
+    spinlock_unlock_irqrestore(&zone->z_lock, irq);
+}
 
 void zone_init(void) {
-    for (int i = 0; i < ZONE_COUNT; i++) {
-        s_zones[i].name        = s_zone_names[i];
-        s_zones[i].elem_size   = s_zone_sizes[i];
-        s_zones[i].free_list   = nullptr;
-        s_zones[i].total_pages = 0;
-        s_zones[i].free_count  = 0;
-        spinlock_init(&s_zones[i].lock);
+    if (s_zone_initialized) return;
+
+    spinlock_init(&s_zone_table_lock);
+    s_zone_table_count = 0;
+
+    for (int i = 0; i < KALLOC_ZONE_COUNT; i++) {
+        zinit(s_kalloc_sizes[i], 0, 4096, s_kalloc_names[i]);
     }
+
     s_zone_initialized = true;
-    kprintf("        zone: initialized %d size-class zones (16B .. 4096B)\n", ZONE_COUNT);
+    kprintf("        zone: Darwin Mach Zone Allocator initialized (%d kalloc zones)\n",
+            KALLOC_ZONE_COUNT);
 }
 
 void *kalloc(usize size) {
@@ -76,94 +172,62 @@ void *kalloc(usize size) {
 
     usize needed = size + sizeof(zone_header_t);
 
-    // zone bucket allocation
     if (needed <= 4096) {
         int zi = -1;
-        for (int i = 0; i < ZONE_COUNT; i++) {
-            if (s_zones[i].elem_size >= needed) {
+        for (int i = 0; i < KALLOC_ZONE_COUNT; i++) {
+            if (s_zone_table[i].z_elem_size >= needed) {
                 zi = i;
                 break;
             }
         }
 
         if (zi >= 0) {
-            zone_t *z = &s_zones[zi];
-            irq_flags_t irq = spinlock_lock_irqsave(&z->lock);
+            zone_t z = &s_zone_table[zi];
+            void *mem = zalloc(z);
+            if (!mem) return nullptr;
 
-            if (!z->free_list) {
-                xiu_paddr_t phys = pmm_alloc_page();
-                if (phys == (xiu_paddr_t)-1 || phys == 0) {
-                    spinlock_unlock_irqrestore(&z->lock, irq);
-                    return nullptr;
-                }
-
-                u8 *page_virt = (u8 *)(phys + g_hhdm_base);
-                __builtin_memset(page_virt, 0, 4096);
-                z->total_pages++;
-
-                usize count = 4096 / z->elem_size;
-                for (usize b = 0; b < count; b++) {
-                    zone_free_block_t *blk = (zone_free_block_t *)(page_virt + (b * z->elem_size));
-                    blk->next = z->free_list;
-                    z->free_list = blk;
-                    z->free_count++;
-                }
-            }
-
-            zone_free_block_t *res = z->free_list;
-            z->free_list = res->next;
-            z->free_count--;
-            spinlock_unlock_irqrestore(&z->lock, irq);
-
-            zone_header_t *hdr = (zone_header_t *)res;
-            hdr->magic      = ZONE_MAGIC;
-            hdr->zone_idx   = (u32)zi;
+            zone_header_t *hdr = (zone_header_t *)mem;
+            hdr->magic = ZONE_MAGIC;
+            hdr->zone_idx = (u32)zi;
             hdr->alloc_size = (u32)size;
-
-            return (void *)((uptr)hdr + sizeof(zone_header_t));
+            return (void *)(hdr + 1);
         }
     }
 
-    // large page allocation
-    usize total_bytes = size + sizeof(large_header_t);
-    usize pages = (total_bytes + 4095) / 4096;
+    // large allocation via whole pages
+    usize total = size + sizeof(large_header_t);
+    usize pages = (total + 4095) / 4096;
     xiu_paddr_t phys = pmm_alloc_pages(pages);
-    if (phys == (xiu_paddr_t)-1 || phys == 0) {
-        return nullptr;
-    }
+    if (phys == (xiu_paddr_t)-1 || phys == 0) return nullptr;
 
     large_header_t *lhdr = (large_header_t *)(phys + g_hhdm_base);
-    lhdr->magic      = LARGE_MAGIC;
+    lhdr->magic = LARGE_MAGIC;
     lhdr->page_count = pages;
-    lhdr->phys_base  = phys;
+    lhdr->phys_base = phys;
 
-    return (void *)((uptr)lhdr + sizeof(large_header_t));
+    void *ptr = (void *)(lhdr + 1);
+    __builtin_memset(ptr, 0, size);
+    return ptr;
 }
 
 void kfree(void *ptr) {
     if (!ptr) return;
 
-    zone_header_t *zh = (zone_header_t *)((uptr)ptr - sizeof(zone_header_t));
+    u8 *raw = (u8 *)ptr;
+    zone_header_t *zh = (zone_header_t *)(raw - sizeof(zone_header_t));
     if (zh->magic == ZONE_MAGIC) {
         u32 zi = zh->zone_idx;
-        if (zi < ZONE_COUNT) {
-            zone_t *z = &s_zones[zi];
-            zone_free_block_t *blk = (zone_free_block_t *)zh;
-
-            irq_flags_t irq = spinlock_lock_irqsave(&z->lock);
-            zh->magic = 0; // invalidate
-            blk->next = z->free_list;
-            z->free_list = blk;
-            z->free_count++;
-            spinlock_unlock_irqrestore(&z->lock, irq);
+        if (zi < KALLOC_ZONE_COUNT) {
+            zh->magic = 0;
+            zfree(&s_zone_table[zi], zh);
             return;
         }
     }
 
-    large_header_t *lh = (large_header_t *)((uptr)ptr - sizeof(large_header_t));
+    large_header_t *lh = (large_header_t *)(raw - sizeof(large_header_t));
     if (lh->magic == LARGE_MAGIC) {
+        usize pages = lh->page_count;
         xiu_paddr_t phys = lh->phys_base;
-        usize pages      = lh->page_count;
         lh->magic = 0;
         pmm_free_contiguous(phys, pages);
         return;

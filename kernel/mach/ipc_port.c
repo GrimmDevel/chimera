@@ -8,13 +8,13 @@
 #include <kernel/ipc_message.h>
 #include <kernel/panic.h>
 
-ipc_port_t *ipc_port_kernel_bootstrap = nullptr;
+struct ipc_port *ipc_port_kernel_bootstrap = nullptr;
 
 #define IPC_PORT_ARENA_SIZE  4096
-static ipc_port_t  s_port_arena[IPC_PORT_ARENA_SIZE];
+static ipc_port_struct_t  s_port_arena[IPC_PORT_ARENA_SIZE];
 static _Atomic(u32) s_port_arena_next = 0;
 
-static ipc_port_t *port_arena_alloc(void) {
+static struct ipc_port *port_arena_alloc(void) {
     u32 idx = atomic_fetch_add_explicit(&s_port_arena_next, 1,
                                         memory_order_relaxed);
     if (XIU_UNLIKELY(idx >= IPC_PORT_ARENA_SIZE)) {
@@ -44,7 +44,7 @@ mach_port_name_t space_alloc_name(ipc_space_t *space) {
 
 static void space_free_name(ipc_space_t *space, mach_port_name_t name) {
     ipc_entry_t *entry = &space->is_table[name];
-    entry->ie_object = (ipc_port_t *)(uptr)space->is_free_head; // chain
+    entry->ie_object = (struct ipc_port *)(uptr)space->is_free_head; // chain
     entry->ie_bits   = MACH_PORT_TYPE_NONE;
     entry->ie_urefs  = 0;
     space->is_free_head = name;
@@ -54,7 +54,7 @@ static void space_free_name(ipc_space_t *space, mach_port_name_t name) {
 /* ═══════════════════════════════════════════════════════════════════════════
  * ipc_port_init_internal — Initialize a raw port object
  * ═══════════════════════════════════════════════════════════════════════════ */
-static void ipc_port_init_internal(ipc_port_t *port, const char *label) {
+static void ipc_port_init_internal(struct ipc_port *port, const char *label) {
     port->ip_signature    = XIU_IPC_PORT_MAGIC;
     spinlock_init(&port->ip_lock);
     atomic_store(&port->ip_references, 1);
@@ -125,8 +125,8 @@ void ipc_space_destroy(ipc_space_t *space) {
     irq_flags_t f = spinlock_lock_irqsave(&space->is_lock);
     space->is_active = false;
 
-    ipc_port_t *ports_to_destroy[IPC_SPACE_INITIAL_CAPACITY];
-    ipc_port_t *ports_to_release[IPC_SPACE_INITIAL_CAPACITY];
+    struct ipc_port *ports_to_destroy[IPC_SPACE_INITIAL_CAPACITY];
+    struct ipc_port *ports_to_release[IPC_SPACE_INITIAL_CAPACITY];
     u32 destroy_count = 0;
     u32 release_count = 0;
 
@@ -163,7 +163,7 @@ xiu_error_t ipc_port_alloc(ipc_space_t *space,
     XIU_ASSERT(space != nullptr);
     XIU_ASSERT(name_out != nullptr);
 
-    ipc_port_t *port = port_arena_alloc();
+    struct ipc_port *port = port_arena_alloc();
     ipc_port_init_internal(port, label);
 
     irq_flags_t f = spinlock_lock_irqsave(&space->is_lock);
@@ -192,7 +192,7 @@ xiu_error_t ipc_port_alloc(ipc_space_t *space,
 /* ═══════════════════════════════════════════════════════════════════════════
  * ipc_port_destroy
  * ═══════════════════════════════════════════════════════════════════════════ */
-void ipc_port_destroy(ipc_port_t *port) {
+void ipc_port_destroy(struct ipc_port *port) {
     XIU_ASSERT(port != nullptr);
 
     irq_flags_t f = spinlock_lock_irqsave(&port->ip_lock);
@@ -240,7 +240,7 @@ void ipc_port_destroy(ipc_port_t *port) {
 /* ═══════════════════════════════════════════════════════════════════════════
  * ipc_port_lookup — Resolve a name in a space safely
  * ═══════════════════════════════════════════════════════════════════════════ */
-ipc_port_t *ipc_port_lookup(ipc_space_t *space,
+struct ipc_port *ipc_port_lookup(ipc_space_t *space,
                              mach_port_name_t name,
                              mach_port_type_t required_right) {
     (void)required_right;
@@ -260,7 +260,7 @@ ipc_port_t *ipc_port_lookup(ipc_space_t *space,
         return nullptr;
     }
 
-    ipc_port_t *port = entry->ie_object;
+    struct ipc_port *port = entry->ie_object;
     spinlock_unlock_irqrestore(&space->is_lock, f);
 
     if (!ipc_port_is_active(port)) {
@@ -269,17 +269,17 @@ ipc_port_t *ipc_port_lookup(ipc_space_t *space,
     return port;
 }
 
-void ipc_port_unlock(ipc_port_t *port) {
+void ipc_port_unlock(struct ipc_port *port) {
     (void)port;
 }
 
 // reference counting
-void ipc_port_reference(ipc_port_t *port) {
+void ipc_port_reference(struct ipc_port *port) {
     XIU_ASSERT(port != nullptr);
     atomic_fetch_add_explicit(&port->ip_references, 1, memory_order_relaxed);
 }
 
-void ipc_port_release(ipc_port_t *port) {
+void ipc_port_release(struct ipc_port *port) {
     XIU_ASSERT(port != nullptr);
     u32 prev = atomic_fetch_sub_explicit(&port->ip_references, 1,
                                          memory_order_acq_rel);
@@ -291,11 +291,11 @@ void ipc_port_release(ipc_port_t *port) {
 #define MAX_SERVICES 16
 static struct {
     char name[64];
-    ipc_port_t *port;
+    struct ipc_port *port;
 } s_services[MAX_SERVICES];
 static u32 s_service_count = 0;
 
-xiu_error_t mach_register_service(const char *name, ipc_port_t *port) {
+xiu_error_t mach_register_service(const char *name, struct ipc_port *port) {
     if (s_service_count >= MAX_SERVICES) return XIU_ERR_OVERFLOW;
     
     // check if already exists
@@ -313,7 +313,7 @@ xiu_error_t mach_register_service(const char *name, ipc_port_t *port) {
     return XIU_SUCCESS;
 }
 
-ipc_port_t *mach_lookup_service(const char *name) {
+struct ipc_port *mach_lookup_service(const char *name) {
     for (u32 i = 0; i < s_service_count; i++) {
         if (__builtin_strcmp(s_services[i].name, name) == 0) {
             return s_services[i].port;
@@ -353,7 +353,7 @@ void ipc_init(void) {
  * ipc_port_copyout_send
  * Translates a kernel port pointer to a name in the target space.
  * ═══════════════════════════════════════════════════════════════════════════ */
-mach_port_name_t ipc_port_copyout_send(ipc_space_t *space, ipc_port_t *port) {
+mach_port_name_t ipc_port_copyout_send(ipc_space_t *space, struct ipc_port *port) {
     if (!port || !space) return MACH_PORT_NAME_NULL;
 
     irq_flags_t f = spinlock_lock_irqsave(&space->is_lock);
@@ -442,7 +442,7 @@ xiu_error_t mach_port_deallocate_kernel(ipc_space_t *space, mach_port_name_t nam
 
     entry->ie_urefs--;
     if (entry->ie_urefs == 0) {
-        ipc_port_t *port = entry->ie_object;
+        struct ipc_port *port = entry->ie_object;
         mach_port_type_t bits = entry->ie_bits;
 
         space_free_name(space, name);

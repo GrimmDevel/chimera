@@ -57,13 +57,13 @@ QEMU_FLAGS+=(
 
 
 if [ "$HOST_ARCH" = "arm64" ] && [ "$ARCH" = "x86_64" ]; then
-    # Emulation (TCG) is required for x86_64 on Apple Silicon host
-    QEMU_FLAGS+=("-cpu" "max")
+    # Multi-threaded TCG with 512MB JIT Translation Block cache for Apple Silicon
+    QEMU_FLAGS+=("-accel" "tcg,tb-size=512,thread=multi" "-cpu" "Nehalem")
 elif [ "$HOST_ARCH" = "$ARCH" ]; then
     # Hardware acceleration when host and target architectures match
     QEMU_FLAGS+=("-cpu" "host" "-accel" "hvf")
 else
-    QEMU_FLAGS+=("-cpu" "max")
+    QEMU_FLAGS+=("-accel" "tcg,tb-size=512,thread=multi" "-cpu" "max")
 fi
 
 if [ "$DEBUG" == "1" ]; then
@@ -79,7 +79,7 @@ case "$ARCH" in
             -boot d \
             -cdrom "build/xiu-${ARCH}.iso" \
             -device piix3-ide,id=ide \
-            -drive file="build/disk.img",format=raw,if=none,id=disk,cache=directsync \
+            -drive file="build/disk.img",format=raw,if=none,id=disk,cache=writeback \
             -device ide-hd,drive=disk,bus=ide.0,unit=0 \
             -netdev user,id=net0 \
             -device e1000e,netdev=net0 \

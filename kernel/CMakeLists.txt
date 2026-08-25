@@ -15,6 +15,7 @@ add_executable(xiu_kernel
     mm/copy.c
     mm/zone.c
     mm/vm_object.c
+    mm/vm_map.c
     bsd/proc.c
     bsd/fileproc.c
     bsd/launchd.c

@@ -34,8 +34,8 @@ typedef enum {
 #define TASK_HOST_PORT              2
 #define TASK_BOOTSTRAP_PORT         4
 
-void ipc_kobject_set(ipc_port_t *port, void *kobject, ipc_kobject_type_t type);
-xiu_error_t ipc_kobject_server(ipc_port_t *port, ipc_kmsg_t *request_kmsg);
+void ipc_kobject_set(struct ipc_port *port, void *kobject, ipc_kobject_type_t type);
+xiu_error_t ipc_kobject_server(struct ipc_port *port, ipc_kmsg_t *request_kmsg);
 
 #ifdef __cplusplus
 }

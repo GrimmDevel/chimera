@@ -146,6 +146,8 @@ typedef struct XIU_ALIGNED(64) vnode {
 
     char            v_name[256];
     struct vnode   *v_parent;
+    struct vnode   *v_children;
+    struct vnode   *v_sibling_next;
 
     struct vnode   *v_mountedhere;
 

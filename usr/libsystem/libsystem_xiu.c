@@ -1094,7 +1094,12 @@ int putchar(int c) {
 }
 
 int execve(const char *path, char *const argv[], char *const envp[]) {
-  return (int)xiu_execve(path, argv, envp);
+  i64 ret = xiu_execve(path, argv, envp);
+  if (ret < 0) {
+    errno = (int)-ret;
+    return -1;
+  }
+  return (int)ret;
 }
 
 // memory Management
@@ -3530,7 +3535,31 @@ char *tgetstr(const char *id, char **area) {
     else if (strcmp(id, "AB") == 0) cap = "\033[4%dm";
     else if (strcmp(id, "bc") == 0) cap = "\b";
     else if (strcmp(id, "cr") == 0) cap = "\r";
-    else if (strcmp(id, "nl") == 0) cap = "\n";
+    else if (strcmp(id, "ku") == 0) cap = "\033[A";
+    else if (strcmp(id, "kd") == 0) cap = "\033[B";
+    else if (strcmp(id, "kl") == 0) cap = "\033[D";
+    else if (strcmp(id, "kr") == 0) cap = "\033[C";
+    else if (strcmp(id, "kh") == 0) cap = "\033[H";
+    else if (strcmp(id, "kH") == 0 || strcmp(id, "@7") == 0) cap = "\033[F";
+    else if (strcmp(id, "kD") == 0) cap = "\033[3~";
+    else if (strcmp(id, "kI") == 0) cap = "\033[2~";
+    else if (strcmp(id, "kN") == 0) cap = "\033[6~";
+    else if (strcmp(id, "kP") == 0) cap = "\033[5~";
+    else if (strcmp(id, "kb") == 0) cap = "\177";
+    else if (strcmp(id, "sc") == 0) cap = "\0337";
+    else if (strcmp(id, "rc") == 0) cap = "\0338";
+    else if (strcmp(id, "dc") == 0) cap = "\033[P";
+    else if (strcmp(id, "DC") == 0) cap = "\033[%dP";
+    else if (strcmp(id, "ic") == 0) cap = "\033[@";
+    else if (strcmp(id, "IC") == 0) cap = "\033[%d@";
+    else if (strcmp(id, "al") == 0) cap = "\033[L";
+    else if (strcmp(id, "dl") == 0) cap = "\033[M";
+    else if (strcmp(id, "ta") == 0) cap = "\t";
+    else if (strcmp(id, "ch") == 0) cap = "\033[%dG";
+    else if (strcmp(id, "LE") == 0) cap = "\033[%dD";
+    else if (strcmp(id, "RI") == 0) cap = "\033[%dC";
+    else if (strcmp(id, "UP") == 0) cap = "\033[%dA";
+    else if (strcmp(id, "DO") == 0) cap = "\033[%dB";
     else if (strcmp(id, "vi") == 0) cap = "\033[?25l";
     else if (strcmp(id, "ve") == 0) cap = "\033[?25h";
 

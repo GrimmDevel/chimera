@@ -32,8 +32,9 @@ for bin_path in build/${ARCH}/usr/*; do
         name="$(basename "$bin_path")"
         case "$name" in
             *.a|*.o|*.obj|*.txt|*.cmake|*.ninja|*.json|Makefile|CMakeFiles|cmake_install.cmake|elf) ;;
-            sh|dash|ls|cat|cp|mv|rm|mkdir|pwd|date|sleep|kill|chmod|df|echo|clear|true|false)
+            sh|dash|zsh|ls|cat|cp|mv|rm|mkdir|pwd|date|sleep|kill|chmod|df|echo|clear|true|false)
                 cp "$bin_path" "$ISO_ROOT/bin/"
+                cp "$bin_path" "$ISO_ROOT/usr/bin/"
                 ;;
             ifconfig|ping)
                 cp "$bin_path" "$ISO_ROOT/sbin/"
@@ -61,6 +62,7 @@ fi
 mkdir -p "$ISO_ROOT/Users/root" "$ISO_ROOT/Users/fvr" "$ISO_ROOT/Users/user" "$ISO_ROOT/Users/Shared"
 for u in root fvr user; do
     mkdir -p "$ISO_ROOT/Users/$u/Desktop" "$ISO_ROOT/Users/$u/Documents" "$ISO_ROOT/Users/$u/Downloads" "$ISO_ROOT/Users/$u/Library" "$ISO_ROOT/Users/$u/Pictures" "$ISO_ROOT/Users/$u/Public"
+    touch "$ISO_ROOT/Users/$u/Desktop/.localized" "$ISO_ROOT/Users/$u/Documents/.localized" "$ISO_ROOT/Users/$u/Downloads/.localized" "$ISO_ROOT/Users/$u/Library/.localized" "$ISO_ROOT/Users/$u/Pictures/.localized" "$ISO_ROOT/Users/$u/Public/.localized"
     printf 'export PATH="/bin:/usr/bin:/sbin:/usr/sbin:/usr/local/bin"\nexport TERM="xterm-256color"\nexport PROMPT="%%n@%%m %%~ %%# "\nexport PS1="%%n@%%m %%~ %%# "\nunsetopt zle\nunsetopt promptcr\nunsetopt promptsp\n' > "$ISO_ROOT/Users/$u/.zshrc"
     printf '#include <stdio.h>\n\nint main() {\n    printf("Hello from self-hosted XIU C compiler!\\n");\n    return 0;\n}\n' > "$ISO_ROOT/Users/$u/hello.c"
 done

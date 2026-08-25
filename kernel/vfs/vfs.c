@@ -9,7 +9,7 @@ extern xiu_error_t vfs_register(const char *path, vnode_t *vp);
 
 vnode_t *vfs_root_vnode = nullptr;
 
-#define VFS_REGISTRY_SIZE 4096
+#define VFS_REGISTRY_SIZE 16384
 
 typedef struct vfs_entry {
   char ve_path[256];
@@ -65,6 +65,41 @@ void vfs_normalize_path(const char *in, char *out, usize cap) {
   if (!in || !out || cap == 0) {
     if (out && cap > 0)
       out[0] = '\0';
+    return;
+  }
+
+  if (in[0] == '/' && !__builtin_strchr(in, '.') && !__builtin_strchr(in, ':') &&
+      !__builtin_strchr(in, ' ')) {
+    if (__builtin_strncmp(in, "/etc", 4) == 0 && (in[4] == '/' || in[4] == '\0')) {
+      __builtin_strncpy(out, "/private/etc", cap - 1);
+      usize alen = 12;
+      __builtin_strncpy(out + alen, in + 4, cap - alen - 1);
+      out[cap - 1] = '\0';
+      return;
+    }
+    if (__builtin_strncmp(in, "/var", 4) == 0 && (in[4] == '/' || in[4] == '\0')) {
+      __builtin_strncpy(out, "/private/var", cap - 1);
+      usize alen = 12;
+      __builtin_strncpy(out + alen, in + 4, cap - alen - 1);
+      out[cap - 1] = '\0';
+      return;
+    }
+    if (__builtin_strncmp(in, "/tmp", 4) == 0 && (in[4] == '/' || in[4] == '\0')) {
+      __builtin_strncpy(out, "/private/tmp", cap - 1);
+      usize alen = 12;
+      __builtin_strncpy(out + alen, in + 4, cap - alen - 1);
+      out[cap - 1] = '\0';
+      return;
+    }
+    if (__builtin_strncmp(in, "/lib", 4) == 0 && (in[4] == '/' || in[4] == '\0')) {
+      __builtin_strncpy(out, "/usr/lib", cap - 1);
+      usize alen = 8;
+      __builtin_strncpy(out + alen, in + 4, cap - alen - 1);
+      out[cap - 1] = '\0';
+      return;
+    }
+    __builtin_strncpy(out, in, cap - 1);
+    out[cap - 1] = '\0';
     return;
   }
 
@@ -212,7 +247,7 @@ void vfs_normalize_path(const char *in, char *out, usize cap) {
 
 static vnode_ops_t s_root_ops;
 
-#define ROOTFS_MAX_VNODES 512
+#define ROOTFS_MAX_VNODES 2048
 static vnode_t s_rootfs_vnodes[ROOTFS_MAX_VNODES];
 static u32 s_rootfs_vnode_count = 0;
 
@@ -225,6 +260,8 @@ static vnode_t *vfs_create_dir_vnode(const char *name) {
   vp->v_type = VDIR;
   vp->v_flags = VN_SYSTEM;
   vp->v_op = &s_root_ops;
+  vp->v_children = nullptr;
+  vp->v_sibling_next = nullptr;
   __builtin_strncpy(vp->v_name, name, sizeof(vp->v_name) - 1);
   return vp;
 }
@@ -268,6 +305,38 @@ xiu_error_t vfs_register(const char *path, vnode_t *vp) {
 
   if (__builtin_strcmp(norm, "/") != 0) {
     vfs_ensure_parent_dirs(norm);
+
+    char pdir[256];
+    __builtin_strncpy(pdir, norm, sizeof(pdir) - 1);
+    pdir[sizeof(pdir) - 1] = '\0';
+    int last_slash = -1;
+    for (int i = 0; pdir[i]; i++) {
+      if (pdir[i] == '/')
+        last_slash = i;
+    }
+    if (last_slash == 0) {
+      pdir[1] = '\0';
+    } else if (last_slash > 0) {
+      pdir[last_slash] = '\0';
+    }
+
+    vnode_t *dvp = nullptr;
+    if (vfs_lookup(pdir, &dvp) == XIU_SUCCESS && dvp && dvp != vp) {
+      vp->v_parent = dvp;
+      vnode_t *c = dvp->v_children;
+      bool found = false;
+      while (c) {
+        if (c == vp || __builtin_strcmp(c->v_name, vp->v_name) == 0) {
+          found = true;
+          break;
+        }
+        c = c->v_sibling_next;
+      }
+      if (!found) {
+        vp->v_sibling_next = dvp->v_children;
+        dvp->v_children = vp;
+      }
+    }
   }
 
   irq_flags_t irq = spinlock_lock_irqsave(&s_registry_lock);
@@ -309,8 +378,28 @@ xiu_error_t vfs_unregister(const char *path) {
   while (probe < VFS_REGISTRY_SIZE) {
     vfs_entry_t *e = &s_registry[idx];
     if (e->ve_vnode && __builtin_strcmp(e->ve_path, norm) == 0) {
+      vnode_t *vp_unreg = e->ve_vnode;
       e->ve_vnode = nullptr;
       e->ve_path[0] = '\0';
+
+      if (vp_unreg && vp_unreg->v_parent) {
+        vnode_t *dvp = vp_unreg->v_parent;
+        if (dvp->v_children == vp_unreg) {
+          dvp->v_children = vp_unreg->v_sibling_next;
+        } else {
+          vnode_t *c = dvp->v_children;
+          while (c && c->v_sibling_next) {
+            if (c->v_sibling_next == vp_unreg) {
+              c->v_sibling_next = vp_unreg->v_sibling_next;
+              break;
+            }
+            c = c->v_sibling_next;
+          }
+        }
+        vp_unreg->v_parent = nullptr;
+        vp_unreg->v_sibling_next = nullptr;
+      }
+
       spinlock_unlock_irqrestore(&s_registry_lock, irq);
       return XIU_SUCCESS;
     }
@@ -415,12 +504,12 @@ xiu_error_t vfs_lookup(const char *path, vnode_t **vp_out) {
   u32 idx = vfs_hash(norm) % VFS_REGISTRY_SIZE;
   u32 probe = 0;
 
-  while (probe < VFS_REGISTRY_SIZE) {
+  while (probe < 128) {
     vfs_entry_t *e = &s_registry[idx];
-    if (e->ve_vnode == nullptr) {
+    if (e->ve_vnode == nullptr && e->ve_path[0] == '\0') {
       break;
     }
-    if (__builtin_strcmp(e->ve_path, norm) == 0) {
+    if (e->ve_vnode && __builtin_strcmp(e->ve_path, norm) == 0) {
       *vp_out = e->ve_vnode;
       spinlock_unlock_irqrestore(&s_registry_lock, irq);
       return XIU_SUCCESS;
@@ -429,29 +518,17 @@ xiu_error_t vfs_lookup(const char *path, vnode_t **vp_out) {
     probe++;
   }
 
-  // hfs+/apfs case-insensitive fallback
-  for (u32 i = 0; i < VFS_REGISTRY_SIZE; i++) {
-    vfs_entry_t *e = &s_registry[i];
-    if (e->ve_vnode && e->ve_path[0] != '\0') {
-      if (k_strcasecmp(e->ve_path, norm) == 0) {
-        *vp_out = e->ve_vnode;
-        spinlock_unlock_irqrestore(&s_registry_lock, irq);
-        return XIU_SUCCESS;
-      }
-    }
-  }
-
   char path83[256];
   vfs_path_to_83(norm, path83, sizeof(path83));
   if (__builtin_strcmp(norm, path83) != 0) {
     idx = vfs_hash(path83) % VFS_REGISTRY_SIZE;
     probe = 0;
-    while (probe < VFS_REGISTRY_SIZE) {
+    while (probe < 128) {
       vfs_entry_t *e = &s_registry[idx];
-      if (e->ve_vnode == nullptr) {
+      if (e->ve_vnode == nullptr && e->ve_path[0] == '\0') {
         break;
       }
-      if (__builtin_strcmp(e->ve_path, path83) == 0) {
+      if (e->ve_vnode && __builtin_strcmp(e->ve_path, path83) == 0) {
         *vp_out = e->ve_vnode;
         spinlock_unlock_irqrestore(&s_registry_lock, irq);
         return XIU_SUCCESS;
@@ -468,104 +545,40 @@ xiu_error_t vfs_lookup(const char *path, vnode_t **vp_out) {
 const char *vfs_path_for_vnode(vnode_t *vp) {
   if (!vp)
     return nullptr;
+  irq_flags_t irq = spinlock_lock_irqsave(&s_registry_lock);
   for (u32 i = 0; i < VFS_REGISTRY_SIZE; i++) {
-    if (s_registry[i].ve_vnode == vp)
+    if (s_registry[i].ve_vnode == vp) {
+      spinlock_unlock_irqrestore(&s_registry_lock, irq);
       return s_registry[i].ve_path;
+    }
   }
+  spinlock_unlock_irqrestore(&s_registry_lock, irq);
   return nullptr;
 }
 
 xiu_error_t vfs_readdir_flat(vnode_t *dvp, u32 index, char *name_out,
                              usize name_cap, vnode_t **child_out) {
-  const char *dir = vfs_path_for_vnode(dvp);
-  if (!dir || !name_out || name_cap == 0 || !child_out)
+  if (!dvp || !name_out || name_cap == 0 || !child_out)
     return XIU_ERR_INVALID;
 
-  usize dir_len = __builtin_strlen(dir);
-  bool root = (dir_len == 1 && dir[0] == '/');
-  u32 seen = 0;
-
-  for (u32 i = 0; i < VFS_REGISTRY_SIZE; i++) {
-    const char *path = s_registry[i].ve_path;
-    vnode_t *vp = s_registry[i].ve_vnode;
-    if (!vp || path[0] == '\0')
-      continue;
-    if (__builtin_strcmp(path, dir) == 0)
-      continue;
-
-    const char *rest = nullptr;
-    if (root) {
-      if (path[0] != '/')
-        continue;
-      rest = path + 1;
-    } else {
-      bool prefix_match = true;
-      for (usize j = 0; j < dir_len; j++) {
-        if (path[j] != dir[j]) {
-          prefix_match = false;
-          break;
-        }
-      }
-      if (!prefix_match || path[dir_len] != '/')
-        continue;
-      rest = path + dir_len + 1;
-    }
-
-    if (!rest || rest[0] == '\0')
-      continue;
-
-    bool direct = true;
-    for (const char *p = rest; *p; p++) {
-      if (*p == '/') {
-        direct = false;
-        break;
-      }
-    }
-    if (!direct)
-      continue;
-
-    bool duplicate = false;
-    for (u32 prev = 0; prev < i; prev++) {
-      const char *prev_path = s_registry[prev].ve_path;
-      if (!s_registry[prev].ve_vnode || prev_path[0] == '\0')
-        continue;
-      const char *prev_rest = nullptr;
-      if (root) {
-        if (prev_path[0] == '/')
-          prev_rest = prev_path + 1;
-      } else {
-        if (__builtin_strncmp(prev_path, dir, dir_len) == 0 &&
-            prev_path[dir_len] == '/')
-          prev_rest = prev_path + dir_len + 1;
-      }
-      if (!prev_rest)
-        continue;
-
-      bool prev_direct = true;
-      for (const char *p = prev_rest; *p; p++) {
-        if (*p == '/') {
-          prev_direct = false;
-          break;
-        }
-      }
-      if (prev_direct && __builtin_strcmp(prev_rest, rest) == 0) {
-        duplicate = true;
-        break;
-      }
-    }
-    if (duplicate)
-      continue;
-
-    if (seen++ != index)
-      continue;
-
-    __builtin_strncpy(name_out, rest, name_cap - 1);
-    name_out[name_cap - 1] = '\0';
-    *child_out = vp;
-    return XIU_SUCCESS;
+  irq_flags_t irq = spinlock_lock_irqsave(&s_registry_lock);
+  vnode_t *cur = dvp->v_children;
+  u32 cur_idx = 0;
+  while (cur && cur_idx < index) {
+    cur = cur->v_sibling_next;
+    cur_idx++;
   }
 
-  return XIU_ERR_NOTFOUND;
+  if (!cur) {
+    spinlock_unlock_irqrestore(&s_registry_lock, irq);
+    return XIU_ERR_NOTFOUND;
+  }
+
+  __builtin_strncpy(name_out, cur->v_name, name_cap - 1);
+  name_out[name_cap - 1] = '\0';
+  *child_out = cur;
+  spinlock_unlock_irqrestore(&s_registry_lock, irq);
+  return XIU_SUCCESS;
 }
 
 static vnode_t s_root_vnode_obj;

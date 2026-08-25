@@ -71,26 +71,16 @@ typedef struct vm_page {
 } vm_page_t;
 
 /* ═══════════════════════════════════════════════════════════════════════════
- * §2  VM Object Protection & Inheritance
+ * §2  VM Object Protection & Inheritance (Darwin Mach VM)
  * ═══════════════════════════════════════════════════════════════════════════ */
 
-typedef u32 vm_prot_t;
+#include <mach/vm_types.h>
+#include <mach/vm_prot.h>
+#include <mach/vm_inherit.h>
 
-#define VM_PROT_NONE        ((vm_prot_t)0x00)
-#define VM_PROT_READ        ((vm_prot_t)0x01)
-#define VM_PROT_WRITE       ((vm_prot_t)0x02)
-#define VM_PROT_EXECUTE     ((vm_prot_t)0x04)
 #define VM_PROT_RW          (VM_PROT_READ | VM_PROT_WRITE)
 #define VM_PROT_RX          (VM_PROT_READ | VM_PROT_EXECUTE)
 #define VM_PROT_RWX         (VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXECUTE)
-#define VM_PROT_ALL         VM_PROT_RWX
-
-typedef u32 vm_inherit_t;
-
-#define VM_INHERIT_SHARE    ((vm_inherit_t)0)   /* Shared across fork()     */
-#define VM_INHERIT_COPY     ((vm_inherit_t)1)   /* COW copy on fork()       */
-#define VM_INHERIT_NONE     ((vm_inherit_t)2)   /* Unmapped in child        */
-#define VM_INHERIT_DEFAULT  VM_INHERIT_COPY
 
 /* ═══════════════════════════════════════════════════════════════════════════
  * §3  Pager Type
@@ -166,41 +156,40 @@ typedef struct XIU_ALIGNED(64) vm_object {
     u64                 vmo_faults;
     u64                 vmo_pageouts;
 
-    u8                  _pad1[8];
-} vm_object_t;
+} vm_object_struct_t;
 
 #define XIU_VM_OBJECT_MAGIC  UINT64_C(0x5849554F424A4543)
 
 XIU_WARN_UNUSED
 xiu_error_t vm_object_create(xiu_size_t size,
                               vm_prot_t max_prot,
-                              vm_object_t **obj_out);
+                              vm_object_t *obj_out);
 
 XIU_WARN_UNUSED
 xiu_error_t vm_object_create_vnode(struct vnode *vp,
                                     xiu_offset_t offset,
                                     xiu_size_t size,
-                                    vm_object_t **obj_out);
+                                    vm_object_t *obj_out);
 
 XIU_WARN_UNUSED
-xiu_error_t vm_object_shadow(vm_object_t *original,
+xiu_error_t vm_object_shadow(vm_object_t original,
                               xiu_offset_t offset,
                               xiu_size_t size,
-                              vm_object_t **shadow_out);
+                              vm_object_t *shadow_out);
 
-void vm_object_reference(vm_object_t *obj);
-void vm_object_deallocate(vm_object_t *obj);
+void vm_object_reference(vm_object_t obj);
+void vm_object_deallocate(vm_object_t obj);
 
 XIU_WARN_UNUSED
-xiu_error_t vm_object_fault(vm_object_t *obj,
+xiu_error_t vm_object_fault(vm_object_t obj,
                              xiu_offset_t offset,
                              vm_prot_t fault_type,
                              vm_page_t **page_out);
 
-vm_page_t *vm_object_lookup_page(vm_object_t *obj, xiu_offset_t offset);
+vm_page_t *vm_object_lookup_page(vm_object_t obj, xiu_offset_t offset);
 
-vm_page_t *vm_object_resolve_shadow(vm_object_t *obj, xiu_offset_t offset);
+vm_page_t *vm_object_resolve_shadow(vm_object_t obj, xiu_offset_t offset);
 
-xiu_error_t vm_object_sync(vm_object_t *obj);
+xiu_error_t vm_object_sync(vm_object_t obj);
 
 #endif /* XIU_VM_OBJECT_H */

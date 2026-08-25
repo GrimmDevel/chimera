@@ -36,6 +36,7 @@ extern unsigned char iso_font[256 * 16];
 void video_console_init(unsigned long baseaddr, uint64_t physaddr,
                         unsigned int width, unsigned int height,
                         unsigned int depth, unsigned int pitch);
+void video_console_init_backbuffer(void);
 
 void vc_putchar(char ch);
 void vc_puts(const char *s);

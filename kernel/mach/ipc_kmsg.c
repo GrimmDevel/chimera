@@ -117,7 +117,7 @@ xiu_error_t ipc_kmsg_copyin(ipc_kmsg_t *kmsg, xiu_vaddr_t user_header_va,
     right = MACH_PORT_TYPE_SEND_ONCE;
   }
 
-  ipc_port_t *remote = ipc_port_lookup(space, rname, right);
+  struct ipc_port *remote = ipc_port_lookup(space, rname, right);
   if (!remote) {
     kprintf("[IPC-ERR] ipc_port_lookup failed for rname=0x%x (space_used=%u)\n",
             rname, space->is_table_used);
@@ -134,7 +134,7 @@ xiu_error_t ipc_kmsg_copyin(ipc_kmsg_t *kmsg, xiu_vaddr_t user_header_va,
       kmsg->ikm_local_port = remote;
       kmsg->ikm_local_right = MACH_PORT_TYPE_SEND_RECEIVE;
     } else {
-      ipc_port_t *local = ipc_port_lookup(space, lname, MACH_PORT_TYPE_RECEIVE);
+      struct ipc_port *local = ipc_port_lookup(space, lname, MACH_PORT_TYPE_RECEIVE);
       if (local) {
         ipc_port_unlock(local);
         kmsg->ikm_local_port = local;
@@ -154,15 +154,15 @@ xiu_error_t ipc_kmsg_copyin(ipc_kmsg_t *kmsg, xiu_vaddr_t user_header_va,
       mach_msg_descriptor_type_t dtype = td->type;
       if (dtype == MACH_MSG_PORT_DESCRIPTOR) {
         mach_msg_port_descriptor_t *pdesc = (mach_msg_port_descriptor_t *)desc_ptr;
-        ipc_port_t *port_obj = ipc_port_lookup(space, pdesc->name, MACH_PORT_TYPE_SEND);
+        struct ipc_port *port_obj = ipc_port_lookup(space, pdesc->name, MACH_PORT_TYPE_SEND);
         if (!port_obj) {
           port_obj = ipc_port_lookup(space, pdesc->name, MACH_PORT_TYPE_RECEIVE);
         }
         if (port_obj) {
           ipc_port_unlock(port_obj);
-          *(ipc_port_t **)&pdesc->name = port_obj;
+          *(struct ipc_port **)&pdesc->name = port_obj;
         } else {
-          *(ipc_port_t **)&pdesc->name = nullptr;
+          *(struct ipc_port **)&pdesc->name = nullptr;
         }
         desc_ptr += sizeof(mach_msg_port_descriptor_t);
       } else if (dtype == MACH_MSG_OOL_DESCRIPTOR) {
@@ -233,7 +233,7 @@ xiu_error_t ipc_kmsg_copyout(ipc_kmsg_t *kmsg, xiu_vaddr_t user_buf_va,
       mach_msg_descriptor_type_t dtype = td->type;
       if (dtype == MACH_MSG_PORT_DESCRIPTOR) {
         mach_msg_port_descriptor_t *pdesc = (mach_msg_port_descriptor_t *)desc_ptr;
-        ipc_port_t *port_obj = *(ipc_port_t **)&pdesc->name;
+        struct ipc_port *port_obj = *(struct ipc_port **)&pdesc->name;
         pdesc->pad1 = 0;
         if (port_obj) {
           pdesc->name = ipc_port_copyout_send(space, port_obj);
@@ -297,7 +297,7 @@ xiu_error_t ipc_kmsg_copyout(ipc_kmsg_t *kmsg, xiu_vaddr_t user_buf_va,
  * ipc_mqueue_send — Enqueue kmsg onto a port's message queue
  * ═══════════════════════════════════════════════════════════════════════════
  */
-xiu_error_t ipc_mqueue_send(ipc_port_t *port, ipc_kmsg_t *kmsg,
+xiu_error_t ipc_mqueue_send(struct ipc_port *port, ipc_kmsg_t *kmsg,
                             mach_msg_timeout_t timeout_ms) {
   XIU_ASSERT(port != nullptr);
   XIU_ASSERT(kmsg != nullptr);
@@ -314,7 +314,7 @@ xiu_error_t ipc_mqueue_send(ipc_port_t *port, ipc_kmsg_t *kmsg,
   // kernel object dispatch
   if (port->ip_kobject != nullptr) {
     spinlock_unlock_irqrestore(&mq->imq_lock, f);
-    extern xiu_error_t ipc_kobject_server(ipc_port_t *port, ipc_kmsg_t *request_kmsg);
+    extern xiu_error_t ipc_kobject_server(struct ipc_port *port, ipc_kmsg_t *request_kmsg);
     return ipc_kobject_server(port, kmsg);
   }
 
@@ -351,8 +351,8 @@ xiu_error_t ipc_mqueue_send(ipc_port_t *port, ipc_kmsg_t *kmsg,
  * ipc_mqueue_receive — Dequeue kmsg from a port's message queue
  * ═══════════════════════════════════════════════════════════════════════════
  */
-xiu_error_t ipc_mqueue_receive(ipc_port_t *port, ipc_kmsg_t **kmsg_out,
-                               mach_msg_timeout_t timeout_ms) {
+xiu_error_t ipc_mqueue_receive(struct ipc_port *port, ipc_kmsg_t **kmsg_out,
+                                mach_msg_timeout_t timeout_ms) {
   XIU_ASSERT(port != nullptr);
   XIU_ASSERT(kmsg_out != nullptr);
 

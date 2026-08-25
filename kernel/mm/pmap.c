@@ -38,6 +38,27 @@ static inline u64 *get_table_ptr(u64 phys) {
     return (u64 *)(phys + g_hhdm_base);
 }
 
+u64 pmap_create(void) {
+    irq_flags_t irq = spinlock_lock_irqsave(&s_pmap_lock);
+    u64 pml4_phys = pmm_alloc_page();
+    if (pml4_phys == 0 || pml4_phys == (u64)-1) {
+        spinlock_unlock_irqrestore(&s_pmap_lock, irq);
+        return 0;
+    }
+
+    u64 *pml4 = get_table_ptr(pml4_phys);
+    u64 *k_pml4 = get_table_ptr(s_kernel_pml4_phys);
+    __builtin_memset(pml4, 0, 4096);
+
+    // copy kernel higher-half mappings (entries 256..511)
+    for (int i = 256; i < 512; i++) {
+        pml4[i] = k_pml4[i];
+    }
+
+    spinlock_unlock_irqrestore(&s_pmap_lock, irq);
+    return pml4_phys;
+}
+
 u64 *pmap_get_pte_ptr(u64 pml4_phys, u64 vaddr) {
     if (!pml4_phys) return nullptr;
     u64 *pml4 = get_table_ptr(pml4_phys & ~0xFFFULL);
@@ -210,24 +231,24 @@ void pmap_destroy_user_space(u64 pml4_phys) {
 
     for (u64 pml4_i = 0; pml4_i < 256; pml4_i++) {
         u64 pml4e = pml4[pml4_i];
-        if (!(pml4e & PAGE_PRESENT) || !(pml4e & PAGE_USER)) continue;
+        if (!(pml4e & PAGE_PRESENT)) continue;
 
         u64 *pdpt = get_table_ptr(pml4e & ~0xFFFULL);
         for (u64 pdpt_i = 0; pdpt_i < 512; pdpt_i++) {
             u64 pdpte = pdpt[pdpt_i];
-            if (!(pdpte & PAGE_PRESENT) || !(pdpte & PAGE_USER) || (pdpte & (1ULL << 7)))
+            if (!(pdpte & PAGE_PRESENT) || (pdpte & (1ULL << 7)))
                 continue;
 
             u64 *pd = get_table_ptr(pdpte & ~0xFFFULL);
             for (u64 pd_i = 0; pd_i < 512; pd_i++) {
                 u64 pde = pd[pd_i];
-                if (!(pde & PAGE_PRESENT) || !(pde & PAGE_USER) || (pde & (1ULL << 7)))
+                if (!(pde & PAGE_PRESENT) || (pde & (1ULL << 7)))
                     continue;
 
                 u64 *pt = get_table_ptr(pde & ~0xFFFULL);
                 for (u64 pt_i = 0; pt_i < 512; pt_i++) {
                     u64 pte = pt[pt_i];
-                    if (!(pte & PAGE_PRESENT) || !(pte & PAGE_USER)) continue;
+                    if (!(pte & PAGE_PRESENT)) continue;
 
                     u64 phys = pte & ~0xFFFULL;
                     pt[pt_i] = 0;

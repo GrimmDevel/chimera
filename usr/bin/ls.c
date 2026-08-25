@@ -4,6 +4,31 @@
 #include <dirent.h>
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>
+
+static char s_outbuf[65536];
+static size_t s_outlen = 0;
+
+static void bprintf(const char *fmt, ...) {
+    __builtin_va_list args;
+    __builtin_va_start(args, fmt);
+    int written = vsnprintf(s_outbuf + s_outlen, sizeof(s_outbuf) - s_outlen, fmt, args);
+    __builtin_va_end(args);
+    if (written > 0) {
+        s_outlen += (size_t)written;
+        if (s_outlen >= sizeof(s_outbuf) - 2048) {
+            write(1, s_outbuf, s_outlen);
+            s_outlen = 0;
+        }
+    }
+}
+
+static void bflush(void) {
+    if (s_outlen > 0) {
+        write(1, s_outbuf, s_outlen);
+        s_outlen = 0;
+    }
+}
 
 static void format_mode(mode_t mode, char *buf) {
     buf[0] = S_ISDIR(mode) ? 'd' : (S_ISCHR(mode) ? 'c' : (S_ISBLK(mode) ? 'b' : '-'));
@@ -28,13 +53,13 @@ static int list_dir(const char *path, bool opt_l, bool opt_a, bool opt_1) {
             if (opt_l) {
                 char mode_str[11];
                 format_mode(st.st_mode, mode_str);
-                printf("%s %2u root root %8llu %s\n", mode_str, st.st_nlink, (long long)st.st_size, path);
+                bprintf("%s %2u root root %8llu %s\n", mode_str, st.st_nlink, (long long)st.st_size, path);
             } else {
-                printf("%s\n", path);
+                bprintf("%s\n", path);
             }
             return 0;
         }
-        printf("ls: cannot access '%s': No such file or directory\n", path);
+        bprintf("ls: cannot access '%s': No such file or directory\n", path);
         return 1;
     }
 
@@ -53,14 +78,14 @@ static int list_dir(const char *path, bool opt_l, bool opt_a, bool opt_1) {
 
             char mode_str[11];
             format_mode(st.st_mode, mode_str);
-            printf("%s %2u root root %8llu %s\n", mode_str, st.st_nlink, (long long)st.st_size, de->d_name);
+            bprintf("%s %2u root root %8llu %s\n", mode_str, st.st_nlink, (long long)st.st_size, de->d_name);
         } else if (opt_1) {
-            printf("%s\n", de->d_name);
+            bprintf("%s\n", de->d_name);
         } else {
-            printf("%s  ", de->d_name);
+            bprintf("%s  ", de->d_name);
         }
     }
-    if (!opt_l && !opt_1) printf("\n");
+    if (!opt_l && !opt_1) bprintf("\n");
 
     closedir(dir);
     return 0;
@@ -83,16 +108,17 @@ int main(int argc, char *argv[]) {
         arg++;
     }
 
-    if (arg >= argc) {
-        return list_dir(".", opt_l, opt_a, opt_1);
-    }
-
     int ret = 0;
-    bool multiple = (argc - arg > 1);
-    for (int i = arg; i < argc; i++) {
-        if (multiple) printf("%s:\n", argv[i]);
-        ret |= list_dir(argv[i], opt_l, opt_a, opt_1);
-        if (multiple && i < argc - 1) printf("\n");
+    if (arg >= argc) {
+        ret = list_dir(".", opt_l, opt_a, opt_1);
+    } else {
+        bool multiple = (argc - arg > 1);
+        for (int i = arg; i < argc; i++) {
+            if (multiple) bprintf("%s:\n", argv[i]);
+            ret |= list_dir(argv[i], opt_l, opt_a, opt_1);
+            if (multiple && i < argc - 1) bprintf("\n");
+        }
     }
+    bflush();
     return ret;
 }

@@ -21,6 +21,7 @@ extern void kprintf(const char *fmt, ...);
 extern void pmm_init(xiu_paddr_t memmap_base, usize memmap_count);
 extern usize pmm_total_pages(void);
 extern usize pmm_free_pages(void);
+extern void video_console_init_backbuffer(void);
 
 // phase 2: Virtual Memory
 extern void pmap_bootstrap(void);
@@ -34,7 +35,7 @@ extern void scheduler_add_thread(xiu_thread_t *th);
 
 // phase 4: Mach IPC
 extern void ipc_init(void);
-extern ipc_port_t *ipc_port_kernel_bootstrap;
+extern struct ipc_port *ipc_port_kernel_bootstrap;
 
 // phase 5: BSD layer
 extern void proc_init(void);
@@ -349,6 +350,7 @@ void xiu_kernel_main(void) {
   // phase 1: Physical Memory Manager
   kprintf("[XIU] Phase 1: Physical Memory Manager\n");
   pmm_init(g_boot_info->memmap_base, g_boot_info->memmap_count);
+  video_console_init_backbuffer();
   kprintf("        Total RAM  : %zu MiB\n",
           (pmm_total_pages() * XIU_PAGE_SIZE) / (1024 * 1024));
   kprintf("        Free pages : %zu (%zu MiB)\n", pmm_free_pages(),

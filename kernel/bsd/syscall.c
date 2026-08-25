@@ -54,10 +54,26 @@ typedef struct xiu_user_dirent {
   char d_name[1024];
 } xiu_user_dirent_t;
 
-typedef struct xiu_user_stat {
-  u32 st_dev, st_ino, st_mode, st_nlink, st_uid, st_gid, st_rdev;
-  u64 st_size, st_atime, st_mtime, st_ctime;
-  u32 st_blksize, st_blocks;
+typedef struct XIU_PACKED xiu_user_stat {
+  u32 st_dev;
+  u16 st_mode;
+  u16 st_nlink;
+  u64 st_ino;
+  u32 st_uid;
+  u32 st_gid;
+  u32 st_rdev;
+  u32 _pad;
+  struct { i64 tv_sec; i64 tv_nsec; } st_atimespec;
+  struct { i64 tv_sec; i64 tv_nsec; } st_mtimespec;
+  struct { i64 tv_sec; i64 tv_nsec; } st_ctimespec;
+  struct { i64 tv_sec; i64 tv_nsec; } st_birthtimespec;
+  i64 st_size;
+  i64 st_blocks;
+  i32 st_blksize;
+  u32 st_flags;
+  u32 st_gen;
+  i32 st_lspare;
+  i64 st_qspare[2];
 } xiu_user_stat_t;
 
 static const char *normalize_path(const char *path) {
@@ -78,15 +94,23 @@ static u32 vnode_dtype(vnode_t *vp) {
   return 0;
 }
 
-static u32 vnode_mode(vnode_t *vp) {
-  u32 perm = 0755;
+static u16 vnode_mode(vnode_t *vp) {
+  u16 perm = 0644;
   if (!vp)
-    return perm;
+    return (u16)(0100000 | perm);
   if (vp->v_type == VDIR)
-    return 0040000 | perm;
+    return (u16)(0040000 | 0755);
   if (vp->v_type == VCHR)
-    return 0020000 | 0666;
-  return 0100000 | perm;
+    return (u16)(0020000 | 0666);
+  if (vp->v_type == VBLK)
+    return (u16)(0060000 | 0660);
+  if (vp->v_type == VLNK)
+    return (u16)(0120000 | 0777);
+  if (vp->v_type == VSOCK)
+    return (u16)(0140000 | 0666);
+  if (vp->v_type == VFIFO)
+    return (u16)(0010000 | 0666);
+  return (u16)(0100000 | perm);
 }
 
 // sys_log
@@ -439,58 +463,9 @@ static i64 sys_dup2(u64 oldfd_u, u64 newfd_u, u64 a3, u64 a4, u64 a5, u64 a6) {
 
 static void resolve_relative_path(xiu_proc_t *proc, const char *path,
                                   char *out_buf, usize out_max) {
-  if (!path || !out_buf || out_max < 2)
-    return;
-  if (path[0] == '/') {
-    usize len = __builtin_strlen(path);
-    if (len >= out_max)
-      len = out_max - 1;
-    __builtin_memcpy(out_buf, path, len);
-    out_buf[len] = '\0';
-    return;
-  }
-
-  const char *cwd_str = "/";
-  if (proc && proc->p_cwd) {
-    if (proc->p_cwd->v_op &&
-        __builtin_strcmp(proc->p_cwd->v_op->vop_name, "fat32_dir") == 0) {
-      typedef struct {
-        u32 start_cluster;
-        u32 file_size;
-        bool is_dir;
-        char path[256];
-      } fat32_path_info_t;
-      fat32_path_info_t *nd = (fat32_path_info_t *)proc->p_cwd->v_data;
-      if (nd && nd->path[0])
-        cwd_str = nd->path;
-    } else if (proc->p_cwd->v_name[0] == '/') {
-      cwd_str = proc->p_cwd->v_name;
-    }
-  }
-
-  const char *sub = path;
-  if (sub[0] == '.' && sub[1] == '/')
-    sub += 2;
-
-  if (__builtin_strcmp(cwd_str, "/") == 0) {
-    out_buf[0] = '/';
-    usize slen = __builtin_strlen(sub);
-    if (1 + slen >= out_max)
-      slen = out_max - 2;
-    __builtin_memcpy(out_buf + 1, sub, slen);
-    out_buf[1 + slen] = '\0';
-  } else {
-    usize clen = __builtin_strlen(cwd_str);
-    if (clen >= out_max - 2)
-      clen = out_max - 2;
-    __builtin_memcpy(out_buf, cwd_str, clen);
-    out_buf[clen] = '/';
-    usize slen = __builtin_strlen(sub);
-    if (clen + 1 + slen >= out_max)
-      slen = out_max - clen - 2;
-    __builtin_memcpy(out_buf + clen + 1, sub, slen);
-    out_buf[clen + 1 + slen] = '\0';
-  }
+  (void)proc;
+  extern void vfs_normalize_path(const char *in, char *out, usize cap);
+  vfs_normalize_path(path, out_buf, out_max);
 }
 
 static i64 sys_open(u64 path_ptr, u64 flags, u64 mode, u64 a4, u64 a5, u64 a6) {
@@ -856,6 +831,10 @@ static i64 sys_fork(u64 a1, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
   if (proc_create(parent, parent->p_comm, &child) != XIU_SUCCESS || !child)
     return -1;
 
+  if (child->p_task->ta_vm_map) {
+    extern void pmm_release_page(xiu_paddr_t addr);
+    pmm_release_page((xiu_paddr_t)child->p_task->ta_vm_map);
+  }
   child->p_task->ta_vm_map =
       (void *)pmap_clone_user_space((u64)parent_task->ta_vm_map);
   child->p_task->ta_mmap_next = parent_task->ta_mmap_next;
@@ -1333,17 +1312,18 @@ extern xiu_error_t ipc_kmsg_copyin(ipc_kmsg_t *kmsg, u64 user_header,
                                    ipc_space_t *space);
 extern xiu_error_t ipc_kmsg_copyout(ipc_kmsg_t *kmsg, u64 user_buf,
                                     u32 buf_size, ipc_space_t *space);
-extern xiu_error_t ipc_mqueue_send(ipc_port_t *port, ipc_kmsg_t *kmsg,
+extern xiu_error_t ipc_mqueue_send(struct ipc_port *port, ipc_kmsg_t *kmsg,
                                    u32 timeout);
-extern xiu_error_t ipc_mqueue_receive(ipc_port_t *port, ipc_kmsg_t **kmsg_out,
-                                      u32 timeout);
+extern xiu_error_t ipc_mqueue_receive(struct ipc_port *port,
+                                      ipc_kmsg_t **kmsg_out, u32 timeout);
 extern ipc_kmsg_t *ipc_kmsg_alloc(u32 size);
 extern void ipc_kmsg_free(ipc_kmsg_t *kmsg);
-extern void ipc_port_unlock(ipc_port_t *port);
-extern void ipc_port_reference(ipc_port_t *port);
+extern void ipc_port_unlock(struct ipc_port *port);
+extern void ipc_port_reference(struct ipc_port *port);
 extern mach_port_name_t space_alloc_name(ipc_space_t *space);
-extern xiu_error_t mach_register_service(const char *name, ipc_port_t *port);
-extern ipc_port_t *mach_lookup_service(const char *name);
+extern xiu_error_t mach_register_service(const char *name,
+                                         struct ipc_port *port);
+extern struct ipc_port *mach_lookup_service(const char *name);
 extern xiu_error_t copyout(const void *kaddr, void *uaddr, usize len);
 extern xiu_error_t copyin(const void *uaddr, void *kaddr, usize len);
 
@@ -1374,7 +1354,7 @@ static i64 sys_mach_msg(u64 msg_ptr, u64 option, u64 send_sz, u64 rcv_sz,
       return -1;
     }
 
-    ipc_port_t *port = kmsg->ikm_remote_port;
+    struct ipc_port *port = kmsg->ikm_remote_port;
     kprintf("[IPC] sys_mach_msg SEND: pid=%u to_port=%p msgh_id=%u\n", cur_pid,
             (void *)port, ((mach_msg_header_t *)kmsg->ikm_header)->msgh_id);
     xiu_error_t err = ipc_mqueue_send(port, kmsg, (u32)timeout);
@@ -1388,7 +1368,7 @@ static i64 sys_mach_msg(u64 msg_ptr, u64 option, u64 send_sz, u64 rcv_sz,
   }
 
   if (option & 2) {
-    ipc_port_t *port = ipc_port_lookup(
+    struct ipc_port *port = ipc_port_lookup(
         task->ta_ipc_space, (mach_port_name_t)rcv_name, MACH_PORT_TYPE_RECEIVE);
     if (!port) {
       kprintf("[IPC] RCV port lookup failed for rcv_name=0x%llx (pid=%u)\n",
@@ -1458,7 +1438,7 @@ static i64 sys_mach_register_service(u64 name_ptr, u64 port_name, u64 a3,
   if (!task)
     return -1;
 
-  ipc_port_t *port = ipc_port_lookup(
+  struct ipc_port *port = ipc_port_lookup(
       task->ta_ipc_space, (mach_port_name_t)port_name, MACH_PORT_TYPE_RECEIVE);
   if (!port) {
     port = ipc_port_lookup(task->ta_ipc_space, (mach_port_name_t)port_name,
@@ -1507,7 +1487,7 @@ static i64 sys_mach_lookup_service(u64 name_ptr, u64 name_out_ptr, u64 a3,
   }
   safe_name[63] = '\0';
 
-  ipc_port_t *port = mach_lookup_service(safe_name);
+  struct ipc_port *port = mach_lookup_service(safe_name);
   if (!port)
     return -1;
 
@@ -1627,10 +1607,14 @@ static i64 sys_stat(u64 path, u64 statbuf, u64 a3, u64 a4, u64 a5, u64 a6) {
 
   xiu_user_stat_t st;
   __builtin_memset(&st, 0, sizeof(st));
-  st.st_ino = (u32)((uptr)vp & 0xFFFFFFFFu);
+  st.st_dev = 1;
   st.st_mode = vnode_mode(vp);
-  st.st_nlink = 1;
-  st.st_size = vp->v_attr.va_size;
+  st.st_nlink = (vp->v_type == VDIR) ? 2 : 1;
+  st.st_ino = (u64)((uptr)vp & 0xFFFFFFFFu);
+  st.st_uid = 0;
+  st.st_gid = 0;
+  st.st_rdev = 0;
+  st.st_size = (i64)vp->v_attr.va_size;
   st.st_blksize = 4096;
   st.st_blocks = (st.st_size + 511) / 512;
   return (copyout(&st, (void *)statbuf, sizeof(st)) == XIU_SUCCESS) ? 0 : -1;
@@ -2691,7 +2675,7 @@ static i64 sys_fstat(u64 fd_u, u64 statbuf, u64 a3, u64 a4, u64 a5, u64 a6) {
   xiu_user_stat_t st;
   __builtin_memset(&st, 0, sizeof(st));
   st.st_dev = 1;
-  st.st_ino = (u32)((uptr)fp & 0xFFFFFFFFu);
+  st.st_ino = (u64)((uptr)fp & 0xFFFFFFFFu);
   st.st_nlink = 1;
   st.st_uid = 0;
   st.st_gid = 0;
@@ -2704,7 +2688,8 @@ static i64 sys_fstat(u64 fd_u, u64 statbuf, u64 a3, u64 a4, u64 a5, u64 a6) {
   } else if (fp->fp_vnode) {
     vnode_t *vp = fp->fp_vnode;
     st.st_mode = vnode_mode(vp);
-    st.st_size = vp->v_attr.va_size;
+    st.st_nlink = (vp->v_type == VDIR) ? 2 : 1;
+    st.st_size = (i64)vp->v_attr.va_size;
     st.st_blocks = (st.st_size + 511) / 512;
   }
 

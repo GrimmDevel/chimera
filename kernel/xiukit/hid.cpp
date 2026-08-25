@@ -1,17 +1,17 @@
 // ps2 + usb hid input layer
-#include <kernel/panic.h>
-#include <kernel/xiu_types.h>
+#include <kernel/input.h>
 #include <kernel/io.h>
 #include <kernel/ipc_message.h>
 #include <kernel/ipc_port.h>
-#include <kernel/input.h>
+#include <kernel/panic.h>
+#include <kernel/xiu_types.h>
 
 extern "C" void console_in_push(char c);
 extern "C" void console_scroll_viewport(int delta);
 extern "C" void console_scroll_to_bottom(void);
 
-#define PS2_DATA   0x60
-#define PS2_CMD    0x64
+#define PS2_DATA 0x60
+#define PS2_CMD 0x64
 #define PS2_STATUS 0x64
 
 namespace XIUKit {
@@ -25,7 +25,8 @@ private:
 
 public:
   bool push(const T &item) {
-    if (count == Size) return false;
+    if (count == Size)
+      return false;
     data[tail] = item;
     tail = (tail + 1) % Size;
     count++;
@@ -33,7 +34,8 @@ public:
   }
 
   bool pop(T *item) {
-    if (count == 0) return false;
+    if (count == 0)
+      return false;
     *item = data[head];
     head = (head + 1) % Size;
     count--;
@@ -67,8 +69,10 @@ private:
   void ps2_wait(bool data) {
     u32 timeout = 100000;
     while (timeout--) {
-      if (data == 0 && (inb(PS2_STATUS) & 2) == 0) return;
-      if (data == 1 && (inb(PS2_STATUS) & 1) == 1) return;
+      if (data == 0 && (inb(PS2_STATUS) & 2) == 0)
+        return;
+      if (data == 1 && (inb(PS2_STATUS) & 1) == 1)
+        return;
     }
   }
 
@@ -84,57 +88,82 @@ private:
 
   void ps2_flush() {
     u32 guard = 256;
-    while (guard-- && (inb(PS2_STATUS) & 1)) (void)inb(PS2_DATA);
+    while (guard-- && (inb(PS2_STATUS) & 1))
+      (void)inb(PS2_DATA);
   }
 
   u32 get_modifiers() const {
     u32 mods = 0;
-    if (lshift_down || rshift_down) mods |= XIU_MOD_SHIFT;
-    if (lctrl_down || rctrl_down)   mods |= XIU_MOD_CTRL;
-    if (lalt_down || ralt_down)     mods |= XIU_MOD_ALT;
-    if (lcmd_down || rcmd_down)     mods |= XIU_MOD_CMD;
-    if (capslock_active)            mods |= XIU_MOD_CAPSLOCK;
-    if (lshift_down)                mods |= XIU_MOD_LSHIFT;
-    if (rshift_down)                mods |= XIU_MOD_RSHIFT;
-    if (lctrl_down)                 mods |= XIU_MOD_LCTRL;
-    if (rctrl_down)                 mods |= XIU_MOD_RCTRL;
-    if (lalt_down)                  mods |= XIU_MOD_LALT;
-    if (ralt_down)                  mods |= XIU_MOD_RALT;
-    if (lcmd_down)                  mods |= XIU_MOD_LCMD;
-    if (rcmd_down)                  mods |= XIU_MOD_RCMD;
+    if (lshift_down || rshift_down)
+      mods |= XIU_MOD_SHIFT;
+    if (lctrl_down || rctrl_down)
+      mods |= XIU_MOD_CTRL;
+    if (lalt_down || ralt_down)
+      mods |= XIU_MOD_ALT;
+    if (lcmd_down || rcmd_down)
+      mods |= XIU_MOD_CMD;
+    if (capslock_active)
+      mods |= XIU_MOD_CAPSLOCK;
+    if (lshift_down)
+      mods |= XIU_MOD_LSHIFT;
+    if (rshift_down)
+      mods |= XIU_MOD_RSHIFT;
+    if (lctrl_down)
+      mods |= XIU_MOD_LCTRL;
+    if (rctrl_down)
+      mods |= XIU_MOD_RCTRL;
+    if (lalt_down)
+      mods |= XIU_MOD_LALT;
+    if (ralt_down)
+      mods |= XIU_MOD_RALT;
+    if (lcmd_down)
+      mods |= XIU_MOD_LCMD;
+    if (rcmd_down)
+      mods |= XIU_MOD_RCMD;
     return mods;
   }
 
   u32 decode_scancode(u8 scancode, bool extended, u32 mods) {
     if (extended) {
       switch (scancode) {
-        case 0x48: return 0x1001;
-        case 0x50: return 0x1002;
-        case 0x4B: return 0x1003;
-        case 0x4D: return 0x1004;
-        case 0x47: return 0x1005;
-        case 0x4F: return 0x1006;
-        case 0x49: return 0x1007;
-        case 0x51: return 0x1008;
-        case 0x53: return 0x7F;
-        default: return 0;
+      case 0x48:
+        return 0x1001;
+      case 0x50:
+        return 0x1002;
+      case 0x4B:
+        return 0x1003;
+      case 0x4D:
+        return 0x1004;
+      case 0x47:
+        return 0x1005;
+      case 0x4F:
+        return 0x1006;
+      case 0x49:
+        return 0x1007;
+      case 0x51:
+        return 0x1008;
+      case 0x53:
+        return 0x7F;
+      default:
+        return 0;
       }
     }
 
-    if (scancode >= 128) return 0;
+    if (scancode >= 128)
+      return 0;
 
     static const char normal[128] = {
-        0,   27,  '1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '-', '=',
-        '\b', '\t', 'q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p', '[', ']',
-        '\n', 0,   'a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l', ';', '\'', '`',
-        0,   '\\', 'z', 'x', 'c', 'v', 'b', 'n', 'm', ',', '.', '/', 0,   '*',
-        0,   ' ', 0};
+        0,   27,  '1',  '2',  '3',  '4', '5', '6',  '7', '8', '9', '0',
+        '-', '=', '\b', '\t', 'q',  'w', 'e', 'r',  't', 'y', 'u', 'i',
+        'o', 'p', '[',  ']',  '\n', 0,   'a', 's',  'd', 'f', 'g', 'h',
+        'j', 'k', 'l',  ';',  '\'', '`', 0,   '\\', 'z', 'x', 'c', 'v',
+        'b', 'n', 'm',  ',',  '.',  '/', 0,   '*',  0,   ' ', 0};
     static const char shifted[128] = {
-        0,   27,  '!', '@', '#', '$', '%', '^', '&', '*', '(', ')', '_', '+',
-        '\b', '\t', 'Q', 'W', 'E', 'R', 'T', 'Y', 'U', 'I', 'O', 'P', '{', '}',
-        '\n', 0,   'A', 'S', 'D', 'F', 'G', 'H', 'J', 'K', 'L', ':', '"', '~',
-        0,   '|', 'Z', 'X', 'C', 'V', 'B', 'N', 'M', '<', '>', '?', 0,   '*',
-        0,   ' ', 0};
+        0,   27,  '!',  '@',  '#',  '$', '%', '^', '&', '*', '(', ')',
+        '_', '+', '\b', '\t', 'Q',  'W', 'E', 'R', 'T', 'Y', 'U', 'I',
+        'O', 'P', '{',  '}',  '\n', 0,   'A', 'S', 'D', 'F', 'G', 'H',
+        'J', 'K', 'L',  ':',  '"',  '~', 0,   '|', 'Z', 'X', 'C', 'V',
+        'B', 'N', 'M',  '<',  '>',  '?', 0,   '*', 0,   ' ', 0};
 
     bool shift = (mods & XIU_MOD_SHIFT) != 0;
     bool caps = (mods & XIU_MOD_CAPSLOCK) != 0;
@@ -150,33 +179,53 @@ private:
 
     // ctrl shortcuts
     if (mods & XIU_MOD_CTRL) {
-      if (ch >= 'a' && ch <= 'z') return (u32)(ch - 'a' + 1);
-      if (ch >= 'A' && ch <= 'Z') return (u32)(ch - 'A' + 1);
-      if (ch == '[' || ch == '{') return 27;
-      if (ch == '\\' || ch == '|') return 28;
-      if (ch == ']' || ch == '}') return 29;
-      if (ch == '^' || ch == '6') return 30;
-      if (ch == '_' || ch == '-') return 31;
-      if (ch == ' ' || ch == '@') return 0;
+      if (ch >= 'a' && ch <= 'z')
+        return (u32)(ch - 'a' + 1);
+      if (ch >= 'A' && ch <= 'Z')
+        return (u32)(ch - 'A' + 1);
+      if (ch == '[' || ch == '{')
+        return 27;
+      if (ch == '\\' || ch == '|')
+        return 28;
+      if (ch == ']' || ch == '}')
+        return 29;
+      if (ch == '^' || ch == '6')
+        return 30;
+      if (ch == '_' || ch == '-')
+        return 31;
+      if (ch == ' ' || ch == '@')
+        return 0;
     }
 
     // gui / cmd shortcuts
     if (mods & XIU_MOD_CMD) {
-      if (ch == 's' || ch == 'S') return 19;
-      if (ch == 'q' || ch == 'Q') return 17;
-      if (ch == 'f' || ch == 'F') return 6;
-      if (ch == 'c' || ch == 'C') return 3;
-      if (ch == 'k' || ch == 'K') return 12;
-      if (ch == 'w' || ch == 'W') return 23;
-      if (ch == 'a' || ch == 'A') return 1;
-      if (ch == 'z' || ch == 'Z') return 26;
-      if (ch == 'x' || ch == 'X') return 24;
-      if (ch == 'v' || ch == 'V') return 22;
-      if (ch == '\b') return 21;
+      if (ch == 's' || ch == 'S')
+        return 19;
+      if (ch == 'q' || ch == 'Q')
+        return 17;
+      if (ch == 'f' || ch == 'F')
+        return 6;
+      if (ch == 'c' || ch == 'C')
+        return 3;
+      if (ch == 'k' || ch == 'K')
+        return 12;
+      if (ch == 'w' || ch == 'W')
+        return 23;
+      if (ch == 'a' || ch == 'A')
+        return 1;
+      if (ch == 'z' || ch == 'Z')
+        return 26;
+      if (ch == 'x' || ch == 'X')
+        return 24;
+      if (ch == 'v' || ch == 'V')
+        return 22;
+      if (ch == '\b')
+        return 21;
     }
 
     if (mods & XIU_MOD_ALT) {
-      if (ch == '\b') return 23;
+      if (ch == '\b')
+        return 23;
     }
 
     return (u32)ch;
@@ -190,10 +239,12 @@ public:
       return;
     }
 
-    kprintf("[XIU-Kit] HID: Initializing input subsystem (PS/2 & SMM USB Emulation)\n");
+    kprintf("[XIU-Kit] HID: Initializing input subsystem (PS/2 & SMM USB "
+            "Emulation)\n");
 
     u32 guard = 256;
-    while (guard-- && (inb(PS2_STATUS) & 1)) (void)inb(PS2_DATA);
+    while (guard-- && (inb(PS2_STATUS) & 1))
+      (void)inb(PS2_DATA);
 
     ps2_write(PS2_CMD, 0x20);
     u8 status = ps2_read();
@@ -213,13 +264,15 @@ public:
   void handle_irq() {
     while (true) {
       u8 status = inb(PS2_STATUS);
-      if (!(status & 0x01)) break;
+      if (!(status & 0x01))
+        break;
 
       bool is_mouse_packet = (status & 0x20) != 0;
       u8 b = inb(PS2_DATA);
 
       if (is_mouse_packet) {
-        if (mouse_cycle == 0 && !(b & 0x08)) continue;
+        if (mouse_cycle == 0 && !(b & 0x08))
+          continue;
 
         mouse_byte[mouse_cycle++] = b;
         if (mouse_cycle >= mouse_packet_size) {
@@ -230,8 +283,10 @@ public:
             i32 dx = (i32)mouse_byte[1];
             i32 dy = (i32)mouse_byte[2];
 
-            if (state & 0x10) dx |= ~0xFF;
-            if (state & 0x20) dy |= ~0xFF;
+            if (state & 0x10)
+              dx |= ~0xFF;
+            if (state & 0x20)
+              dy |= ~0xFF;
 
             xiu_event_t ev;
             ev.type = XIU_EVENT_MOUSE_MOVED;
@@ -254,19 +309,46 @@ public:
         is_extended = false;
 
         if (!extended) {
-          if (scancode == 0x2A) { lshift_down = !release; goto emit_event; }
-          if (scancode == 0x36) { rshift_down = !release; goto emit_event; }
-          if (scancode == 0x1D) { lctrl_down = !release; goto emit_event; }
-          if (scancode == 0x38) { lalt_down = !release; goto emit_event; }
-          if (scancode == 0x3A && !release) { capslock_active = !capslock_active; goto emit_event; }
+          if (scancode == 0x2A) {
+            lshift_down = !release;
+            goto emit_event;
+          }
+          if (scancode == 0x36) {
+            rshift_down = !release;
+            goto emit_event;
+          }
+          if (scancode == 0x1D) {
+            lctrl_down = !release;
+            goto emit_event;
+          }
+          if (scancode == 0x38) {
+            lalt_down = !release;
+            goto emit_event;
+          }
+          if (scancode == 0x3A && !release) {
+            capslock_active = !capslock_active;
+            goto emit_event;
+          }
         } else {
-          if (scancode == 0x1D) { rctrl_down = !release; goto emit_event; }
-          if (scancode == 0x38) { ralt_down = !release; goto emit_event; }
-          if (scancode == 0x5B) { lcmd_down = !release; goto emit_event; }
-          if (scancode == 0x5C) { rcmd_down = !release; goto emit_event; }
+          if (scancode == 0x1D) {
+            rctrl_down = !release;
+            goto emit_event;
+          }
+          if (scancode == 0x38) {
+            ralt_down = !release;
+            goto emit_event;
+          }
+          if (scancode == 0x5B) {
+            lcmd_down = !release;
+            goto emit_event;
+          }
+          if (scancode == 0x5C) {
+            rcmd_down = !release;
+            goto emit_event;
+          }
         }
 
-emit_event:
+      emit_event:
         u32 mods = get_modifiers();
         u32 unicode = decode_scancode(scancode, extended, mods);
 
@@ -278,9 +360,11 @@ emit_event:
         event_queue.push(ev);
 
         if (!release && unicode != 0) {
-          if (unicode == 0x1007 || ((mods & XIU_MOD_SHIFT) && unicode == 0x1001)) {
+          if (unicode == 0x1007 ||
+              ((mods & XIU_MOD_SHIFT) && unicode == 0x1001)) {
             console_scroll_viewport(unicode == 0x1007 ? 10 : 1);
-          } else if (unicode == 0x1008 || ((mods & XIU_MOD_SHIFT) && unicode == 0x1002)) {
+          } else if (unicode == 0x1008 ||
+                     ((mods & XIU_MOD_SHIFT) && unicode == 0x1002)) {
             console_scroll_viewport(unicode == 0x1008 ? -10 : -1);
           } else if ((mods & XIU_MOD_SHIFT) && unicode == 0x1005) {
             console_scroll_viewport(10000);
@@ -290,17 +374,29 @@ emit_event:
             console_scroll_to_bottom();
 
             if (unicode == 0x1001) {
-              console_in_push('\033'); console_in_push('['); console_in_push('A');
+              console_in_push('\033');
+              console_in_push('[');
+              console_in_push('A');
             } else if (unicode == 0x1002) {
-              console_in_push('\033'); console_in_push('['); console_in_push('B');
+              console_in_push('\033');
+              console_in_push('[');
+              console_in_push('B');
             } else if (unicode == 0x1003) {
-              console_in_push('\033'); console_in_push('['); console_in_push('D');
+              console_in_push('\033');
+              console_in_push('[');
+              console_in_push('D');
             } else if (unicode == 0x1004) {
-              console_in_push('\033'); console_in_push('['); console_in_push('C');
+              console_in_push('\033');
+              console_in_push('[');
+              console_in_push('C');
             } else if (unicode == 0x1005) {
-              console_in_push('\033'); console_in_push('['); console_in_push('H');
+              console_in_push('\033');
+              console_in_push('[');
+              console_in_push('H');
             } else if (unicode == 0x1006) {
-              console_in_push('\033'); console_in_push('['); console_in_push('F');
+              console_in_push('\033');
+              console_in_push('[');
+              console_in_push('F');
             } else {
               console_in_push((char)unicode);
             }
@@ -320,17 +416,29 @@ emit_event:
 
     if (!release && unicode != 0) {
       if (unicode == 0x1001) {
-        console_in_push('\033'); console_in_push('['); console_in_push('A');
+        console_in_push('\033');
+        console_in_push('[');
+        console_in_push('A');
       } else if (unicode == 0x1002) {
-        console_in_push('\033'); console_in_push('['); console_in_push('B');
+        console_in_push('\033');
+        console_in_push('[');
+        console_in_push('B');
       } else if (unicode == 0x1003) {
-        console_in_push('\033'); console_in_push('['); console_in_push('D');
+        console_in_push('\033');
+        console_in_push('[');
+        console_in_push('D');
       } else if (unicode == 0x1004) {
-        console_in_push('\033'); console_in_push('['); console_in_push('C');
+        console_in_push('\033');
+        console_in_push('[');
+        console_in_push('C');
       } else if (unicode == 0x1005) {
-        console_in_push('\033'); console_in_push('['); console_in_push('H');
+        console_in_push('\033');
+        console_in_push('[');
+        console_in_push('H');
       } else if (unicode == 0x1006) {
-        console_in_push('\033'); console_in_push('['); console_in_push('F');
+        console_in_push('\033');
+        console_in_push('[');
+        console_in_push('F');
       } else {
         console_in_push((char)unicode);
       }
@@ -381,23 +489,25 @@ static HIDDriver s_hid;
 
 extern "C" void xiukit_xhci_poll(void);
 
-extern "C" void xiukit_hid_irq_handler(void) { 
-  XIUKit::s_hid.handle_irq(); 
+extern "C" void xiukit_hid_irq_handler(void) {
+  XIUKit::s_hid.handle_irq();
   xiukit_xhci_poll();
 }
 
-extern "C" void xiukit_hid_poll(void) { 
-  XIUKit::s_hid.handle_irq(); 
+extern "C" void xiukit_hid_poll(void) {
+  XIUKit::s_hid.handle_irq();
   xiukit_xhci_poll();
 }
 
 extern "C" void xiukit_hid_init() { XIUKit::s_hid.init(); }
 
-extern "C" void xiukit_hid_push_key_event(u32 scancode, u32 unicode, u32 mods, bool release) {
+extern "C" void xiukit_hid_push_key_event(u32 scancode, u32 unicode, u32 mods,
+                                          bool release) {
   XIUKit::s_hid.push_key_event(scancode, unicode, mods, release);
 }
 
-extern "C" void xiukit_hid_push_mouse_event(i32 dx, i32 dy, i32 dz, u32 buttons) {
+extern "C" void xiukit_hid_push_mouse_event(i32 dx, i32 dy, i32 dz,
+                                            u32 buttons) {
   XIUKit::s_hid.push_mouse_event(dx, dy, dz, buttons);
 }
 
