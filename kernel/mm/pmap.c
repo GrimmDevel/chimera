@@ -132,6 +132,42 @@ u64 pmap_map_user_page(u64 target_pml4_phys, u64 vaddr, u64 paddr, u32 flags) {
     return ret;
 }
 
+// pmap_vtophys: robust virtual to physical translation for ANY address (including kernel/HHDM)
+u64 pmap_vtophys(u64 pml4_phys, u64 vaddr) {
+    if (!pml4_phys) return 0;
+    
+    // Fast path for HHDM
+    if (vaddr >= g_hhdm_base && vaddr < (g_hhdm_base + 0x400000000000ULL)) {
+        return vaddr - g_hhdm_base;
+    }
+    
+    u64 *pml4 = get_table_ptr(pml4_phys);
+    u64 pml4e = pml4[(vaddr >> 39) & 0x1FF];
+    if (!(pml4e & PAGE_PRESENT)) return 0;
+
+    u64 *pdpt = get_table_ptr(pml4e);
+    u64 pdpte = pdpt[(vaddr >> 30) & 0x1FF];
+    if (!(pdpte & PAGE_PRESENT)) return 0;
+    
+    if (pdpte & (1ULL << 7)) { // 1GB page
+        return (pdpte & 0x000FFFFFC0000000ULL) | (vaddr & 0x3FFFFFFFULL);
+    }
+
+    u64 *pd = get_table_ptr(pdpte);
+    u64 pde = pd[(vaddr >> 21) & 0x1FF];
+    if (!(pde & PAGE_PRESENT)) return 0;
+    
+    if (pde & (1ULL << 7)) { // 2MB page
+        return (pde & 0x000FFFFFFFE00000ULL) | (vaddr & 0x1FFFFFULL);
+    }
+
+    u64 *pt = get_table_ptr(pde);
+    u64 pte = pt[(vaddr >> 12) & 0x1FF];
+    if (!(pte & PAGE_PRESENT)) return 0;
+    
+    return (pte & PTE_PHYS_MASK) | (vaddr & 0xFFFULL);
+}
+
 // pmap_extract
 u64 pmap_extract(u64 pml4_phys, u64 vaddr) {
     if (!pml4_phys || vaddr < 0x1000 || vaddr >= 0x0000800000000000ULL) return 0;

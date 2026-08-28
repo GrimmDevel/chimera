@@ -84,6 +84,8 @@ typedef struct CHIMERA_PACKED chimera_boot_info {
   u32 fb_height;
   u32 fb_stride;
   u32 fb_format;
+  u32 fb_bpp;
+  u32 fb_pitch;
 
   chimera_paddr_t rsdp_base;
   chimera_paddr_t smbios_base;
@@ -282,7 +284,7 @@ static bool spawn_user_process(const char *path, const char *name) {
   return (elf_addr != nullptr);
 }
 
-void chimera_kernel_main(void) {
+void chimera_kernel_main(chimera_boot_info_t *info) {
   // higher Half Direct Map base — MUST be initialized first!
   if (hhdm_request.response) {
     g_hhdm_base = hhdm_request.response->offset;
@@ -293,54 +295,67 @@ void chimera_kernel_main(void) {
   // early console & framebuffer
   console_init();
 
-  if (framebuffer_request.response &&
-      framebuffer_request.response->framebuffer_count > 0) {
-    struct limine_framebuffer *fb =
-        framebuffer_request.response->framebuffers[0];
-
-    g_boot_info->fb_base = (chimera_paddr_t)((u64)fb->address - g_hhdm_base);
-    g_boot_info->fb_width = fb->width;
-    g_boot_info->fb_height = fb->height;
-    g_boot_info->fb_stride = fb->pitch / (fb->bpp / 8);
+  if (info != nullptr && info->magic == CHIMERA_BOOT_MAGIC) {
+    __builtin_memcpy(g_boot_info, info, sizeof(chimera_boot_info_t));
     g_fb_phys_addr = g_boot_info->fb_base;
+    kprintf("[CHIMERA] Kernel loaded via XIU EFI Bootloader\n");
+  } else {
+    // translate Limine info into chimera_boot_info_t
+    g_boot_info->magic = CHIMERA_BOOT_MAGIC;
 
+    if (framebuffer_request.response &&
+        framebuffer_request.response->framebuffer_count > 0) {
+      struct limine_framebuffer *fb =
+          framebuffer_request.response->framebuffers[0];
+
+      g_boot_info->fb_base = (chimera_paddr_t)((u64)fb->address - g_hhdm_base);
+      g_boot_info->fb_width = fb->width;
+      g_boot_info->fb_height = fb->height;
+      g_boot_info->fb_bpp = fb->bpp;
+      g_boot_info->fb_pitch = fb->pitch;
+      g_boot_info->fb_stride = fb->pitch / (fb->bpp / 8);
+      g_fb_phys_addr = g_boot_info->fb_base;
+    }
+    // translate Limine info into chimera_boot_info_t
+    g_boot_info->magic = CHIMERA_BOOT_MAGIC;
+
+    if (memmap_request.response) {
+      g_boot_info->memmap_base = (chimera_paddr_t)memmap_request.response->entries;
+      g_boot_info->memmap_count = memmap_request.response->entry_count;
+    } else {
+      kprintf("[CHIMERA] Warning: No memory map from bootloader.\n");
+    }
+
+    if (rsdp_request.response) {
+      g_boot_info->rsdp_base = (chimera_paddr_t)rsdp_request.response->address;
+    }
+
+    if (smp_request.response) {
+      g_cpu_count = (u32)smp_request.response->cpu_count;
+      kprintf("[CHIMERA] SMP: Detected %u CPU(s)\n", g_cpu_count);
+    }
+
+    if (kernel_addr_request.response) {
+      g_boot_info->kernel_phys_start =
+          kernel_addr_request.response->physical_base;
+      g_boot_info->kernel_virt_start = kernel_addr_request.response->virtual_base;
+      g_boot_info->kernel_phys_end = g_boot_info->kernel_phys_start + 0x100000;
+    }
+
+    validate_boot_info(g_boot_info);
+    kprintf("[CHIMERA] Kernel loaded via Limine Protocol\n");
+  }
+
+  if (g_boot_info->fb_base != 0) {
     extern void console_init_display(unsigned long baseaddr, uint64_t physaddr,
                                      unsigned int width, unsigned int height,
                                      unsigned int depth, unsigned int pitch);
-    console_init_display((unsigned long)fb->address, (uint64_t)g_boot_info->fb_base,
-                         fb->width, fb->height, fb->bpp, fb->pitch);
+    console_init_display((unsigned long)(g_boot_info->fb_base + g_hhdm_base), (uint64_t)g_boot_info->fb_base,
+                         g_boot_info->fb_width, g_boot_info->fb_height, g_boot_info->fb_bpp, g_boot_info->fb_pitch);
   }
 
   serial_puts("[CHIMERA] Early boot — console active\n");
   print_banner();
-
-  // translate Limine info into chimera_boot_info_t
-  g_boot_info->magic = CHIMERA_BOOT_MAGIC;
-
-  if (memmap_request.response) {
-    g_boot_info->memmap_base = (chimera_paddr_t)memmap_request.response->entries;
-    g_boot_info->memmap_count = memmap_request.response->entry_count;
-  }
-
-  if (rsdp_request.response) {
-    g_boot_info->rsdp_base = (chimera_paddr_t)rsdp_request.response->address;
-  }
-
-  if (smp_request.response) {
-    g_cpu_count = (u32)smp_request.response->cpu_count;
-    kprintf("[CHIMERA] SMP: Detected %u CPU(s)\n", g_cpu_count);
-  }
-
-  if (kernel_addr_request.response) {
-    g_boot_info->kernel_phys_start =
-        kernel_addr_request.response->physical_base;
-    g_boot_info->kernel_virt_start = kernel_addr_request.response->virtual_base;
-    g_boot_info->kernel_phys_end = g_boot_info->kernel_phys_start + 0x100000;
-  }
-
-  validate_boot_info(g_boot_info);
-
-  kprintf("[CHIMERA] Kernel loaded via Limine Protocol\n");
 
   kprintf("[CHIMERA] Framebuffer: %ux%u @ phys=0x%llx\n", g_boot_info->fb_width,
           g_boot_info->fb_height, (unsigned long long)g_boot_info->fb_base);
@@ -386,6 +401,8 @@ void chimera_kernel_main(void) {
 
   kprintf("[CHIMERA] Phase 4: Mach IPC subsystem\n");
 
+  extern void task_init(void);
+  task_init();
   proc_init();
   CHIMERA_ASSERT(task_kernel != NULL);
   CHIMERA_ASSERT(proc_kernel != NULL);

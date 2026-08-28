@@ -987,11 +987,7 @@ chimera_error_t fat32_init(void) {
 
     __builtin_memset(&g_fat32, 0, sizeof(fat32_fs_t));
 
-    if (!ata_is_present()) {
-        spinlock_unlock_irqrestore(&s_fat_lock, irq);
-        kprintf("[FAT32] Cannot mount: ATA drive not present.\n");
-        return CHIMERA_ERR_NOTFOUND;
-    }
+    // ponytail: ata_read_sectors transparently falls back to AHCI when legacy ATA absent
 
     u8 boot_sec[ATA_SECTOR_SIZE];
     if (ata_read_sectors(0, 1, boot_sec) != CHIMERA_SUCCESS) {

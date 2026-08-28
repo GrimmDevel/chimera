@@ -1,8 +1,8 @@
 // context switch (x86_64)
 .intel_syntax noprefix
 
-.global context_switch
-context_switch:
+.global _context_switch
+_context_switch:
     // rdi = old_stack_ptr (void**), rsi = new_stack_ptr (void*), rdx = new_cr3, rcx = old_fp (void*), r8 = new_fp (void*), r9 = old_running_cpu (u32*)
     pushfq
     cli

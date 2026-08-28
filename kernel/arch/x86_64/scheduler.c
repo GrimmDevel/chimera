@@ -223,7 +223,7 @@ void scheduler_yield(void) {
           "1:\n"
           "sti\n"
           "hlt\n"
-          "call scheduler_yield\n"
+          "call _scheduler_yield\n"
           "jmp 1b\n"
           : : "r"(idle_sp) : "memory");
     }

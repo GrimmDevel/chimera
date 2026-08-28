@@ -78,6 +78,23 @@ typedef u64         chimera_obj_id_t;
 
 typedef s32         chimera_error_t;
 
+typedef enum {
+    CHIMERA_MEM_RESERVED = 0,
+    CHIMERA_MEM_USABLE = 1,
+    CHIMERA_MEM_ACPI_RECLAIM = 2,
+    CHIMERA_MEM_ACPI_NVS = 3,
+    CHIMERA_MEM_BOOTLOADER_RECLAIM = 4,
+    CHIMERA_MEM_KERNEL = 5,
+    CHIMERA_MEM_FRAMEBUFFER = 6
+} chimera_mem_type_t;
+
+typedef struct {
+    u64 base;
+    u64 length;
+    u32 type;
+    u32 reserved_pad;
+} chimera_memmap_entry_t;
+
 #define CHIMERA_SUCCESS          ((chimera_error_t)  0)
 #define CHIMERA_ERR_GENERIC      ((chimera_error_t) -1)
 #define CHIMERA_ERR_NOMEM        ((chimera_error_t) -2)

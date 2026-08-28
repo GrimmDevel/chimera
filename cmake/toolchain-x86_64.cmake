@@ -15,11 +15,11 @@ find_program(LLVM_OBJCOPY  NAMES /opt/homebrew/opt/llvm/bin/llvm-objcopy /usr/lo
 set(CMAKE_C_COMPILER    ${LLVM_CLANG})
 set(CMAKE_CXX_COMPILER  ${LLVM_CLANGXX})
 set(CMAKE_ASM_COMPILER  ${LLVM_CLANG})
-set(CMAKE_LINKER        ${LLVM_LLD})
+set(CMAKE_LINKER        ld)
 set(CMAKE_AR            ${LLVM_AR})
 set(CMAKE_OBJCOPY       ${LLVM_OBJCOPY})
 
-set(CHIMERA_TARGET_TRIPLE "x86_64-unknown-none-elf")
+set(CHIMERA_TARGET_TRIPLE "x86_64-apple-darwin")
 set(CMAKE_C_COMPILER_TARGET   ${CHIMERA_TARGET_TRIPLE})
 set(CMAKE_CXX_COMPILER_TARGET ${CHIMERA_TARGET_TRIPLE})
 
@@ -64,9 +64,8 @@ set(CHIMERA_STACK_SIZE  "0x8000"             CACHE STRING "" FORCE)
 
 set(CMAKE_ASM_FLAGS "-target ${CHIMERA_TARGET_TRIPLE}")
 
-# ── Linker Bypass for macOS (force ELF LLD) ────────────────────────────────
-# We call ld.lld directly to avoid Apple-specific flags from the Clang driver.
-set(CMAKE_C_LINK_EXECUTABLE 
-    "${LLVM_LLD} -flavor gnu <OBJECTS> -o <TARGET> <LINK_LIBRARIES> <LINK_FLAGS> -static -z max-page-size=0x1000 -z noexecstack")
-set(CMAKE_CXX_LINK_EXECUTABLE 
-    "${LLVM_LLD} -flavor gnu <OBJECTS> -o <TARGET> <LINK_LIBRARIES> <LINK_FLAGS> -static -z max-page-size=0x1000 -z noexecstack")
+# Use compiler driver to link on macOS for Mach-O
+set(CMAKE_C_LINK_EXECUTABLE
+    "${CMAKE_C_COMPILER} -target ${CHIMERA_TARGET_TRIPLE} <FLAGS> <CMAKE_C_LINK_FLAGS> <LINK_FLAGS> <OBJECTS>  -o <TARGET> <LINK_LIBRARIES>")
+set(CMAKE_CXX_LINK_EXECUTABLE
+    "${CMAKE_CXX_COMPILER} -target ${CHIMERA_TARGET_TRIPLE} <FLAGS> <CMAKE_CXX_LINK_FLAGS> <LINK_FLAGS> <OBJECTS>  -o <TARGET> <LINK_LIBRARIES>")

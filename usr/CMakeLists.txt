@@ -39,6 +39,7 @@ add_library(chimera_crt0 OBJECT
 
 add_library(system_chimera STATIC
     libsystem/libsystem_chimera.c
+    libsystem/wctype_stubs.c
     libsystem/pwd_grp.c
     libsystem/getlogin.c
     libsystem/setlogin.c

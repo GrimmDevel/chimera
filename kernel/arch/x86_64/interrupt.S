@@ -1,6 +1,6 @@
-.section .text
+.text
 
-.extern interrupt_handler
+.extern _interrupt_handler
 
 .macro INTERRUPT_STUB num, has_err=0
 .global intr\num
@@ -36,7 +36,7 @@ interrupt_common:
 
     movq %rsp, %rdi
     cld
-    call interrupt_handler
+    call _interrupt_handler
 
     popq %r15
     popq %r14
@@ -319,9 +319,9 @@ INTERRUPT_STUB 253
 INTERRUPT_STUB 254
 INTERRUPT_STUB 255
 
-.section .data
-.global interrupt_handlers
-interrupt_handlers:
+.data
+.global _interrupt_handlers
+_interrupt_handlers:
     .quad intr0
     .quad intr1
     .quad intr2

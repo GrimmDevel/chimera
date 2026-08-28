@@ -83,3 +83,4 @@ int memcmp(const void *s1, const void *s2, usize n) {
     }
     return 0;
 }
+void __bzero(void *b, unsigned long len) { char *p = b; while(len--) *p++ = 0; }

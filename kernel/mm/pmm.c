@@ -11,7 +11,7 @@
 #include <kernel/panic.h>
 #include <kernel/spinlock.h>
 #include <kernel/chimera_types.h>
-#include <limine/limine.h>
+#include <kernel/chimera_types.h>
 
 extern void kprintf(const char *fmt, ...);
 
@@ -83,27 +83,36 @@ void pmm_init(chimera_paddr_t memmap_base, usize memmap_count) {
         s_buddy_freelist[o] = nullptr;
     }
 
-    struct limine_memmap_entry **entries = (struct limine_memmap_entry **)memmap_base;
+    chimera_memmap_entry_t *entries = (chimera_memmap_entry_t *)memmap_base;
     if (!entries || memmap_count == 0) {
-        kprintf("[pmm] WARNING: no Limine memmap\n");
+        kprintf("[pmm] WARNING: no memmap provided\n");
         return;
     }
+
+    kprintf("[pmm] sizeof(chimera_memmap_entry_t) = %zu\n", sizeof(chimera_memmap_entry_t));
 
     u64 max_phys_addr = 0;
     usize total_ram_bytes = 0;
 
     for (usize e = 0; e < memmap_count; e++) {
-        struct limine_memmap_entry *entry = entries[e];
-        if (!entry) continue;
-
-        if (entry->base + entry->length > max_phys_addr) {
-            max_phys_addr = entry->base + entry->length;
+        chimera_memmap_entry_t *entry = &entries[e];
+        if (e < 10) {
+            kprintf("[pmm] entry %zu: base=0x%llx, len=0x%llx, type=%u\n", e, (unsigned long long)entry->base, (unsigned long long)entry->length, entry->type);
+        }
+        if (entry->type == CHIMERA_MEM_USABLE ||
+            entry->type == CHIMERA_MEM_BOOTLOADER_RECLAIM ||
+            entry->type == CHIMERA_MEM_KERNEL ||
+            entry->type == CHIMERA_MEM_ACPI_RECLAIM ||
+            entry->type == CHIMERA_MEM_ACPI_NVS) {
+            if (entry->base + entry->length > max_phys_addr) {
+                max_phys_addr = entry->base + entry->length;
+            }
         }
 
-        if (entry->type == LIMINE_MEMMAP_USABLE ||
-            entry->type == LIMINE_MEMMAP_BOOTLOADER_RECLAIMABLE ||
-            entry->type == LIMINE_MEMMAP_KERNEL_AND_MODULES ||
-            entry->type == LIMINE_MEMMAP_ACPI_RECLAIMABLE) {
+        if (entry->type == CHIMERA_MEM_USABLE ||
+            entry->type == CHIMERA_MEM_BOOTLOADER_RECLAIM ||
+            entry->type == CHIMERA_MEM_KERNEL ||
+            entry->type == CHIMERA_MEM_ACPI_RECLAIM) {
             total_ram_bytes += entry->length;
         }
     }
@@ -118,8 +127,8 @@ void pmm_init(chimera_paddr_t memmap_base, usize memmap_count) {
     extern u64 g_hhdm_base;
     chimera_paddr_t array_paddr = 0;
     for (usize e = 0; e < memmap_count; e++) {
-        struct limine_memmap_entry *entry = entries[e];
-        if (!entry || entry->type != LIMINE_MEMMAP_USABLE) continue;
+        chimera_memmap_entry_t *entry = &entries[e];
+        if (entry->type != CHIMERA_MEM_USABLE) continue;
         if (entry->length >= page_array_bytes + 0x100000) {
             array_paddr = (entry->base >= 0x100000) ? entry->base : 0x100000;
             break;
@@ -127,8 +136,8 @@ void pmm_init(chimera_paddr_t memmap_base, usize memmap_count) {
     }
     if (!array_paddr) {
         for (usize e = 0; e < memmap_count; e++) {
-            struct limine_memmap_entry *entry = entries[e];
-            if (entry && entry->type == LIMINE_MEMMAP_USABLE && entry->length >= page_array_bytes) {
+            chimera_memmap_entry_t *entry = &entries[e];
+            if (entry->type == CHIMERA_MEM_USABLE && entry->length >= page_array_bytes) {
                 array_paddr = entry->base;
                 break;
             }
@@ -138,6 +147,14 @@ void pmm_init(chimera_paddr_t memmap_base, usize memmap_count) {
     s_pages = (vm_page_t *)(array_paddr + g_hhdm_base);
     usize array_first_page = (usize)(array_paddr / CHIMERA_PAGE_SIZE);
     usize array_last_page = array_first_page + page_array_pages;
+
+    kprintf("[pmm] max_phys_addr: 0x%llx, s_max_phys_page: %zu, array_paddr: 0x%llx, page_array_bytes: %zu\n",
+            (unsigned long long)max_phys_addr, s_max_phys_page, (unsigned long long)array_paddr, page_array_bytes);
+
+    if (array_paddr == 0) {
+        kprintf("[pmm] PANIC: Could not allocate s_pages!\n");
+        while(1);
+    }
 
     // initialize all page descriptors as wired/used initially
     for (usize i = 0; i < s_max_phys_page; i++) {
@@ -152,8 +169,8 @@ void pmm_init(chimera_paddr_t memmap_base, usize memmap_count) {
 
     // populate free pages from usable regions
     for (usize e = 0; e < memmap_count; e++) {
-        struct limine_memmap_entry *entry = entries[e];
-        if (!entry || entry->type != LIMINE_MEMMAP_USABLE) continue;
+        chimera_memmap_entry_t *entry = &entries[e];
+        if (entry->type != CHIMERA_MEM_USABLE) continue;
 
         u64 base = entry->base;
         u64 len = entry->length;

@@ -211,8 +211,14 @@ static chimera_error_t ata_write_single_sector_lba28(u32 lba, const void *buf) {
     return CHIMERA_SUCCESS;
 }
 
+// ponytail: ahci fallback — Q35/SATA has no legacy ATA, forward to AHCI port 0
+extern chimera_error_t ahci_read_blocks(u32 port, u64 lba, u32 count, void *buffer);
+extern chimera_error_t ahci_write_blocks(u32 port, u64 lba, u32 count, const void *buffer);
+
 chimera_error_t ata_read_sectors(u64 lba, u32 count, void *buf) {
-    if (!g_ata_drive.present) return CHIMERA_ERR_NOTFOUND;
+    if (!g_ata_drive.present)
+        return ahci_read_blocks(0, lba, count, buf);
+
     if (lba + count > g_ata_drive.sector_count) return CHIMERA_ERR_OVERFLOW;
 
     irq_flags_t irq = spinlock_lock_irqsave(&s_ata_lock);
@@ -231,7 +237,9 @@ chimera_error_t ata_read_sectors(u64 lba, u32 count, void *buf) {
 }
 
 chimera_error_t ata_write_sectors(u64 lba, u32 count, const void *buf) {
-    if (!g_ata_drive.present) return CHIMERA_ERR_NOTFOUND;
+    if (!g_ata_drive.present)
+        return ahci_write_blocks(0, lba, count, buf);
+
     if (lba + count > g_ata_drive.sector_count) return CHIMERA_ERR_OVERFLOW;
 
     irq_flags_t irq = spinlock_lock_irqsave(&s_ata_lock);

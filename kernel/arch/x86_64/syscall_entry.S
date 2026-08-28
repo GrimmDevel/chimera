@@ -5,13 +5,13 @@
 #define CPU_LOCAL_USER_RSP_SAVE     0x8
 #define THREAD_KERNEL_STACK_OFFSET  0x30
 
-.global x86_64_syscall_entry
-.extern syscall_dispatch
+.global _x86_64_syscall_entry
+.extern _syscall_dispatch
 
-.section .text
+.text
 .align 16
 
-x86_64_syscall_entry:
+_x86_64_syscall_entry:
     swapgs
 
     mov QWORD PTR gs:[CPU_LOCAL_USER_RSP_SAVE], rsp
@@ -43,7 +43,7 @@ x86_64_syscall_entry:
     mov [rsp], r12
     mov [rsp + 8], rbp
 
-    call syscall_dispatch
+    call _syscall_dispatch
 
     mov rsp, rbp
 
@@ -63,8 +63,8 @@ x86_64_syscall_entry:
     swapgs
     sysretq
 
-.global task_switch_to_user
-task_switch_to_user:
+.global _task_switch_to_user
+_task_switch_to_user:
     cli
 
     mov ax, 0x1B
@@ -81,8 +81,8 @@ task_switch_to_user:
     swapgs
     iretq
 
-.global task_switch_to_user_frame
-task_switch_to_user_frame:
+.global _task_switch_to_user_frame
+_task_switch_to_user_frame:
     cli
     
     mov r10, rdi

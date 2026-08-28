@@ -68,7 +68,8 @@ recreate-disk: build
 qemu: build disk
 	@./scripts/run_qemu.sh $(ARCH) $(if $(filter -wserver --wserver wserver gui -gui,$(MAKECMDGOALS)),-wserver,$(WSERVER))
 
-run: qemu
+run:
+	@./scripts/build_darwin.sh
 
 run-gui: build disk
 	@./scripts/run_qemu.sh $(ARCH) -wserver

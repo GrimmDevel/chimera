@@ -100,7 +100,6 @@ void smp_ap_entry(struct limine_smp_info *info) {
     scheduler_ap_run();
 }
 
-extern volatile struct limine_smp_request smp_request;
 
 void smp_init(void) {
     // 1. bsp setup
@@ -120,56 +119,8 @@ void smp_init(void) {
     wrmsr(MSR_GS_BASE, (u64)&g_cpu_data[0]);
     wrmsr(MSR_KERNEL_GS_BASE, 0);
 
-    // 2. Initialize BSP Local APIC
+    // Initialize BSP Local APIC
     lapic_init_bsp();
-
-    // 3. Check Limine SMP Response
-    if (!smp_request.response) {
-        kprintf("[SMP] Limine SMP response not found — running uniprocessor\n");
-        return;
-    }
-
-    struct limine_smp_response *resp = smp_request.response;
-    s_total_cpus = (u32)resp->cpu_count;
-    if (s_total_cpus > CHIMERA_MAX_CPUS) s_total_cpus = CHIMERA_MAX_CPUS;
-
-    kprintf("[SMP] Discovered %u CPU cores via Limine SMP\n", s_total_cpus);
-
-    // 4. boot ap cores
-    for (u32 i = 0; i < s_total_cpus; i++) {
-        struct limine_smp_info *info = resp->cpus[i];
-        if (info->lapic_id == resp->bsp_lapic_id) {
-            g_cpu_data[0].cpu_lapic_id = info->lapic_id;
-            continue;
-        }
-
-        u32 cpu_idx = i;
-        g_cpu_data[cpu_idx].cpu_id = cpu_idx;
-        g_cpu_data[cpu_idx].cpu_lapic_id = info->lapic_id;
-        g_cpu_data[cpu_idx].cpu_is_bsp = 0;
-        g_cpu_data[cpu_idx].cpu_is_active = 0;
-        g_cpu_data[cpu_idx].cpu_gdt_ptr = s_ap_gdt[cpu_idx];
-        g_cpu_data[cpu_idx].cpu_tss_ptr = &s_ap_tss[cpu_idx];
-
-        // allocate 16 KB kernel stack for this AP
-        chimera_paddr_t stack_phys = pmm_alloc_pages(4);
-        if (stack_phys) {
-            u64 stack_top = stack_phys + HHDM_BASE + (4 * 4096);
-            g_cpu_data[cpu_idx].cpu_kernel_stack = (void *)stack_top;
-            s_ap_tss[cpu_idx].rsp0 = stack_top;
-        }
-
-        info->extra_argument = (u64)&g_cpu_data[cpu_idx];
-        
-        // signal Limine to jump AP to smp_ap_entry
-        __atomic_store_n(&info->goto_address, (limine_goto_address)smp_ap_entry, __ATOMIC_RELEASE);
-
-        // wait up to 50ms for AP to come online
-        for (int spin = 0; spin < 50000; spin++) {
-            if (g_cpu_data[cpu_idx].cpu_is_active) break;
-            for (volatile int d = 0; d < 1000; d++);
-        }
-    }
 
     kprintf("  [  OK  ]  SMP: %u / %u CPU cores active and running\n",
             g_active_cpus, s_total_cpus);

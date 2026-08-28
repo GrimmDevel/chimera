@@ -12,7 +12,7 @@
 
 chimera_proc_t *proc_kernel = nullptr;
 chimera_proc_t *proc_launchd = nullptr;
-chimera_task_t *task_kernel = nullptr;
+
 
 #define PROC_POOL_SIZE 64
 chimera_proc_t s_proc_pool[PROC_POOL_SIZE];
@@ -20,15 +20,11 @@ static spinlock_t s_proc_pool_lock = SPINLOCK_INIT;
 static _Atomic(u32) s_pid_seq = 1;
 
 chimera_proc_t s_kernel_proc_obj;
-static chimera_task_t s_kernel_task_obj;
+
 
 void proc_init(void) {
-  task_kernel = &s_kernel_task_obj;
-  __builtin_memset(task_kernel, 0, sizeof(chimera_task_t));
-  task_kernel->ta_signature = CHIMERA_TASK_MAGIC;
-  task_kernel->ta_id = 0;
-  task_kernel->ta_flags = TASK_FLAG_KERNEL | TASK_FLAG_64BIT;
-  spinlock_init(&task_kernel->ta_lock);
+  // task_kernel is already initialized by task_init()
+  CHIMERA_ASSERT(task_kernel != nullptr);
 
   proc_kernel = &s_kernel_proc_obj;
   __builtin_memset(proc_kernel, 0, sizeof(chimera_proc_t));

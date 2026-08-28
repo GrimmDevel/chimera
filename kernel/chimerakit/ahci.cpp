@@ -19,6 +19,8 @@ extern "C" {
     void kprintf(const char *fmt, ...);
     chimera_paddr_t pmm_alloc_page(void);
     void pmm_free_page(chimera_paddr_t addr);
+    u64 pmap_kernel_pml4(void);
+    u64 pmap_vtophys(u64 pml4_phys, u64 vaddr);
 }
 
 namespace XIUKit {
@@ -226,7 +228,11 @@ public:
 
         // buffer physical address
         u64 buf_vaddr = (u64)buffer;
-        u64 buf_phys = (buf_vaddr >= g_hhdm_base) ? (buf_vaddr - g_hhdm_base) : buf_vaddr;
+        u64 buf_phys = pmap_vtophys(pmap_kernel_pml4(), buf_vaddr);
+        if (!buf_phys) {
+            spinlock_unlock_irqrestore(&m_lock, flags);
+            return CHIMERA_ERR_INVALID;
+        }
 
         cmdtbl->prdt_entry[0].dba  = (u32)(buf_phys & 0xFFFFFFFF);
         cmdtbl->prdt_entry[0].dbau = (u32)((buf_phys >> 32) & 0xFFFFFFFF);
@@ -270,6 +276,82 @@ public:
             return CHIMERA_ERR_IO;
         }
 
+        return (port->ci & 1u) ? CHIMERA_ERR_IO : CHIMERA_SUCCESS;
+    }
+
+    // mirrors read_blocks but with ATA_CMD_WRITE_DMA_EXT and w=1
+    chimera_error_t write_blocks(u32 port_idx, u64 lba, u32 count, const void *buffer) {
+        if (!m_hba || count == 0 || !buffer) return CHIMERA_ERR_INVALID;
+
+        hba_port_t *port = nullptr;
+        bool found = false;
+        for (u32 i = 0; i < m_port_count; i++) {
+            if (m_active_ports[i] == port_idx) {
+                port = &m_hba->ports[port_idx];
+                found = true;
+                break;
+            }
+        }
+        if (!found || !port) return CHIMERA_ERR_NOTFOUND;
+
+        irq_flags_t flags = spinlock_lock_irqsave(&m_lock);
+
+        port->is   = (u32)-1;
+        port->serr = (u32)-1;
+
+        u64 clb_phys = ((u64)port->clbu << 32) | port->clb;
+        hba_cmd_header_t *cmdheader = (hba_cmd_header_t *)(clb_phys + g_hhdm_base);
+
+        cmdheader->cfl   = sizeof(fis_reg_h2d_t) / sizeof(u32);
+        cmdheader->w     = 1; // write direction
+        cmdheader->prdtl = 1;
+
+        u64 ctba_phys = ((u64)cmdheader->ctbau << 32) | cmdheader->ctba;
+        hba_cmd_tbl_t *cmdtbl = (hba_cmd_tbl_t *)(ctba_phys + g_hhdm_base);
+        __builtin_memset(cmdtbl, 0, sizeof(hba_cmd_tbl_t));
+
+        // buffer physical address
+        u64 buf_vaddr = (u64)buffer;
+        u64 buf_phys = pmap_vtophys(pmap_kernel_pml4(), buf_vaddr);
+        if (!buf_phys) {
+            spinlock_unlock_irqrestore(&m_lock, flags);
+            return CHIMERA_ERR_INVALID;
+        }
+
+        cmdtbl->prdt_entry[0].dba  = (u32)(buf_phys & 0xFFFFFFFF);
+        cmdtbl->prdt_entry[0].dbau = (u32)((buf_phys >> 32) & 0xFFFFFFFF);
+        cmdtbl->prdt_entry[0].dbc  = (count * 512) - 1;
+        cmdtbl->prdt_entry[0].i    = 1;
+
+        fis_reg_h2d_t *cmdfis = (fis_reg_h2d_t *)(&cmdtbl->cfis[0]);
+        cmdfis->fis_type = FIS_TYPE_REG_H2D;
+        cmdfis->c        = 1;
+        cmdfis->command  = 0x35; // ATA_CMD_WRITE_DMA_EXT
+
+        cmdfis->lba0 = (u8)lba;
+        cmdfis->lba1 = (u8)(lba >> 8);
+        cmdfis->lba2 = (u8)(lba >> 16);
+        cmdfis->device = 1u << 6;
+        cmdfis->lba3 = (u8)(lba >> 24);
+        cmdfis->lba4 = (u8)(lba >> 32);
+        cmdfis->lba5 = (u8)(lba >> 40);
+        cmdfis->countl = (u8)(count & 0xFF);
+        cmdfis->counth = (u8)((count >> 8) & 0xFF);
+
+        port->ci = 1u;
+
+        u32 timeout = 1000000;
+        while (timeout--) {
+            if (!(port->ci & 1u)) break;
+            if (port->is & (1u << 30)) {
+                spinlock_unlock_irqrestore(&m_lock, flags);
+                return CHIMERA_ERR_IO;
+            }
+        }
+
+        spinlock_unlock_irqrestore(&m_lock, flags);
+
+        if (port->tfd & (ATA_DEV_ERR | ATA_DEV_BUSY)) return CHIMERA_ERR_IO;
         return (port->ci & 1u) ? CHIMERA_ERR_IO : CHIMERA_SUCCESS;
     }
 
@@ -332,15 +414,27 @@ static AHCIDriver *s_ahci_driver_instance = nullptr;
 
 } // namespace XIUKit
 
+inline void* operator new(unsigned long, void* p) noexcept { return p; }
+
 extern "C" void chimerakit_ahci_init(u64 abar_phys) {
     if (!abar_phys) return;
-    static XIUKit::AHCIDriver s_ahci(abar_phys);
-    s_ahci.init();
-    XIUKit::s_ahci_driver_instance = &s_ahci;
+    alignas(XIUKit::AHCIDriver) static char ahci_buf[sizeof(XIUKit::AHCIDriver)];
+    static bool initialized = false;
+    if (!initialized) {
+        XIUKit::AHCIDriver* s_ahci = new (ahci_buf) XIUKit::AHCIDriver(abar_phys);
+        s_ahci->init();
+        XIUKit::s_ahci_driver_instance = s_ahci;
+        initialized = true;
+    }
 }
 
 extern "C" chimera_error_t ahci_read_blocks(u32 port, u64 lba, u32 count, void *buffer) {
     if (!XIUKit::s_ahci_driver_instance) return CHIMERA_ERR_NOTFOUND;
     return XIUKit::s_ahci_driver_instance->read_blocks(port, lba, count, buffer);
+}
+
+extern "C" chimera_error_t ahci_write_blocks(u32 port, u64 lba, u32 count, const void *buffer) {
+    if (!XIUKit::s_ahci_driver_instance) return CHIMERA_ERR_NOTFOUND;
+    return XIUKit::s_ahci_driver_instance->write_blocks(port, lba, count, buffer);
 }
 

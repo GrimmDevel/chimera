@@ -1,0 +1,94 @@
+TARGET_TRIPLE = x86_64-apple-darwin
+CC = clang
+CXX = clang++
+LD = ld
+
+CFLAGS = -target $(TARGET_TRIPLE) \
+         -mkernel -fapple-kext \
+         -nostdlib -nostdlibinc -fno-builtin -fno-exceptions -fno-stack-protector \
+         -O2 -Wall -Wextra \
+         -I./kernel/include -I./kernel -I./drivers
+
+CXXFLAGS = $(CFLAGS) -fno-rtti -fno-threadsafe-statics -std=c++20
+
+ASFLAGS = -target $(TARGET_TRIPLE) -x assembler-with-cpp -I./kernel/include -I./kernel
+
+LDFLAGS = -static \
+          -e _chimera_kernel_main \
+          -no_pie \
+          -pagezero_size 0 \
+          -image_base 0xffffff8000000000 \
+          -segalign 0x1000
+
+KERNEL_OBJS = \
+    kernel/chimera_kernel_main.o \
+    kernel/console.o \
+    kernel/video_console.o \
+    kernel/iso_font.o \
+    kernel/lib.o \
+    kernel/kernel_stubs.o \
+    kernel/mach/task.o \
+    kernel/mach/ipc_port.o \
+    kernel/mach/ipc_kmsg.o \
+    kernel/mach/ipc_kobject.o \
+    kernel/mach/wait_queue.o \
+    kernel/mm/pmm.o \
+    kernel/mm/pmap.o \
+    kernel/mm/copy.o \
+    kernel/mm/zone.o \
+    kernel/mm/vm_object.o \
+    kernel/mm/vm_map.o \
+    kernel/bsd/proc.o \
+    kernel/bsd/fileproc.o \
+    kernel/bsd/launchd.o \
+    kernel/bsd/syscall.o \
+    kernel/vfs/vfs.o \
+    kernel/vfs/devfs.o \
+    kernel/vfs/pty.o \
+    kernel/vfs/pipe.o \
+    kernel/bsd/mach_loader.o \
+    kernel/vfs/fat32.o \
+    kernel/drivers/ata.o \
+    kernel/drivers/net/e1000.o \
+    kernel/net/mbuf.o \
+    kernel/net/if.o \
+    kernel/net/if_loop.o \
+    kernel/net/ethernet.o \
+    kernel/net/arp.o \
+    kernel/net/ip.o \
+    kernel/net/icmp.o \
+    kernel/net/udp.o \
+    kernel/net/tcp.o \
+    kernel/net/dhcp.o \
+    kernel/net/uipc_socket.o \
+    kernel/net/net_init.o \
+    kernel/chimerakit/chimerakit_pci.o \
+    kernel/chimerakit/runtime.o \
+    kernel/chimerakit/hid.o \
+    kernel/chimerakit/xhci.o \
+    kernel/chimerakit/ahci.o \
+    kernel/arch/x86_64/gdt.o \
+    kernel/arch/x86_64/idt.o \
+    kernel/arch/x86_64/lapic.o \
+    kernel/arch/x86_64/smp.o \
+    kernel/arch/x86_64/interrupt.o \
+    kernel/arch/x86_64/syscall_entry.o \
+    kernel/arch/x86_64/scheduler.o \
+    kernel/arch/x86_64/switch.o \
+    kernel/kext/kext_request.o
+
+mach_kernel: $(KERNEL_OBJS)
+	$(LD) $(LDFLAGS) -o $@ $(KERNEL_OBJS)
+	@echo "build: mach_kernel (MH_EXECUTE)"
+
+%.o: %.c
+	$(CC) $(CFLAGS) -c $< -o $@
+
+%.o: %.cpp
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+%.o: %.S
+	$(CC) $(ASFLAGS) -c $< -o $@
+
+clean:
+	rm -f $(KERNEL_OBJS) mach_kernel

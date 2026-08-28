@@ -3781,3 +3781,16 @@ void globfree(glob_t *pglob) {
 
 
 
+
+// Dummy math functions for userspace
+float powf(float x, float y) {
+    // very basic dummy implementation for testing
+    if (y == 0.0f) return 1.0f;
+    if (x == 0.0f) return 0.0f;
+    float res = 1.0f;
+    for (int i = 0; i < (int)y; i++) res *= x;
+    return res;
+}
+
+
+

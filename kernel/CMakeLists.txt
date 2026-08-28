@@ -6,6 +6,7 @@ add_executable(chimera_kernel
     iso_font.c
     lib.c
     kernel_stubs.c
+    mach/task.c
     mach/ipc_port.c
     mach/ipc_kmsg.c
     mach/ipc_kobject.c
@@ -61,11 +62,20 @@ target_include_directories(chimera_kernel PRIVATE
     ${CMAKE_SOURCE_DIR}/drivers
 )
 
-target_link_options(chimera_kernel PRIVATE "-T" "${CMAKE_SOURCE_DIR}/kernel/arch/x86_64/linker.ld")
+target_link_options(chimera_kernel PRIVATE 
+    "-nostdlib"
+    "-Wl,-e,_chimera_kernel_main"
+    "-Wl,-pagezero_size,0"
+    "-Wl,-image_base,0xffffff8000000000"
+    "-Wl,-segalign,0x1000"
+    "-Wl,-no_pie"
+    "-static"
+)
 
 # Enable C++ for ChimeraKit
 set_target_properties(chimera_kernel PROPERTIES LINKER_LANGUAGE CXX)
-target_compile_options(chimera_kernel PRIVATE 
+target_compile_options(chimera_kernel PRIVATE
+    -nostdlib -nostdlibinc -fno-builtin -fno-stack-protector -O2 -Wall -Wextra
     $<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions -fno-rtti -fno-threadsafe-statics -std=c++20>
 )
 

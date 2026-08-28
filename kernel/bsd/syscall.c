@@ -515,7 +515,12 @@ static i64 sys_open(u64 path_ptr, u64 flags, u64 mode, u64 a4, u64 a5, u64 a6) {
   (void)a6;
   if (!path_ptr)
     return -14; // -EFAULT
-  const char *path = (const char *)path_ptr;
+
+  char path[256];
+  usize copied = 0;
+  if (copyinstr((const void *)path_ptr, path, sizeof(path), &copied) != CHIMERA_SUCCESS)
+    return -14;
+
   dprintf("[SYSCALL] open(%s)\n", path);
 
   chimera_task_t *task = current_task();
@@ -1357,10 +1362,7 @@ static i64 sys_munmap(u64 addr, u64 len, u64 a3, u64 a4, u64 a5, u64 a6) {
 extern chimera_error_t ipc_port_alloc(ipc_space_t *space,
                                       mach_port_name_t *name_out,
                                       const char *label);
-extern chimera_error_t ipc_kmsg_copyin(ipc_kmsg_t *kmsg, u64 user_header,
-                                       ipc_space_t *space);
-extern chimera_error_t ipc_kmsg_copyout(ipc_kmsg_t *kmsg, u64 user_buf,
-                                        u32 buf_size, ipc_space_t *space);
+
 extern chimera_error_t ipc_mqueue_send(struct ipc_port *port, ipc_kmsg_t *kmsg,
                                        u32 timeout);
 extern chimera_error_t ipc_mqueue_receive(struct ipc_port *port,
@@ -1742,7 +1744,10 @@ static i64 sys_mkdir(u64 path_ptr, u64 mode, u64 a3, u64 a4, u64 a5, u64 a6) {
   (void)a6;
   if (!path_ptr)
     return -1;
-  const char *path = (const char *)path_ptr;
+  char path[256];
+  usize copied = 0;
+  if (copyinstr((const void *)path_ptr, path, sizeof(path), &copied) != CHIMERA_SUCCESS)
+    return -14; // EFAULT
   chimera_task_t *task = current_task();
   chimera_proc_t *proc = task ? task->ta_proc : nullptr;
 
@@ -1763,7 +1768,10 @@ static i64 sys_rmdir(u64 path_ptr, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
   (void)a6;
   if (!path_ptr)
     return -1;
-  const char *path = (const char *)path_ptr;
+  char path[256];
+  usize copied = 0;
+  if (copyinstr((const void *)path_ptr, path, sizeof(path), &copied) != CHIMERA_SUCCESS)
+    return -14; // EFAULT
   chimera_task_t *task = current_task();
   chimera_proc_t *proc = task ? task->ta_proc : nullptr;
 
