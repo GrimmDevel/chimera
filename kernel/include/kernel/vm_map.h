@@ -1,5 +1,5 @@
 /* =============================================================================
- * XIU Operating System — Darwin Mach Virtual Memory Map Interface
+ * Chimera Operating System — Darwin Mach Virtual Memory Map Interface
  * kernel/include/kernel/vm_map.h
  * ============================================================================= */
 
@@ -10,7 +10,7 @@
 #include <mach/vm_prot.h>
 #include <mach/vm_inherit.h>
 #include <kernel/spinlock.h>
-#include <kernel/xiu_types.h>
+#include <kernel/chimera_types.h>
 #include <kernel/vm_object.h>
 
 typedef struct vm_map_entry {
@@ -43,14 +43,14 @@ void        vm_map_destroy(vm_map_t map);
 void        vm_map_reference(vm_map_t map);
 void        vm_map_deallocate(vm_map_t map);
 
-xiu_error_t vm_map_enter(vm_map_t map, vm_offset_t *address, vm_size_t size,
+chimera_error_t vm_map_enter(vm_map_t map, vm_offset_t *address, vm_size_t size,
                          vm_offset_t mask, int flags, vm_object_t object,
                          vm_object_offset_t offset, bool copy,
                          vm_prot_t cur_protection, vm_prot_t max_protection,
                          vm_inherit_t inheritance);
 
-xiu_error_t vm_map_remove(vm_map_t map, vm_offset_t start, vm_offset_t end);
-xiu_error_t vm_map_protect(vm_map_t map, vm_offset_t start, vm_offset_t end,
+chimera_error_t vm_map_remove(vm_map_t map, vm_offset_t start, vm_offset_t end);
+chimera_error_t vm_map_protect(vm_map_t map, vm_offset_t start, vm_offset_t end,
                            vm_prot_t new_prot, bool set_max);
 vm_map_t    vm_map_fork(vm_map_t src_map);
 

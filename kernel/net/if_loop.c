@@ -1,5 +1,5 @@
 /* =============================================================================
- * XIU Operating System — Loopback Network Interface (lo0)
+ * Chimera Operating System — Loopback Network Interface (lo0)
  * kernel/net/if_loop.c
  * ============================================================================= */
 
@@ -9,9 +9,9 @@
 
 static ifnet_t s_loopback_if;
 
-static xiu_error_t loopback_output(ifnet_t *ifp, mbuf_t *m, struct in_addr dest_ip) {
+static chimera_error_t loopback_output(ifnet_t *ifp, mbuf_t *m, struct in_addr dest_ip) {
     (void)dest_ip;
-    if (!m) return XIU_ERR_INVALID;
+    if (!m) return CHIMERA_ERR_INVALID;
 
     ifp->if_data.ifi_opackets++;
     ifp->if_data.ifi_obytes += m->m_pkthdr.len;
@@ -21,7 +21,7 @@ static xiu_error_t loopback_output(ifnet_t *ifp, mbuf_t *m, struct in_addr dest_
     ifp->if_data.ifi_ibytes += m->m_pkthdr.len;
 
     if_input(ifp, m);
-    return XIU_SUCCESS;
+    return CHIMERA_SUCCESS;
 }
 
 void loopback_init(void) {

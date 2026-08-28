@@ -3,7 +3,7 @@
 multi-core x86_64 symmetric multiprocessing and priority-decay scheduler.
 
 ## multi-core bootstrap
-- limine smp protocol discovers up to 16 cores (`XIU_MAX_CPUS`).
+- limine smp protocol discovers up to 16 cores (`CHIMERA_MAX_CPUS`).
 - bsp initializes local apic, gdt, idt, syscall msrs, and per-cpu `cpu_local_t` struct mapped at `MSR_GS_BASE`.
 - ap cores are started via limine trampolines, initialize their own per-cpu gdt/tss, load idt, configure syscall msrs, and enter `scheduler_ap_run()`.
 

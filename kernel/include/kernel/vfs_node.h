@@ -1,9 +1,9 @@
 // vfs node (vnode) and mount structures
 #pragma once
-#ifndef XIU_VFS_NODE_H
-#define XIU_VFS_NODE_H
+#ifndef CHIMERA_VFS_NODE_H
+#define CHIMERA_VFS_NODE_H
 
-#include <kernel/xiu_types.h>
+#include <kernel/chimera_types.h>
 #include <kernel/spinlock.h>
 
 struct vnode;
@@ -50,8 +50,8 @@ typedef struct vattr {
     vtype_t     va_type;
     u16         va_mode;
     u32         va_nlink;
-    xiu_uid_t   va_uid;
-    xiu_gid_t   va_gid;
+    chimera_uid_t   va_uid;
+    chimera_gid_t   va_gid;
     u32         va_rdev;
     u64         va_size;
     u64         va_blocks;
@@ -65,73 +65,73 @@ typedef struct vattr {
 } vattr_t;
 
 typedef struct vfs_context {
-    xiu_uid_t           vc_uid;
-    xiu_gid_t           vc_gid;
-    xiu_pid_t           vc_pid;
-    struct xiu_thread  *vc_thread;
+    chimera_uid_t           vc_uid;
+    chimera_gid_t           vc_gid;
+    chimera_pid_t           vc_pid;
+    struct chimera_thread  *vc_thread;
 } vfs_context_t;
 
 typedef struct vnode_ops {
     const char *vop_name;
 
-    xiu_error_t (*vop_open)    (struct vnode *vp, int flags,
+    chimera_error_t (*vop_open)    (struct vnode *vp, int flags,
                                  vfs_context_t *ctx);
-    xiu_error_t (*vop_close)   (struct vnode *vp, int flags,
+    chimera_error_t (*vop_close)   (struct vnode *vp, int flags,
                                  vfs_context_t *ctx);
-    xiu_error_t (*vop_reclaim) (struct vnode *vp, vfs_context_t *ctx);
-    xiu_error_t (*vop_inactive)(struct vnode *vp, vfs_context_t *ctx);
+    chimera_error_t (*vop_reclaim) (struct vnode *vp, vfs_context_t *ctx);
+    chimera_error_t (*vop_inactive)(struct vnode *vp, vfs_context_t *ctx);
 
-    xiu_error_t (*vop_getattr) (struct vnode *vp, vattr_t *attr,
+    chimera_error_t (*vop_getattr) (struct vnode *vp, vattr_t *attr,
                                  vfs_context_t *ctx);
-    xiu_error_t (*vop_setattr) (struct vnode *vp, const vattr_t *attr,
+    chimera_error_t (*vop_setattr) (struct vnode *vp, const vattr_t *attr,
                                  vfs_context_t *ctx);
 
-    xiu_error_t (*vop_read)    (struct vnode *vp, struct uio *uio,
+    chimera_error_t (*vop_read)    (struct vnode *vp, struct uio *uio,
                                  int ioflags, vfs_context_t *ctx);
-    xiu_error_t (*vop_write)   (struct vnode *vp, struct uio *uio,
+    chimera_error_t (*vop_write)   (struct vnode *vp, struct uio *uio,
                                  int ioflags, vfs_context_t *ctx);
-    xiu_error_t (*vop_ioctl)   (struct vnode *vp, u64 cmd,
-                                 xiu_vaddr_t arg, vfs_context_t *ctx);
-    xiu_error_t (*vop_mmap)    (struct vnode *vp, xiu_offset_t offset,
-                                 xiu_size_t size, int prot,
+    chimera_error_t (*vop_ioctl)   (struct vnode *vp, u64 cmd,
+                                 chimera_vaddr_t arg, vfs_context_t *ctx);
+    chimera_error_t (*vop_mmap)    (struct vnode *vp, chimera_offset_t offset,
+                                 chimera_size_t size, int prot,
                                  vfs_context_t *ctx);
 
-    xiu_error_t (*vop_lookup)  (struct vnode *dvp, struct vnode **vpp,
+    chimera_error_t (*vop_lookup)  (struct vnode *dvp, struct vnode **vpp,
                                  const char *name, vfs_context_t *ctx);
-    xiu_error_t (*vop_mkdir)   (struct vnode *dvp, struct vnode **vpp,
+    chimera_error_t (*vop_mkdir)   (struct vnode *dvp, struct vnode **vpp,
                                  const char *name, vattr_t *attr,
                                  vfs_context_t *ctx);
-    xiu_error_t (*vop_rmdir)   (struct vnode *dvp, struct vnode *vp,
+    chimera_error_t (*vop_rmdir)   (struct vnode *dvp, struct vnode *vp,
                                  const char *name, vfs_context_t *ctx);
-    xiu_error_t (*vop_create)  (struct vnode *dvp, struct vnode **vpp,
+    chimera_error_t (*vop_create)  (struct vnode *dvp, struct vnode **vpp,
                                  const char *name, vattr_t *attr,
                                  vfs_context_t *ctx);
-    xiu_error_t (*vop_remove)  (struct vnode *dvp, struct vnode *vp,
+    chimera_error_t (*vop_remove)  (struct vnode *dvp, struct vnode *vp,
                                  const char *name, vfs_context_t *ctx);
-    xiu_error_t (*vop_rename)  (struct vnode *fdvp, struct vnode *fvp,
+    chimera_error_t (*vop_rename)  (struct vnode *fdvp, struct vnode *fvp,
                                  const char *fname,
                                  struct vnode *tdvp, struct vnode *tvp,
                                  const char *tname,
                                  vfs_context_t *ctx);
-    xiu_error_t (*vop_readdir) (struct vnode *dvp, struct uio *uio,
+    chimera_error_t (*vop_readdir) (struct vnode *dvp, struct uio *uio,
                                  vfs_context_t *ctx, int *eofflag);
-    xiu_error_t (*vop_symlink) (struct vnode *dvp, struct vnode **vpp,
+    chimera_error_t (*vop_symlink) (struct vnode *dvp, struct vnode **vpp,
                                  const char *name, const char *target,
                                  vattr_t *attr, vfs_context_t *ctx);
-    xiu_error_t (*vop_readlink)(struct vnode *vp, struct uio *uio,
+    chimera_error_t (*vop_readlink)(struct vnode *vp, struct uio *uio,
                                  vfs_context_t *ctx);
 
-    xiu_error_t (*vop_access)  (struct vnode *vp, int mode,
+    chimera_error_t (*vop_access)  (struct vnode *vp, int mode,
                                  vfs_context_t *ctx);
 
-    xiu_error_t (*vop_pageout) (struct vnode *vp, xiu_vaddr_t page_va,
-                                 xiu_size_t size, vfs_context_t *ctx);
-    xiu_error_t (*vop_pagein)  (struct vnode *vp, xiu_vaddr_t page_va,
-                                 xiu_offset_t offset, xiu_size_t size,
+    chimera_error_t (*vop_pageout) (struct vnode *vp, chimera_vaddr_t page_va,
+                                 chimera_size_t size, vfs_context_t *ctx);
+    chimera_error_t (*vop_pagein)  (struct vnode *vp, chimera_vaddr_t page_va,
+                                 chimera_offset_t offset, chimera_size_t size,
                                  vfs_context_t *ctx);
 } vnode_ops_t;
 
-typedef struct XIU_ALIGNED(64) vnode {
+typedef struct CHIMERA_ALIGNED(64) vnode {
     u64             v_signature;
     vtype_t         v_type;
     vflags_t        v_flags;
@@ -160,7 +160,7 @@ typedef struct XIU_ALIGNED(64) vnode {
     bool            v_attr_valid;
 } vnode_t;
 
-#define XIU_VNODE_MAGIC  UINT64_C(0x584955564E4F4445)
+#define CHIMERA_VNODE_MAGIC  UINT64_C(0x584955564E4F4445)
 
 typedef u32 mnt_flags_t;
 #define MNT_RDONLY      (1u << 0)
@@ -174,19 +174,19 @@ typedef u32 mnt_flags_t;
 
 typedef struct mount_ops {
     const char  *mop_name;
-    xiu_error_t (*mop_mount)  (struct mount *mp, vnode_t *devvp,
+    chimera_error_t (*mop_mount)  (struct mount *mp, vnode_t *devvp,
                                 const char *opts, vfs_context_t *ctx);
-    xiu_error_t (*mop_unmount)(struct mount *mp, int flags,
+    chimera_error_t (*mop_unmount)(struct mount *mp, int flags,
                                 vfs_context_t *ctx);
-    xiu_error_t (*mop_root)   (struct mount *mp, vnode_t **rootvp,
+    chimera_error_t (*mop_root)   (struct mount *mp, vnode_t **rootvp,
                                 vfs_context_t *ctx);
-    xiu_error_t (*mop_sync)   (struct mount *mp, int waitfor,
+    chimera_error_t (*mop_sync)   (struct mount *mp, int waitfor,
                                 vfs_context_t *ctx);
-    xiu_error_t (*mop_statfs) (struct mount *mp, void *statbuf,
+    chimera_error_t (*mop_statfs) (struct mount *mp, void *statbuf,
                                 vfs_context_t *ctx);
 } mount_ops_t;
 
-typedef struct XIU_ALIGNED(64) mount {
+typedef struct CHIMERA_ALIGNED(64) mount {
     u64             mnt_signature;
     spinlock_t      mnt_lock;
     mnt_flags_t     mnt_flags;
@@ -209,54 +209,58 @@ typedef struct XIU_ALIGNED(64) mount {
     struct mount   *mnt_next;
 } mount_t;
 
-#define XIU_MOUNT_MAGIC  UINT64_C(0x5849554D4E54504F)
+#define CHIMERA_MOUNT_MAGIC  UINT64_C(0x5849554D4E54504F)
 
 extern vnode_t *vfs_root_vnode;
 
-xiu_error_t vfs_init(void);
+chimera_error_t vfs_init(void);
 
-xiu_error_t vfs_mount(const char *fstype, const char *device,
+chimera_error_t vfs_mount(const char *fstype, const char *device,
                        const char *mountpath, mnt_flags_t flags,
                        vfs_context_t *ctx);
-xiu_error_t vfs_unmount(const char *mountpath, int flags,
+chimera_error_t vfs_unmount(const char *mountpath, int flags,
                          vfs_context_t *ctx);
 
-xiu_error_t vnode_get(vnode_t *vp);
+chimera_error_t vnode_get(vnode_t *vp);
 void        vnode_put(vnode_t *vp);
-xiu_error_t vnode_ref(vnode_t *vp);
+chimera_error_t vnode_ref(vnode_t *vp);
 void        vnode_rele(vnode_t *vp);
-xiu_error_t vnode_alloc(mount_t *mp, vtype_t type, vnode_ops_t *ops,
+chimera_error_t vnode_alloc(mount_t *mp, vtype_t type, vnode_ops_t *ops,
                          void *fsdata, vnode_t **vp_out);
 
-xiu_error_t vfs_lookup_path(const char *path, vnode_t **vp_out,
+chimera_error_t vfs_lookup_path(const char *path, vnode_t **vp_out,
                               vfs_context_t *ctx);
 
-xiu_error_t vfs_unregister(const char *path);
-xiu_error_t vfs_rename_node(const char *oldpath, const char *newpath);
+chimera_error_t vfs_unregister(const char *path);
+chimera_error_t vfs_rename_node(const char *oldpath, const char *newpath);
 
-xiu_error_t vfs_register_filesystem(mount_ops_t *ops);
+chimera_error_t vfs_register_filesystem(mount_ops_t *ops);
 
-XIU_ALWAYS_INLINE xiu_error_t
+CHIMERA_ALWAYS_INLINE chimera_error_t
 VOP_LOOKUP(vnode_t *dvp, vnode_t **vpp, const char *name, vfs_context_t *ctx) {
-    if (!dvp->v_op->vop_lookup) return XIU_ERR_NOTSUP;
+    if (!dvp || !dvp->v_op) return CHIMERA_ERR_INVALID;
+    if (!dvp->v_op->vop_lookup) return CHIMERA_ERR_NOTSUP;
     return dvp->v_op->vop_lookup(dvp, vpp, name, ctx);
 }
 
-XIU_ALWAYS_INLINE xiu_error_t
+CHIMERA_ALWAYS_INLINE chimera_error_t
 VOP_GETATTR(vnode_t *vp, vattr_t *attr, vfs_context_t *ctx) {
-    if (!vp->v_op->vop_getattr) return XIU_ERR_NOTSUP;
+    if (!vp || !vp->v_op) return CHIMERA_ERR_INVALID;
+    if (!vp->v_op->vop_getattr) return CHIMERA_ERR_NOTSUP;
     return vp->v_op->vop_getattr(vp, attr, ctx);
 }
 
-XIU_ALWAYS_INLINE xiu_error_t
+CHIMERA_ALWAYS_INLINE chimera_error_t
 VOP_OPEN(vnode_t *vp, int flags, vfs_context_t *ctx) {
-    if (!vp->v_op->vop_open) return XIU_SUCCESS;
+    if (!vp || !vp->v_op) return CHIMERA_ERR_INVALID;
+    if (!vp->v_op->vop_open) return CHIMERA_SUCCESS;
     return vp->v_op->vop_open(vp, flags, ctx);
 }
 
-XIU_ALWAYS_INLINE xiu_error_t
+CHIMERA_ALWAYS_INLINE chimera_error_t
 VOP_RECLAIM(vnode_t *vp, vfs_context_t *ctx) {
-    if (!vp->v_op->vop_reclaim) return XIU_SUCCESS;
+    if (!vp || !vp->v_op) return CHIMERA_ERR_INVALID;
+    if (!vp->v_op->vop_reclaim) return CHIMERA_SUCCESS;
     return vp->v_op->vop_reclaim(vp, ctx);
 }
 

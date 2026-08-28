@@ -1,0 +1,129 @@
+.sys-mon-root {
+  display: flex;
+  flex-direction: column;
+  background: #181825;
+  color: #cdd6f4;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-size: 12px;
+  padding: 10px;
+  border-radius: 6px;
+  width: 240px;
+  border: 1px solid #313244;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+}
+
+.sys-mon-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-bottom: 6px;
+  border-bottom: 1px solid #313244;
+  margin-bottom: 8px;
+}
+
+.sys-mon-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  font-size: 0.8rem;
+  color: #89b4fa;
+}
+
+.sys-mon-select {
+  background: #1e1e2e;
+  color: #a6adc8;
+  border: 1px solid #313244;
+  border-radius: 3px;
+  padding: 1px 4px;
+  font-size: 0.7rem;
+  outline: none;
+}
+
+.sys-mon-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sys-mon-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: #1e1e2e;
+  border: 1px solid #313244;
+  border-radius: 4px;
+  padding: 6px 8px;
+}
+
+.card-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.card-label {
+  color: #a6adc8;
+  font-size: 0.72rem;
+}
+
+.card-value {
+  font-family: monospace;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.chart-container {
+  width: 100%;
+  height: 36px;
+  margin-top: 2px;
+  overflow: hidden;
+}
+
+.sparkline-svg {
+  width: 100%;
+  height: 100%;
+}
+
+.meter-bg {
+  width: 100%;
+  height: 4px;
+  background: #11111b;
+  border-radius: 2px;
+  overflow: hidden;
+  margin-top: 2px;
+}
+
+.meter-fill {
+  height: 100%;
+  border-radius: 2px;
+  transition: width 0.3s ease;
+}
+
+.sys-mon-stats-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.stat-box {
+  background: #1e1e2e;
+  border: 1px solid #313244;
+  border-radius: 4px;
+  padding: 5px 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.stat-lbl {
+  font-size: 0.68rem;
+  color: #6c7086;
+}
+
+.stat-val {
+  font-size: 0.75rem;
+  font-family: monospace;
+  color: #cdd6f4;
+  font-weight: 600;
+}

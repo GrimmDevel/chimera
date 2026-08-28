@@ -1,5 +1,5 @@
 /*
- * XIU Operating System — PAM Implementation
+ * Chimera Operating System — PAM Implementation
  * usr/libsystem/pam_shim.c
  *
  * Implements OpenPAM / PAM application interface using libcrypt (SHA-512/SHA-256)

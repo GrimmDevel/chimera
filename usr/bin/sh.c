@@ -6,8 +6,8 @@
 #include <signal.h>
 #include <sys/wait.h>
 
-extern i64 xiu_fork(void);
-extern i64 xiu_chdir(const char *path);
+extern i64 chimera_fork(void);
+extern i64 chimera_chdir(const char *path);
 extern pid_t waitpid(pid_t pid, int *status, int options);
 extern i64 open(const char *path, int flags, int mode);
 
@@ -133,11 +133,11 @@ static void execute_single_command(char *cmd) {
     }
   } else if (strcmp(argv[0], "cd") == 0) {
     if (argc > 1) {
-      if (xiu_chdir(argv[1]) < 0) {
+      if (chimera_chdir(argv[1]) < 0) {
         printf("cd: no such file or directory: %s\n", argv[1]);
       }
     } else {
-      xiu_chdir("/");
+      chimera_chdir("/");
     }
     return;
   } else if (strcmp(argv[0], "export") == 0) {
@@ -162,7 +162,7 @@ static void execute_single_command(char *cmd) {
   }
 
   // fork and Exec
-  i64 pid = xiu_fork();
+  i64 pid = chimera_fork();
   if (pid == 0) {
     signal(SIGINT, SIG_DFL);
     if (redirect_file) {

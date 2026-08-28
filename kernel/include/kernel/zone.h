@@ -1,5 +1,5 @@
 /* =============================================================================
- * XIU Operating System — Darwin Mach Zone Allocator Interface
+ * Chimera Operating System — Darwin Mach Zone Allocator Interface
  * kernel/include/kernel/zone.h
  * ============================================================================= */
 
@@ -8,7 +8,7 @@
 
 #include <mach/vm_types.h>
 #include <kernel/spinlock.h>
-#include <kernel/xiu_types.h>
+#include <kernel/chimera_types.h>
 
 struct zone;
 typedef struct zone *zone_t;

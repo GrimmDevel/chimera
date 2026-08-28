@@ -1,9 +1,9 @@
 // bsd socket subsystem
 #pragma once
-#ifndef XIU_NET_SOCKET_H
-#define XIU_NET_SOCKET_H
+#ifndef CHIMERA_NET_SOCKET_H
+#define CHIMERA_NET_SOCKET_H
 
-#include <kernel/xiu_types.h>
+#include <kernel/chimera_types.h>
 #include <kernel/spinlock.h>
 #include <net/mbuf.h>
 
@@ -92,16 +92,16 @@ struct socket;
 struct protosw;
 
 struct pr_usrreqs {
-    xiu_error_t (*pru_attach)(struct socket *so, int proto);
-    xiu_error_t (*pru_bind)(struct socket *so, struct sockaddr *nam);
-    xiu_error_t (*pru_connect)(struct socket *so, struct sockaddr *nam);
-    xiu_error_t (*pru_listen)(struct socket *so, int backlog);
-    xiu_error_t (*pru_accept)(struct socket *so, struct sockaddr **nam);
-    xiu_error_t (*pru_send)(struct socket *so, int flags, mbuf_t *m, struct sockaddr *nam, mbuf_t *control);
-    xiu_error_t (*pru_receive)(struct socket *so, struct sockaddr **nam, mbuf_t **mp, int *flags);
-    xiu_error_t (*pru_disconnect)(struct socket *so);
-    xiu_error_t (*pru_shutdown)(struct socket *so);
-    xiu_error_t (*pru_detach)(struct socket *so);
+    chimera_error_t (*pru_attach)(struct socket *so, int proto);
+    chimera_error_t (*pru_bind)(struct socket *so, struct sockaddr *nam);
+    chimera_error_t (*pru_connect)(struct socket *so, struct sockaddr *nam);
+    chimera_error_t (*pru_listen)(struct socket *so, int backlog);
+    chimera_error_t (*pru_accept)(struct socket *so, struct sockaddr **nam);
+    chimera_error_t (*pru_send)(struct socket *so, int flags, mbuf_t *m, struct sockaddr *nam, mbuf_t *control);
+    chimera_error_t (*pru_receive)(struct socket *so, struct sockaddr **nam, mbuf_t **mp, int *flags);
+    chimera_error_t (*pru_disconnect)(struct socket *so);
+    chimera_error_t (*pru_shutdown)(struct socket *so);
+    chimera_error_t (*pru_detach)(struct socket *so);
 };
 
 typedef struct socket {
@@ -128,23 +128,23 @@ typedef struct socket {
     spinlock_t          so_lock;
 } socket_t;
 
-#define XIU_SOCKET_MAGIC 0x534F434B45542121ULL
+#define CHIMERA_SOCKET_MAGIC 0x534F434B45542121ULL
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-xiu_error_t socreate(int dom, socket_t **aso, int type, int proto);
-xiu_error_t sobind(socket_t *so, struct sockaddr *nam);
-xiu_error_t solisten(socket_t *so, int backlog);
-xiu_error_t soconnect(socket_t *so, struct sockaddr *nam);
-xiu_error_t soaccept(socket_t *so, struct sockaddr **nam, socket_t **new_so);
-xiu_error_t sosend(socket_t *so, struct sockaddr *addr, const void *buf, usize len, int flags);
-xiu_error_t soreceive(socket_t *so, struct sockaddr **addr, void *buf, usize len, usize *out_len, int flags);
-xiu_error_t soshutdown(socket_t *so, int how);
-xiu_error_t soclose(socket_t *so);
-xiu_error_t sosetopt(socket_t *so, int level, int optname, const void *optval, usize optlen);
-xiu_error_t sogetopt(socket_t *so, int level, int optname, void *optval, usize *optlen);
+chimera_error_t socreate(int dom, socket_t **aso, int type, int proto);
+chimera_error_t sobind(socket_t *so, struct sockaddr *nam);
+chimera_error_t solisten(socket_t *so, int backlog);
+chimera_error_t soconnect(socket_t *so, struct sockaddr *nam);
+chimera_error_t soaccept(socket_t *so, struct sockaddr **nam, socket_t **new_so);
+chimera_error_t sosend(socket_t *so, struct sockaddr *addr, const void *buf, usize len, int flags);
+chimera_error_t soreceive(socket_t *so, struct sockaddr **addr, void *buf, usize len, usize *out_len, int flags);
+chimera_error_t soshutdown(socket_t *so, int how);
+chimera_error_t soclose(socket_t *so);
+chimera_error_t sosetopt(socket_t *so, int level, int optname, const void *optval, usize optlen);
+chimera_error_t sogetopt(socket_t *so, int level, int optname, void *optval, usize *optlen);
 i16         sopoll(socket_t *so, i16 events);
 
 void        sbappend(struct sockbuf *sb, mbuf_t *m);

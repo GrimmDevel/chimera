@@ -1,2 +1,2 @@
-# XIU-Kit Driver Framework Stubs
-add_library(xiu_kit INTERFACE)
+# ChimeraKit Driver Framework Stubs
+add_library(chimera_kit INTERFACE)

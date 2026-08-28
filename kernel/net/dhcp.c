@@ -1,5 +1,5 @@
 /* =============================================================================
- * XIU Operating System — Dynamic Host Configuration Protocol (DHCP)
+ * Chimera Operating System — Dynamic Host Configuration Protocol (DHCP)
  * kernel/net/dhcp.c
  * ============================================================================= */
 
@@ -17,7 +17,7 @@
 #define DHCPREQUEST         3
 #define DHCPACK             5
 
-typedef struct XIU_PACKED dhcp_packet {
+typedef struct CHIMERA_PACKED dhcp_packet {
     u8                  op;
     u8                  htype;
     u8                  hlen;
@@ -37,13 +37,13 @@ typedef struct XIU_PACKED dhcp_packet {
 } dhcp_packet_t;
 
 extern void e1000_poll_rx(void);
-extern xiu_error_t udp_sendto(socket_t *so, const void *buf, usize len, struct sockaddr_in *dest);
+extern chimera_error_t udp_sendto(socket_t *so, const void *buf, usize len, struct sockaddr_in *dest);
 
 void dhcp_discover(ifnet_t *ifp) {
     if (!ifp || (ifp->if_flags & IFF_LOOPBACK)) return;
 
     socket_t *so = nullptr;
-    if (socreate(AF_INET, &so, SOCK_DGRAM, IPPROTO_UDP) != XIU_SUCCESS || !so) return;
+    if (socreate(AF_INET, &so, SOCK_DGRAM, IPPROTO_UDP) != CHIMERA_SUCCESS || !so) return;
 
     struct sockaddr_in client_sin = {0};
     client_sin.sin_family = AF_INET;

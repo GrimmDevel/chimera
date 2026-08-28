@@ -1,9 +1,9 @@
 // x86_64 lapic driver header
 #pragma once
-#ifndef XIU_LAPIC_H
-#define XIU_LAPIC_H
+#ifndef CHIMERA_LAPIC_H
+#define CHIMERA_LAPIC_H
 
-#include <kernel/xiu_types.h>
+#include <kernel/chimera_types.h>
 
 #ifdef __cplusplus
 extern "C" {

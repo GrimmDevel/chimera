@@ -1,7 +1,7 @@
-#ifndef XIU_ATA_H
-#define XIU_ATA_H
+#ifndef CHIMERA_ATA_H
+#define CHIMERA_ATA_H
 
-#include <kernel/xiu_types.h>
+#include <kernel/chimera_types.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -19,14 +19,14 @@ typedef struct {
 
 extern ata_device_t g_ata_drive;
 
-xiu_error_t ata_init(void);
+chimera_error_t ata_init(void);
 bool        ata_is_present(void);
 u64         ata_get_sector_count(void);
-xiu_error_t ata_read_sectors(u64 lba, u32 count, void *buf);
-xiu_error_t ata_write_sectors(u64 lba, u32 count, const void *buf);
+chimera_error_t ata_read_sectors(u64 lba, u32 count, void *buf);
+chimera_error_t ata_write_sectors(u64 lba, u32 count, const void *buf);
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif /* XIU_ATA_H */
+#endif /* CHIMERA_ATA_H */

@@ -1,8 +1,8 @@
 // xnu mach definitions
-#ifndef XIU_MACH_XNU_H
-#define XIU_MACH_XNU_H
+#ifndef CHIMERA_MACH_XNU_H
+#define CHIMERA_MACH_XNU_H
 
-#include <kernel/xiu_types.h>
+#include <kernel/chimera_types.h>
 
 #ifdef __cplusplus
 extern "C" {

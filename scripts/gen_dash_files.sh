@@ -5,7 +5,7 @@
 DASH_SRC="dash/src"
 HOST_CC="clang"
 
-echo "[XIU] Generating dash source files..."
+echo "[CHIMERA] Generating dash source files..."
 
 # 0. mktokens -> token.h
 cd $DASH_SRC && sh mktokens
@@ -39,4 +39,4 @@ $HOST_CC -o $DASH_SRC/mksignames $DASH_SRC/mksignames.c
 cd $DASH_SRC && ./mksignames
 cd -
 
-echo "[XIU] Dash generation complete."
+echo "[CHIMERA] Dash generation complete."

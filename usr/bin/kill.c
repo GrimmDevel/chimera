@@ -1,5 +1,5 @@
 // kill - send signal to process
-#include <kernel/xiu_types.h>
+#include <kernel/chimera_types.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>

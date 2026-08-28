@@ -5,7 +5,7 @@
 SH_DIR="sh"
 HOST_CC="clang"
 
-echo "[XIU] Generating FreeBSD/ravynOS BSD sh source files..."
+echo "[CHIMERA] Generating FreeBSD/ravynOS BSD sh source files..."
 
 cd $SH_DIR
 sh mktokens
@@ -17,4 +17,4 @@ sh mkbuiltins .
 rm -f mksyntax mknodes
 cd -
 
-echo "[XIU] BSD sh generation complete."
+echo "[CHIMERA] BSD sh generation complete."

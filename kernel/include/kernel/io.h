@@ -1,7 +1,7 @@
-#ifndef XIU_IO_H
-#define XIU_IO_H
+#ifndef CHIMERA_IO_H
+#define CHIMERA_IO_H
 
-#include <kernel/xiu_types.h>
+#include <kernel/chimera_types.h>
 
 static inline void outb(u16 port, u8 val) {
     __asm__ volatile("outb %0, %1" : : "a"(val), "Nd"(port));

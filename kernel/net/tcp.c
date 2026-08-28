@@ -1,5 +1,5 @@
 /* =============================================================================
- * XIU Operating System — Transmission Control Protocol (TCP)
+ * Chimera Operating System — Transmission Control Protocol (TCP)
  * kernel/net/tcp.c
  * ============================================================================= */
 
@@ -55,7 +55,7 @@ void tcp_init(void) {
     for (int i = 0; i < TCP_MAX_SOCKETS; i++) s_tcp_pcbs[i].so = nullptr;
 }
 
-xiu_error_t tcp_attach(socket_t *so) {
+chimera_error_t tcp_attach(socket_t *so) {
     irq_flags_t flags = spinlock_lock_irqsave(&s_tcp_lock);
     for (int i = 0; i < TCP_MAX_SOCKETS; i++) {
         if (!s_tcp_pcbs[i].so) {
@@ -73,11 +73,11 @@ xiu_error_t tcp_attach(socket_t *so) {
             s_tcp_pcbs[i].bound = false;
             so->so_pcb = &s_tcp_pcbs[i];
             spinlock_unlock_irqrestore(&s_tcp_lock, flags);
-            return XIU_SUCCESS;
+            return CHIMERA_SUCCESS;
         }
     }
     spinlock_unlock_irqrestore(&s_tcp_lock, flags);
-    return XIU_ERR_NOMEM;
+    return CHIMERA_ERR_NOMEM;
 }
 
 void tcp_detach(socket_t *so) {
@@ -92,8 +92,8 @@ void tcp_detach(socket_t *so) {
     spinlock_unlock_irqrestore(&s_tcp_lock, flags);
 }
 
-xiu_error_t tcp_bind(socket_t *so, struct sockaddr_in *sin) {
-    if (!so || !so->so_pcb || !sin) return XIU_ERR_INVALID;
+chimera_error_t tcp_bind(socket_t *so, struct sockaddr_in *sin) {
+    if (!so || !so->so_pcb || !sin) return CHIMERA_ERR_INVALID;
 
     tcp_pcb_t *pcb = (tcp_pcb_t *)so->so_pcb;
     irq_flags_t flags = spinlock_lock_irqsave(&s_tcp_lock);
@@ -107,7 +107,7 @@ xiu_error_t tcp_bind(socket_t *so, struct sockaddr_in *sin) {
     for (int i = 0; i < TCP_MAX_SOCKETS; i++) {
         if (s_tcp_pcbs[i].so && s_tcp_pcbs[i].bound && s_tcp_pcbs[i].local_port == port) {
             spinlock_unlock_irqrestore(&s_tcp_lock, flags);
-            return XIU_ERR_BUSY;
+            return CHIMERA_ERR_BUSY;
         }
     }
 
@@ -122,19 +122,19 @@ xiu_error_t tcp_bind(socket_t *so, struct sockaddr_in *sin) {
     pcb->bound = true;
 
     spinlock_unlock_irqrestore(&s_tcp_lock, flags);
-    return XIU_SUCCESS;
+    return CHIMERA_SUCCESS;
 }
 
-extern xiu_error_t ip_output(mbuf_t *m, struct in_addr src_ip, struct in_addr dst_ip, u8 proto);
+extern chimera_error_t ip_output(mbuf_t *m, struct in_addr src_ip, struct in_addr dst_ip, u8 proto);
 
-static xiu_error_t tcp_send_packet(tcp_pcb_t *pcb, u8 flags, const void *data, usize len) {
+static chimera_error_t tcp_send_packet(tcp_pcb_t *pcb, u8 flags, const void *data, usize len) {
     if (pcb->local_ip.s_addr == 0) {
         ifnet_t *def = if_get_default();
         if (def) pcb->local_ip = def->if_ip;
     }
 
     mbuf_t *m = m_getcl(MT_DATA);
-    if (!m) return XIU_ERR_NOMEM;
+    if (!m) return CHIMERA_ERR_NOMEM;
 
     tcp_header_t *th = (tcp_header_t *)m->m_data;
     th->th_sport = htons(pcb->local_port);
@@ -158,6 +158,11 @@ static xiu_error_t tcp_send_packet(tcp_pcb_t *pcb, u8 flags, const void *data, u
     }
 
     th->th_off_x2 = (u8)((hdr_len / 4) << 4);
+
+    if (len > (MCLBYTES - hdr_len - 64)) {
+        m_freem(m);
+        return CHIMERA_ERR_OVERFLOW;
+    }
 
     if (data && len > 0) {
         __builtin_memcpy(m->m_data + hdr_len, data, len);
@@ -185,8 +190,8 @@ static xiu_error_t tcp_send_packet(tcp_pcb_t *pcb, u8 flags, const void *data, u
     return ip_output(m, pcb->local_ip, pcb->remote_ip, IPPROTO_TCP);
 }
 
-xiu_error_t tcp_connect(socket_t *so, struct sockaddr_in *sin) {
-    if (!so || !so->so_pcb || !sin) return XIU_ERR_INVALID;
+chimera_error_t tcp_connect(socket_t *so, struct sockaddr_in *sin) {
+    if (!so || !so->so_pcb || !sin) return CHIMERA_ERR_INVALID;
 
     tcp_pcb_t *pcb = (tcp_pcb_t *)so->so_pcb;
     if (!pcb->bound) {
@@ -219,7 +224,7 @@ xiu_error_t tcp_connect(socket_t *so, struct sockaddr_in *sin) {
                     pcb->remote_port);
             so->so_state &= ~SS_ISCONNECTING;
             so->so_state |= SS_ISCONNECTED;
-            return XIU_SUCCESS;
+            return CHIMERA_SUCCESS;
         }
 
         // retransmit SYN if no SYN-ACK received after initial burst
@@ -239,19 +244,33 @@ xiu_error_t tcp_connect(socket_t *so, struct sockaddr_in *sin) {
 
     so->so_state &= ~SS_ISCONNECTING;
     pcb->state = TCPS_CLOSED;
-    return XIU_ERR_TIMEOUT;
+    return CHIMERA_ERR_TIMEOUT;
 }
 
-xiu_error_t tcp_send(socket_t *so, const void *buf, usize len, int flags) {
+chimera_error_t tcp_send(socket_t *so, const void *buf, usize len, int flags) {
     (void)flags;
-    if (!so || !so->so_pcb || !(so->so_state & SS_ISCONNECTED)) return XIU_ERR_NOT_CONNECTED;
+    if (!so || !so->so_pcb || !(so->so_state & SS_ISCONNECTED)) return CHIMERA_ERR_NOT_CONNECTED;
+    if (!buf && len > 0) return CHIMERA_ERR_INVALID;
+    if (len == 0) return CHIMERA_SUCCESS;
 
     tcp_pcb_t *pcb = (tcp_pcb_t *)so->so_pcb;
-    return tcp_send_packet(pcb, TH_ACK | TH_PUSH, buf, len);
+    const u8 *ptr = (const u8 *)buf;
+    usize remaining = len;
+
+    while (remaining > 0) {
+        usize chunk = remaining > 1460 ? 1460 : remaining;
+        u8 pkt_flags = TH_ACK;
+        if (chunk == remaining) pkt_flags |= TH_PUSH;
+        chimera_error_t err = tcp_send_packet(pcb, pkt_flags, ptr, chunk);
+        if (err != CHIMERA_SUCCESS) return err;
+        ptr += chunk;
+        remaining -= chunk;
+    }
+    return CHIMERA_SUCCESS;
 }
 
-xiu_error_t tcp_close(socket_t *so) {
-    if (!so || !so->so_pcb) return XIU_SUCCESS;
+chimera_error_t tcp_close(socket_t *so) {
+    if (!so || !so->so_pcb) return CHIMERA_SUCCESS;
 
     tcp_pcb_t *pcb = (tcp_pcb_t *)so->so_pcb;
     if (pcb->state == TCPS_ESTABLISHED) {
@@ -259,12 +278,21 @@ xiu_error_t tcp_close(socket_t *so) {
         tcp_send_packet(pcb, TH_FIN | TH_ACK, nullptr, 0);
     }
     tcp_detach(so);
-    return XIU_SUCCESS;
+    return CHIMERA_SUCCESS;
 }
 
 void tcp_input(ifnet_t *ifp, mbuf_t *m, ip_header_t *ip) {
     (void)ifp;
     if (!m || !ip || m->m_len < (i32)sizeof(tcp_header_t)) {
+        if (m) m_freem(m);
+        return;
+    }
+
+    // verify TCP checksum over IP pseudo-header + TCP payload
+    u16 sum = in_pseudo_checksum(ip->ip_src.s_addr, ip->ip_dst.s_addr,
+                                 IPPROTO_TCP, (u16)m->m_len, m->m_data, (usize)m->m_len);
+    if (sum != 0) {
+        kprintf("[tcp] Received packet with invalid checksum (sum=0x%x), dropping\n", sum);
         m_freem(m);
         return;
     }

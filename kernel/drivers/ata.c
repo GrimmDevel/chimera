@@ -1,5 +1,5 @@
 /* =============================================================================
- * XIU Operating System — ATA / IDE Primary Master Block Driver
+ * Chimera Operating System — ATA / IDE Primary Master Block Driver
  * kernel/drivers/ata.c
  * ============================================================================= */
 
@@ -68,7 +68,7 @@ static bool ata_wait_drq(void) {
     return false;
 }
 
-xiu_error_t ata_init(void) {
+chimera_error_t ata_init(void) {
     irq_flags_t irq = spinlock_lock_irqsave(&s_ata_lock);
 
     __builtin_memset(&g_ata_drive, 0, sizeof(ata_device_t));
@@ -95,13 +95,13 @@ xiu_error_t ata_init(void) {
         // no device attached
         spinlock_unlock_irqrestore(&s_ata_lock, irq);
         kprintf("[ATA] No Primary Master drive detected.\n");
-        return XIU_ERR_NOTFOUND;
+        return CHIMERA_ERR_NOTFOUND;
     }
 
     if (!ata_wait_bsy_clear()) {
         spinlock_unlock_irqrestore(&s_ata_lock, irq);
         kprintf("[ATA] Drive timeout during identify.\n");
-        return XIU_ERR_TIMEOUT;
+        return CHIMERA_ERR_TIMEOUT;
     }
 
     u8 mid = inb(ATA_PRIMARY_LBA_MID);
@@ -109,13 +109,13 @@ xiu_error_t ata_init(void) {
     if (mid != 0 || hi != 0) {
         spinlock_unlock_irqrestore(&s_ata_lock, irq);
         kprintf("[ATA] Non-ATA device (ATAPI) detected, skipping.\n");
-        return XIU_ERR_NOTSUP;
+        return CHIMERA_ERR_NOTSUP;
     }
 
     if (!ata_wait_drq()) {
         spinlock_unlock_irqrestore(&s_ata_lock, irq);
         kprintf("[ATA] DRQ not set after IDENTIFY.\n");
-        return XIU_ERR_GENERIC;
+        return CHIMERA_ERR_GENERIC;
     }
 
     u16 ident[256];
@@ -158,7 +158,7 @@ xiu_error_t ata_init(void) {
             (unsigned long long)size_mb,
             (unsigned long long)g_ata_drive.sector_count);
 
-    return XIU_SUCCESS;
+    return CHIMERA_SUCCESS;
 }
 
 bool ata_is_present(void) {
@@ -169,8 +169,8 @@ u64 ata_get_sector_count(void) {
     return g_ata_drive.sector_count;
 }
 
-static xiu_error_t ata_read_single_sector_lba28(u32 lba, void *buf) {
-    if (!ata_wait_bsy_clear()) return XIU_ERR_TIMEOUT;
+static chimera_error_t ata_read_single_sector_lba28(u32 lba, void *buf) {
+    if (!ata_wait_bsy_clear()) return CHIMERA_ERR_TIMEOUT;
 
     outb(ATA_PRIMARY_DRIVE_HEAD, 0xE0 | ((lba >> 24) & 0x0F));
     outb(ATA_PRIMARY_SEC_COUNT, 1);
@@ -179,17 +179,17 @@ static xiu_error_t ata_read_single_sector_lba28(u32 lba, void *buf) {
     outb(ATA_PRIMARY_LBA_HI, (u8)(lba >> 16));
     outb(ATA_PRIMARY_STATUS_CMD, ATA_CMD_READ_SECTORS);
 
-    if (!ata_wait_drq()) return XIU_ERR_GENERIC;
+    if (!ata_wait_drq()) return CHIMERA_ERR_GENERIC;
 
     u16 *ptr = (u16 *)buf;
     for (int i = 0; i < 256; i++) {
         ptr[i] = inw(ATA_PRIMARY_DATA);
     }
-    return XIU_SUCCESS;
+    return CHIMERA_SUCCESS;
 }
 
-static xiu_error_t ata_write_single_sector_lba28(u32 lba, const void *buf) {
-    if (!ata_wait_bsy_clear()) return XIU_ERR_TIMEOUT;
+static chimera_error_t ata_write_single_sector_lba28(u32 lba, const void *buf) {
+    if (!ata_wait_bsy_clear()) return CHIMERA_ERR_TIMEOUT;
 
     outb(ATA_PRIMARY_DRIVE_HEAD, 0xE0 | ((lba >> 24) & 0x0F));
     outb(ATA_PRIMARY_SEC_COUNT, 1);
@@ -198,7 +198,7 @@ static xiu_error_t ata_write_single_sector_lba28(u32 lba, const void *buf) {
     outb(ATA_PRIMARY_LBA_HI, (u8)(lba >> 16));
     outb(ATA_PRIMARY_STATUS_CMD, ATA_CMD_WRITE_SECTORS);
 
-    if (!ata_wait_drq()) return XIU_ERR_GENERIC;
+    if (!ata_wait_drq()) return CHIMERA_ERR_GENERIC;
 
     const u16 *ptr = (const u16 *)buf;
     for (int i = 0; i < 256; i++) {
@@ -208,43 +208,43 @@ static xiu_error_t ata_write_single_sector_lba28(u32 lba, const void *buf) {
     outb(ATA_PRIMARY_STATUS_CMD, ATA_CMD_FLUSH_CACHE);
     ata_wait_bsy_clear();
 
-    return XIU_SUCCESS;
+    return CHIMERA_SUCCESS;
 }
 
-xiu_error_t ata_read_sectors(u64 lba, u32 count, void *buf) {
-    if (!g_ata_drive.present) return XIU_ERR_NOTFOUND;
-    if (lba + count > g_ata_drive.sector_count) return XIU_ERR_OVERFLOW;
+chimera_error_t ata_read_sectors(u64 lba, u32 count, void *buf) {
+    if (!g_ata_drive.present) return CHIMERA_ERR_NOTFOUND;
+    if (lba + count > g_ata_drive.sector_count) return CHIMERA_ERR_OVERFLOW;
 
     irq_flags_t irq = spinlock_lock_irqsave(&s_ata_lock);
 
     u8 *dst = (u8 *)buf;
     for (u32 i = 0; i < count; i++) {
-        xiu_error_t err = ata_read_single_sector_lba28((u32)(lba + i), dst + (i * ATA_SECTOR_SIZE));
-        if (err != XIU_SUCCESS) {
+        chimera_error_t err = ata_read_single_sector_lba28((u32)(lba + i), dst + (i * ATA_SECTOR_SIZE));
+        if (err != CHIMERA_SUCCESS) {
             spinlock_unlock_irqrestore(&s_ata_lock, irq);
             return err;
         }
     }
 
     spinlock_unlock_irqrestore(&s_ata_lock, irq);
-    return XIU_SUCCESS;
+    return CHIMERA_SUCCESS;
 }
 
-xiu_error_t ata_write_sectors(u64 lba, u32 count, const void *buf) {
-    if (!g_ata_drive.present) return XIU_ERR_NOTFOUND;
-    if (lba + count > g_ata_drive.sector_count) return XIU_ERR_OVERFLOW;
+chimera_error_t ata_write_sectors(u64 lba, u32 count, const void *buf) {
+    if (!g_ata_drive.present) return CHIMERA_ERR_NOTFOUND;
+    if (lba + count > g_ata_drive.sector_count) return CHIMERA_ERR_OVERFLOW;
 
     irq_flags_t irq = spinlock_lock_irqsave(&s_ata_lock);
 
     const u8 *src = (const u8 *)buf;
     for (u32 i = 0; i < count; i++) {
-        xiu_error_t err = ata_write_single_sector_lba28((u32)(lba + i), src + (i * ATA_SECTOR_SIZE));
-        if (err != XIU_SUCCESS) {
+        chimera_error_t err = ata_write_single_sector_lba28((u32)(lba + i), src + (i * ATA_SECTOR_SIZE));
+        if (err != CHIMERA_SUCCESS) {
             spinlock_unlock_irqrestore(&s_ata_lock, irq);
             return err;
         }
     }
 
     spinlock_unlock_irqrestore(&s_ata_lock, irq);
-    return XIU_SUCCESS;
+    return CHIMERA_SUCCESS;
 }

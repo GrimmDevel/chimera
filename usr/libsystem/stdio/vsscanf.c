@@ -1,5 +1,5 @@
 /* =============================================================================
- * XIU Operating System — User Space C Library
+ * Chimera Operating System — User Space C Library
  * usr/libsystem/stdio/vsscanf.c
  *
  * Full POSIX formatting scanner supporting integers, floats, strings, scansets,

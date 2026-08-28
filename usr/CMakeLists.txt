@@ -1,10 +1,10 @@
 # =============================================================================
-# XIU Operating System — User-Space Build System (Native Mach-O 64-bit)
+# Chimera Operating System — User-Space Build System (Native Mach-O 64-bit)
 # usr/CMakeLists.txt
 # =============================================================================
 
 cmake_minimum_required(VERSION 3.20)
-project(xiu_user)
+project(chimera_user)
 
 # Configure compiler flags for Darwin Mach-O x86_64
 add_compile_options(
@@ -13,8 +13,8 @@ add_compile_options(
     -nostdlib
     -fno-stack-protector
     -msse -msse2
-    -DXIU_ARCH_x86_64=1
-    -DXIU_PAGE_SIZE=4096
+    -DCHIMERA_ARCH_x86_64=1
+    -DCHIMERA_PAGE_SIZE=4096
     -D_FORTIFY_SOURCE=0
     -DOS_OBJECT_USE_OBJC=0
 )
@@ -32,13 +32,13 @@ include_directories(
     libsystem/stdio
 )
 
-# 1. C runtime entry and libsystem_xiu
-add_library(xiu_crt0 OBJECT
+# 1. C runtime entry and libsystem_chimera
+add_library(chimera_crt0 OBJECT
     libsystem/crt0.S
 )
 
-add_library(system_xiu STATIC
-    libsystem/libsystem_xiu.c
+add_library(system_chimera STATIC
+    libsystem/libsystem_chimera.c
     libsystem/pwd_grp.c
     libsystem/getlogin.c
     libsystem/setlogin.c
@@ -104,7 +104,7 @@ add_library(system_xiu STATIC
     libcrypt/sha2.c
     libcrypt/md5.c
     libcrypt/md4.c
-    libsystem/libinput_xiu.c
+    libsystem/libinput_chimera.c
     libsystem/plist.c
     libsystem/gui.c
     libsystem/blocks/data.c
@@ -140,7 +140,7 @@ target_compile_options(crypt PUBLIC
 )
 
 set(LIBOBJC_SRCS
-    libobjc/objc_runtime_xiu.c
+    libobjc/objc_runtime_chimera.c
     libobjc/objc_msgSend_x86_64.S
 )
 
@@ -155,7 +155,7 @@ target_compile_options(objc PUBLIC
     -isystem ${CMAKE_SOURCE_DIR}/usr/libsystem/include
     -I${CMAKE_SOURCE_DIR}/usr/libobjc
     -I${CMAKE_SOURCE_DIR}/usr/libobjc/runtime
-    -D__RAVYNOS__ -D__MACH__ -D__XIU__
+    -D__RAVYNOS__ -D__MACH__ -D__CHIMERA__
     -DTARGET_OS_OSX=1 -DTARGET_OS_IOSMAC=0 -DTARGET_OS_MAC=1 -DTARGET_OS_IPHONE=0
     -Wno-error -Wno-undef-prefix -Wno-deprecated-declarations -Wno-unused-variable -Wno-macro-redefined
 )
@@ -206,7 +206,7 @@ target_compile_options(Foundation PUBLIC
     -I${CMAKE_SOURCE_DIR}/usr/Frameworks/Foundation
     -I${CMAKE_SOURCE_DIR}/usr/Frameworks/Foundation/Headers
     -I${CMAKE_SOURCE_DIR}/usr/Frameworks/CoreFoundation/Headers
-    -D__RAVYNOS__ -D__MACH__ -D__XIU__ -DPLATFORM_IS_POSIX=1 -DPLATFORM_USES_BSD_SOCKETS=1
+    -D__RAVYNOS__ -D__MACH__ -D__CHIMERA__ -DPLATFORM_IS_POSIX=1 -DPLATFORM_USES_BSD_SOCKETS=1
     -DTARGET_OS_OSX=1 -DTARGET_OS_IOSMAC=0 -DTARGET_OS_MAC=1 -DTARGET_OS_IPHONE=0
     -Wno-error -Wno-undef-prefix -Wno-deprecated-declarations -Wno-unused-variable -Wno-macro-redefined
     -Wno-incompatible-pointer-types -Wno-implicit-function-declaration
@@ -268,7 +268,7 @@ target_compile_options(Onyx2D PUBLIC
     -I${CMAKE_SOURCE_DIR}/usr/Frameworks
     -I${CMAKE_SOURCE_DIR}/usr/Frameworks/Foundation/Headers
     -I${CMAKE_SOURCE_DIR}/usr/Frameworks/Onyx2D
-    -D__RAVYNOS__ -D__MACH__ -D__XIU__
+    -D__RAVYNOS__ -D__MACH__ -D__CHIMERA__
     -DTARGET_OS_OSX=1 -DTARGET_OS_IOSMAC=0 -DTARGET_OS_MAC=1 -DTARGET_OS_IPHONE=0
     -Wno-error -Wno-undef-prefix -Wno-deprecated-declarations -Wno-unused-variable -Wno-macro-redefined
     -Wno-incompatible-pointer-types -Wno-implicit-function-declaration
@@ -319,7 +319,7 @@ target_compile_options(CoreGraphics PUBLIC
     -I${CMAKE_SOURCE_DIR}/usr/Frameworks/Foundation/Headers
     -I${CMAKE_SOURCE_DIR}/usr/Frameworks/Onyx2D
     -I${CMAKE_SOURCE_DIR}/usr/Frameworks/CoreGraphics
-    -D__RAVYNOS__ -D__MACH__ -D__XIU__
+    -D__RAVYNOS__ -D__MACH__ -D__CHIMERA__
     -DTARGET_OS_OSX=1 -DTARGET_OS_IOSMAC=0 -DTARGET_OS_MAC=1 -DTARGET_OS_IPHONE=0
     -Wno-error -Wno-undef-prefix -Wno-deprecated-declarations -Wno-unused-variable -Wno-macro-redefined
     -Wno-incompatible-pointer-types -Wno-implicit-function-declaration
@@ -371,20 +371,20 @@ target_compile_options(AppKit PUBLIC
     -I${CMAKE_SOURCE_DIR}/usr/Frameworks/Onyx2D
     -I${CMAKE_SOURCE_DIR}/usr/Frameworks/CoreGraphics
     -I${CMAKE_SOURCE_DIR}/usr/Frameworks/AppKit
-    -D__RAVYNOS__ -D__MACH__ -D__XIU__
+    -D__RAVYNOS__ -D__MACH__ -D__CHIMERA__
     -DTARGET_OS_OSX=1 -DTARGET_OS_IOSMAC=0 -DTARGET_OS_MAC=1 -DTARGET_OS_IPHONE=0
     -Wno-error -Wno-undef-prefix -Wno-deprecated-declarations -Wno-unused-variable -Wno-macro-redefined
     -Wno-deprecated-objc-isa-usage -Wno-incompatible-pointer-types -Wno-implicit-function-declaration
 )
 
-target_include_directories(system_xiu PUBLIC
+target_include_directories(system_chimera PUBLIC
     ${CMAKE_SOURCE_DIR}/usr/libsystem/include
     ${CMAKE_SOURCE_DIR}/usr/libcrypt/include
     ${CMAKE_SOURCE_DIR}/usr/libcrypt
     ${CMAKE_SOURCE_DIR}/usr/libsystem
     ${CMAKE_SOURCE_DIR}/usr/libsystem/blocks
 )
-target_compile_options(system_xiu PUBLIC
+target_compile_options(system_chimera PUBLIC
     -nostdinc
     -isystem ${CMAKE_SOURCE_DIR}/usr/libsystem/include
     -I${CMAKE_SOURCE_DIR}/usr/libcrypt/include
@@ -392,72 +392,76 @@ target_compile_options(system_xiu PUBLIC
     -Wno-error -Wno-unused-variable -Wno-incompatible-pointer-types -Wno-implicit-function-declaration -Wno-pointer-bool-conversion -Wno-pointer-sign
 )
 
-function(xiu_add_user_crt target)
-    target_sources(${target} PRIVATE $<TARGET_OBJECTS:xiu_crt0>)
+function(chimera_add_user_crt target)
+    target_sources(${target} PRIVATE $<TARGET_OBJECTS:chimera_crt0>)
 endfunction()
 
 
 
 # 3. Core Utilities
 add_executable(ls bin/ls.c)
-xiu_add_user_crt(ls)
-target_link_libraries(ls system_xiu)
+chimera_add_user_crt(ls)
+target_link_libraries(ls system_chimera)
 
 add_executable(cat bin/cat.c)
-xiu_add_user_crt(cat)
-target_link_libraries(cat system_xiu)
+chimera_add_user_crt(cat)
+target_link_libraries(cat system_chimera)
 
 add_executable(echo bin/echo.c)
-xiu_add_user_crt(echo)
-target_link_libraries(echo system_xiu)
+chimera_add_user_crt(echo)
+target_link_libraries(echo system_chimera)
 
 add_executable(mkdir bin/mkdir.c)
-xiu_add_user_crt(mkdir)
-target_link_libraries(mkdir system_xiu)
+chimera_add_user_crt(mkdir)
+target_link_libraries(mkdir system_chimera)
 
 add_executable(rm bin/rm.c)
-xiu_add_user_crt(rm)
-target_link_libraries(rm system_xiu)
+chimera_add_user_crt(rm)
+target_link_libraries(rm system_chimera)
 
 add_executable(touch bin/touch.c)
-xiu_add_user_crt(touch)
-target_link_libraries(touch system_xiu)
+chimera_add_user_crt(touch)
+target_link_libraries(touch system_chimera)
 
 add_executable(pwd bin/pwd.c)
-xiu_add_user_crt(pwd)
-target_link_libraries(pwd system_xiu)
+chimera_add_user_crt(pwd)
+target_link_libraries(pwd system_chimera)
 
 add_executable(neofetch bin/neofetch.c)
-xiu_add_user_crt(neofetch)
-target_link_libraries(neofetch system_xiu)
+chimera_add_user_crt(neofetch)
+target_link_libraries(neofetch system_chimera)
 
 add_executable(proclist bin/proclist.c)
-xiu_add_user_crt(proclist)
-target_link_libraries(proclist system_xiu)
+chimera_add_user_crt(proclist)
+target_link_libraries(proclist system_chimera)
 
 add_executable(ifconfig bin/ifconfig.c)
-xiu_add_user_crt(ifconfig)
-target_link_libraries(ifconfig system_xiu)
+chimera_add_user_crt(ifconfig)
+target_link_libraries(ifconfig system_chimera)
 
 add_executable(ping bin/ping.c)
-xiu_add_user_crt(ping)
-target_link_libraries(ping system_xiu)
+chimera_add_user_crt(ping)
+target_link_libraries(ping system_chimera)
 
 add_executable(nc bin/nc.c)
-xiu_add_user_crt(nc)
-target_link_libraries(nc system_xiu)
+chimera_add_user_crt(nc)
+target_link_libraries(nc system_chimera)
 
 add_executable(curl bin/curl.c)
-xiu_add_user_crt(curl)
-target_link_libraries(curl system_xiu)
+chimera_add_user_crt(curl)
+target_link_libraries(curl system_chimera)
 
 add_executable(machdemo bin/mach_demo.c)
-xiu_add_user_crt(machdemo)
-target_link_libraries(machdemo system_xiu)
+chimera_add_user_crt(machdemo)
+target_link_libraries(machdemo system_chimera)
+
+add_executable(sectest bin/sectest.c)
+chimera_add_user_crt(sectest)
+target_link_libraries(sectest system_chimera)
 
 add_executable(smpdemo bin/smp_demo.c)
-xiu_add_user_crt(smpdemo)
-target_link_libraries(smpdemo system_xiu)
+chimera_add_user_crt(smpdemo)
+target_link_libraries(smpdemo system_chimera)
 
 set(XKBCOMMON_SRCS
     CoreServices/WindowServer/libxkbcommon/src/keysym.c
@@ -543,7 +547,7 @@ set_source_files_properties(
     CoreServices/WindowServer/ws_font.c
     PROPERTIES
     LANGUAGE C
-    COMPILE_FLAGS "-x objective-c -D__RAVYNOS__ -D__MACH__ -D__WSRPC -D__XIU__ -DRELEASE_LOGO=@\\\"ravynos-mark-64.png\\\" -nostdinc -isystem ${CMAKE_SOURCE_DIR}/usr/libsystem/include -I${CMAKE_SOURCE_DIR}/usr/CoreServices -I${CMAKE_SOURCE_DIR}/usr/CoreServices/WindowServer -I${CMAKE_SOURCE_DIR}/usr/CoreServices/WindowServer/SystemUIServer -I${CMAKE_SOURCE_DIR}/usr/CoreServices/Dock -I${CMAKE_SOURCE_DIR}/usr/CoreServices/WindowServer/libxkbcommon/include -I${CMAKE_SOURCE_DIR}/usr/Frameworks -I${CMAKE_SOURCE_DIR}/usr/Frameworks/Foundation/Headers -I${CMAKE_SOURCE_DIR}/usr/Frameworks/AppKit -I${CMAKE_SOURCE_DIR}/usr/Frameworks/CoreGraphics -I${CMAKE_SOURCE_DIR}/usr/Frameworks/Onyx2D -Wno-incompatible-pointer-types -Wno-int-conversion -Wno-implicit-function-declaration -Wno-visibility -Wno-deprecated-declarations"
+    COMPILE_FLAGS "-x objective-c -D__RAVYNOS__ -D__MACH__ -D__WSRPC -D__CHIMERA__ -DRELEASE_LOGO=@\\\"ravynos-mark-64.png\\\" -nostdinc -isystem ${CMAKE_SOURCE_DIR}/usr/libsystem/include -I${CMAKE_SOURCE_DIR}/usr/CoreServices -I${CMAKE_SOURCE_DIR}/usr/CoreServices/WindowServer -I${CMAKE_SOURCE_DIR}/usr/CoreServices/WindowServer/SystemUIServer -I${CMAKE_SOURCE_DIR}/usr/CoreServices/Dock -I${CMAKE_SOURCE_DIR}/usr/CoreServices/WindowServer/libxkbcommon/include -I${CMAKE_SOURCE_DIR}/usr/Frameworks -I${CMAKE_SOURCE_DIR}/usr/Frameworks/Foundation/Headers -I${CMAKE_SOURCE_DIR}/usr/Frameworks/AppKit -I${CMAKE_SOURCE_DIR}/usr/Frameworks/CoreGraphics -I${CMAKE_SOURCE_DIR}/usr/Frameworks/Onyx2D -Wno-incompatible-pointer-types -Wno-int-conversion -Wno-implicit-function-declaration -Wno-visibility -Wno-deprecated-declarations"
 )
 
 add_executable(WindowServer
@@ -556,8 +560,8 @@ add_executable(WindowServer
     CoreServices/WindowServer/WSInput.m
     CoreServices/WindowServer/ws_font.c
 )
-xiu_add_user_crt(WindowServer)
-target_link_libraries(WindowServer xkbcommon AppKit CoreGraphics Onyx2D Foundation objc system_xiu)
+chimera_add_user_crt(WindowServer)
+target_link_libraries(WindowServer xkbcommon AppKit CoreGraphics Onyx2D Foundation objc system_chimera)
 
 add_executable(SystemUIServer
     CoreServices/WindowServer/SystemUIServer/SystemUIServer.m
@@ -572,8 +576,8 @@ add_executable(SystemUIServer
     CoreServices/WindowServer/SystemUIServer/Label.m
     CoreServices/WindowServer/SystemUIServer/AboutWindow.m
 )
-xiu_add_user_crt(SystemUIServer)
-target_link_libraries(SystemUIServer AppKit CoreGraphics Onyx2D Foundation objc system_xiu)
+chimera_add_user_crt(SystemUIServer)
+target_link_libraries(SystemUIServer AppKit CoreGraphics Onyx2D Foundation objc system_chimera)
 
 add_executable(Dock
     CoreServices/Dock/main.m
@@ -582,154 +586,154 @@ add_executable(Dock
     CoreServices/Dock/DesktopWindow.m
     CoreServices/Dock/DockTileData.m
 )
-xiu_add_user_crt(Dock)
-target_link_libraries(Dock AppKit CoreGraphics Onyx2D Foundation objc system_xiu)
+chimera_add_user_crt(Dock)
+target_link_libraries(Dock AppKit CoreGraphics Onyx2D Foundation objc system_chimera)
 
 add_executable(Filer
     CoreServices/Filer/FilerMain.m
 )
-xiu_add_user_crt(Filer)
-target_link_libraries(Filer AppKit CoreGraphics Onyx2D Foundation objc system_xiu)
+chimera_add_user_crt(Filer)
+target_link_libraries(Filer AppKit CoreGraphics Onyx2D Foundation objc system_chimera)
 
 add_executable(guiapp bin/guiapp.c)
-xiu_add_user_crt(guiapp)
-target_link_libraries(guiapp AppKit CoreGraphics Onyx2D Foundation objc system_xiu)
+chimera_add_user_crt(guiapp)
+target_link_libraries(guiapp AppKit CoreGraphics Onyx2D Foundation objc system_chimera)
 
 add_executable(calc bin/calc.c)
-xiu_add_user_crt(calc)
-target_link_libraries(calc AppKit CoreGraphics Onyx2D Foundation objc system_xiu)
+chimera_add_user_crt(calc)
+target_link_libraries(calc AppKit CoreGraphics Onyx2D Foundation objc system_chimera)
 
 add_executable(plutil bin/plutil.c)
-xiu_add_user_crt(plutil)
-target_link_libraries(plutil system_xiu)
+chimera_add_user_crt(plutil)
+target_link_libraries(plutil system_chimera)
 
 add_executable(defaults bin/defaults.c)
-xiu_add_user_crt(defaults)
-target_link_libraries(defaults system_xiu)
+chimera_add_user_crt(defaults)
+target_link_libraries(defaults system_chimera)
 
 add_executable(cp bin/cp.c)
-xiu_add_user_crt(cp)
-target_link_libraries(cp system_xiu)
+chimera_add_user_crt(cp)
+target_link_libraries(cp system_chimera)
 
 add_executable(mv bin/mv.c)
-xiu_add_user_crt(mv)
-target_link_libraries(mv system_xiu)
+chimera_add_user_crt(mv)
+target_link_libraries(mv system_chimera)
 
 add_executable(head bin/head.c)
-xiu_add_user_crt(head)
-target_link_libraries(head system_xiu)
+chimera_add_user_crt(head)
+target_link_libraries(head system_chimera)
 
 add_executable(tail bin/tail.c)
-xiu_add_user_crt(tail)
-target_link_libraries(tail system_xiu)
+chimera_add_user_crt(tail)
+target_link_libraries(tail system_chimera)
 
 add_executable(grep bin/grep.c)
-xiu_add_user_crt(grep)
-target_link_libraries(grep system_xiu)
+chimera_add_user_crt(grep)
+target_link_libraries(grep system_chimera)
 
 add_executable(wc bin/wc.c)
-xiu_add_user_crt(wc)
-target_link_libraries(wc system_xiu)
+chimera_add_user_crt(wc)
+target_link_libraries(wc system_chimera)
 
 add_executable(chmod bin/chmod.c)
-xiu_add_user_crt(chmod)
-target_link_libraries(chmod system_xiu)
+chimera_add_user_crt(chmod)
+target_link_libraries(chmod system_chimera)
 
 add_executable(uname bin/uname.c)
-xiu_add_user_crt(uname)
-target_link_libraries(uname system_xiu)
+chimera_add_user_crt(uname)
+target_link_libraries(uname system_chimera)
 
 add_executable(date bin/date.c)
-xiu_add_user_crt(date)
-target_link_libraries(date system_xiu)
+chimera_add_user_crt(date)
+target_link_libraries(date system_chimera)
 
 add_executable(env bin/env.c)
-xiu_add_user_crt(env)
-target_link_libraries(env system_xiu)
+chimera_add_user_crt(env)
+target_link_libraries(env system_chimera)
 
 add_executable(whoami bin/whoami.c)
-xiu_add_user_crt(whoami)
-target_link_libraries(whoami system_xiu)
+chimera_add_user_crt(whoami)
+target_link_libraries(whoami system_chimera)
 
 add_executable(login bin/login.c)
-xiu_add_user_crt(login)
-target_link_libraries(login system_xiu crypt)
+chimera_add_user_crt(login)
+target_link_libraries(login system_chimera crypt)
 
 add_executable(passwd bin/passwd_cmd.c)
-xiu_add_user_crt(passwd)
-target_link_libraries(passwd system_xiu crypt)
+chimera_add_user_crt(passwd)
+target_link_libraries(passwd system_chimera crypt)
 
 add_executable(su bin/su.c)
-xiu_add_user_crt(su)
-target_link_libraries(su system_xiu crypt)
+chimera_add_user_crt(su)
+target_link_libraries(su system_chimera crypt)
 
 add_executable(id bin/id.c)
-xiu_add_user_crt(id)
-target_link_libraries(id system_xiu)
+chimera_add_user_crt(id)
+target_link_libraries(id system_chimera)
 
 add_executable(sleep bin/sleep.c)
-xiu_add_user_crt(sleep)
-target_link_libraries(sleep system_xiu)
+chimera_add_user_crt(sleep)
+target_link_libraries(sleep system_chimera)
 
 add_executable(true bin/true.c)
-xiu_add_user_crt(true)
-target_link_libraries(true system_xiu)
+chimera_add_user_crt(true)
+target_link_libraries(true system_chimera)
 
 add_executable(false bin/false.c)
-xiu_add_user_crt(false)
-target_link_libraries(false system_xiu)
+chimera_add_user_crt(false)
+target_link_libraries(false system_chimera)
 
 add_executable(yes bin/yes.c)
-xiu_add_user_crt(yes)
-target_link_libraries(yes system_xiu)
+chimera_add_user_crt(yes)
+target_link_libraries(yes system_chimera)
 
 add_executable(clear bin/clear.c)
-xiu_add_user_crt(clear)
-target_link_libraries(clear system_xiu)
+chimera_add_user_crt(clear)
+target_link_libraries(clear system_chimera)
 
 add_executable(kill bin/kill.c)
-xiu_add_user_crt(kill)
-target_link_libraries(kill system_xiu)
+chimera_add_user_crt(kill)
+target_link_libraries(kill system_chimera)
 
 add_executable(uptime bin/uptime.c)
-xiu_add_user_crt(uptime)
-target_link_libraries(uptime system_xiu)
+chimera_add_user_crt(uptime)
+target_link_libraries(uptime system_chimera)
 
 add_executable(stat bin/stat.c)
-xiu_add_user_crt(stat)
-target_link_libraries(stat system_xiu)
+chimera_add_user_crt(stat)
+target_link_libraries(stat system_chimera)
 
 add_executable(df bin/df.c)
-xiu_add_user_crt(df)
-target_link_libraries(df system_xiu)
+chimera_add_user_crt(df)
+target_link_libraries(df system_chimera)
 
 add_executable(hexdump bin/hexdump.c)
-xiu_add_user_crt(hexdump)
-target_link_libraries(hexdump system_xiu)
+chimera_add_user_crt(hexdump)
+target_link_libraries(hexdump system_chimera)
 
 add_executable(tee bin/tee.c)
-xiu_add_user_crt(tee)
-target_link_libraries(tee system_xiu)
+chimera_add_user_crt(tee)
+target_link_libraries(tee system_chimera)
 
 add_executable(seq bin/seq.c)
-xiu_add_user_crt(seq)
-target_link_libraries(seq system_xiu)
+chimera_add_user_crt(seq)
+target_link_libraries(seq system_chimera)
 
 add_executable(basename bin/basename.c)
-xiu_add_user_crt(basename)
-target_link_libraries(basename system_xiu)
+chimera_add_user_crt(basename)
+target_link_libraries(basename system_chimera)
 
 add_executable(dirname bin/dirname.c)
-xiu_add_user_crt(dirname)
-target_link_libraries(dirname system_xiu)
+chimera_add_user_crt(dirname)
+target_link_libraries(dirname system_chimera)
 
 add_executable(kilo ${CMAKE_SOURCE_DIR}/kilo/kilo.c)
-xiu_add_user_crt(kilo)
-target_link_libraries(kilo system_xiu)
+chimera_add_user_crt(kilo)
+target_link_libraries(kilo system_chimera)
 
 add_executable(memload bin/memload.c)
-xiu_add_user_crt(memload)
-target_link_libraries(memload system_xiu)
+chimera_add_user_crt(memload)
+target_link_libraries(memload system_chimera)
 
 # 4. FreeBSD / ravynOS BSD sh Port
 set(SH_SRC_DIR ${CMAKE_SOURCE_DIR}/sh)
@@ -765,8 +769,8 @@ set(SH_SOURCES
 )
 
 add_executable(sh ${SH_SOURCES})
-xiu_add_user_crt(sh)
-target_link_libraries(sh system_xiu)
+chimera_add_user_crt(sh)
+target_link_libraries(sh system_chimera)
 target_include_directories(sh PRIVATE ${SH_SRC_DIR} ${CMAKE_SOURCE_DIR}/usr/libsystem/include)
 target_compile_definitions(sh PRIVATE -DHAVE_CONFIG_H -DBSD=1 -D_GNU_SOURCE -DUSE_TEE=0 -DHAVE_KILLPG=1 -DSHELL -DHAVE_BSEARCH=1 -DHAVE_STRTOD=1 -DNO_HISTORY=1)
 target_compile_options(sh PRIVATE -Wno-int-conversion -Wno-implicit-function-declaration -Wno-unused-variable -Wno-nullability-completeness -Wno-everything)
@@ -808,8 +812,8 @@ set(ZSH_SOURCES
 )
 
 add_executable(zsh ${ZSH_SOURCES})
-xiu_add_user_crt(zsh)
-target_link_libraries(zsh system_xiu)
+chimera_add_user_crt(zsh)
+target_link_libraries(zsh system_chimera)
 target_include_directories(zsh PRIVATE
     ${CMAKE_SOURCE_DIR}/zsh
     ${ZSH_SRC_DIR}
@@ -820,7 +824,7 @@ target_compile_definitions(zsh PRIVATE
     -DHAVE_CONFIG_H=1
     -DZSH_STATIC=1
     -D__MACH__=1
-    -D__XIU__=1
+    -D__CHIMERA__=1
     -D__APPLE__=1
 )
 target_compile_options(zsh PRIVATE
@@ -838,23 +842,22 @@ add_executable(stty
     ${STTY_SRC_DIR}/print.c
     ${STTY_SRC_DIR}/util.c
 )
-xiu_add_user_crt(stty)
-target_link_libraries(stty system_xiu)
+chimera_add_user_crt(stty)
+target_link_libraries(stty system_chimera)
 target_include_directories(stty PRIVATE ${STTY_SRC_DIR} ${CMAKE_SOURCE_DIR}/usr/libsystem/include)
-target_compile_definitions(stty PRIVATE -D__XIU__=1)
+target_compile_definitions(stty PRIVATE -D__CHIMERA__=1)
 target_compile_options(stty PRIVATE -Wno-everything)
 
 
 # 5. Tiny C Compiler (tcc) Port
 set(TCC_SRC_DIR ${CMAKE_SOURCE_DIR}/tinycc)
 add_executable(tcc ${TCC_SRC_DIR}/tcc.c)
-xiu_add_user_crt(tcc)
-target_link_libraries(tcc system_xiu)
+chimera_add_user_crt(tcc)
+target_link_libraries(tcc system_chimera)
 target_include_directories(tcc PRIVATE
     ${TCC_SRC_DIR}
-    ${CMAKE_SOURCE_DIR}/kernel/include
-    ${CMAKE_SOURCE_DIR}/usr/libsystem
     ${CMAKE_SOURCE_DIR}/usr/libsystem/include
+    ${CMAKE_SOURCE_DIR}/usr/libsystem
 )
 target_compile_definitions(tcc PRIVATE
     -DTCC_TARGET_X86_64=1
@@ -940,8 +943,8 @@ add_executable(sudo
     ${SUDO_DIR}/lib/util/pw_dup.c
     ${SUDO_DIR}/lib/util/rcstr.c
 )
-xiu_add_user_crt(sudo)
-target_link_libraries(sudo system_xiu)
+chimera_add_user_crt(sudo)
+target_link_libraries(sudo system_chimera)
 target_include_directories(sudo PRIVATE
     ${CMAKE_SOURCE_DIR}/usr/libsystem/include
     ${SUDO_DIR}
@@ -953,7 +956,7 @@ target_compile_definitions(sudo PRIVATE
     -D_PATH_SUDO_CONF=\"/etc/sudo.conf\"
     -DLOCALEDIR=\"/usr/share/locale\"
     -D__MACH__=1
-    -D__XIU__=1
+    -D__CHIMERA__=1
     -D__APPLE__=1
     -D_DARWIN_C_SOURCE=1
     -DSTUB_LOAD_INTERFACES=1
@@ -978,7 +981,7 @@ set(FASTFETCH_SRCS
     ${FASTFETCH_DIR}/src/common/impl/init.c
     ${FASTFETCH_DIR}/src/common/impl/jsonconfig.c
     ${FASTFETCH_DIR}/src/common/impl/netif.c
-    ${FASTFETCH_DIR}/src/common/impl/netif_xiu.c
+    ${FASTFETCH_DIR}/src/common/impl/netif_chimera.c
     ${FASTFETCH_DIR}/src/common/impl/networking_common.c
     ${FASTFETCH_DIR}/src/common/impl/networking_linux.c
     ${FASTFETCH_DIR}/src/common/impl/option.c
@@ -1028,27 +1031,27 @@ set(FASTFETCH_SRCS
     ${FASTFETCH_DIR}/src/detection/command/command.c
     ${FASTFETCH_DIR}/src/detection/cpu/cpu.c
     ${FASTFETCH_DIR}/src/detection/cpu/cpu_x86.c
-    ${FASTFETCH_DIR}/src/detection/cpu/cpu_xiu.c
+    ${FASTFETCH_DIR}/src/detection/cpu/cpu_chimera.c
     ${FASTFETCH_DIR}/src/detection/cpucache/cpucache_nosupport.c
     ${FASTFETCH_DIR}/src/detection/cpuusage/cpuusage.c
     ${FASTFETCH_DIR}/src/detection/cpuusage/cpuusage_nosupport.c
     ${FASTFETCH_DIR}/src/detection/cursor/cursor_nosupport.c
     ${FASTFETCH_DIR}/src/detection/de/de_nosupport.c
     ${FASTFETCH_DIR}/src/detection/disk/disk.c
-    ${FASTFETCH_DIR}/src/detection/disk/disk_xiu.c
+    ${FASTFETCH_DIR}/src/detection/disk/disk_chimera.c
     ${FASTFETCH_DIR}/src/detection/diskio/diskio.c
     ${FASTFETCH_DIR}/src/detection/diskio/diskio_nosupport.c
     ${FASTFETCH_DIR}/src/detection/displayserver/displayserver.c
-    ${FASTFETCH_DIR}/src/detection/displayserver/displayserver_xiu.c
+    ${FASTFETCH_DIR}/src/detection/displayserver/displayserver_chimera.c
     ${FASTFETCH_DIR}/src/detection/dns/dns_linux.c
     ${FASTFETCH_DIR}/src/detection/editor/editor.c
     ${FASTFETCH_DIR}/src/detection/font/font.c
     ${FASTFETCH_DIR}/src/detection/font/font_nosupport.c
     ${FASTFETCH_DIR}/src/detection/gamepad/gamepad_nosupport.c
     ${FASTFETCH_DIR}/src/detection/gpu/gpu.c
-    ${FASTFETCH_DIR}/src/detection/gpu/gpu_xiu.c
+    ${FASTFETCH_DIR}/src/detection/gpu/gpu_chimera.c
     ${FASTFETCH_DIR}/src/detection/host/host_mac.c
-    ${FASTFETCH_DIR}/src/detection/host/host_xiu.c
+    ${FASTFETCH_DIR}/src/detection/host/host_chimera.c
     ${FASTFETCH_DIR}/src/detection/icons/icons_nosupport.c
     ${FASTFETCH_DIR}/src/detection/initsystem/initsystem_nosupport.c
     ${FASTFETCH_DIR}/src/detection/keyboard/keyboard_nosupport.c
@@ -1056,37 +1059,37 @@ set(FASTFETCH_SRCS
     ${FASTFETCH_DIR}/src/detection/lm/lm_nosupport.c
     ${FASTFETCH_DIR}/src/detection/loadavg/loadavg_nosupport.c
     ${FASTFETCH_DIR}/src/detection/locale/locale_linux.c
-    ${FASTFETCH_DIR}/src/detection/localip/localip_xiu.c
+    ${FASTFETCH_DIR}/src/detection/localip/localip_chimera.c
     ${FASTFETCH_DIR}/src/detection/media/media.c
     ${FASTFETCH_DIR}/src/detection/media/media_nosupport.c
-    ${FASTFETCH_DIR}/src/detection/memory/memory_xiu.c
+    ${FASTFETCH_DIR}/src/detection/memory/memory_chimera.c
     ${FASTFETCH_DIR}/src/detection/mouse/mouse_nosupport.c
     ${FASTFETCH_DIR}/src/detection/netio/netio.c
     ${FASTFETCH_DIR}/src/detection/netio/netio_nosupport.c
     ${FASTFETCH_DIR}/src/detection/opencl/opencl.c
     ${FASTFETCH_DIR}/src/detection/opengl/opengl_nosupport.c
     ${FASTFETCH_DIR}/src/detection/os/os.c
-    ${FASTFETCH_DIR}/src/detection/os/os_xiu.c
+    ${FASTFETCH_DIR}/src/detection/os/os_chimera.c
     ${FASTFETCH_DIR}/src/detection/packages/packages.c
-    ${FASTFETCH_DIR}/src/detection/packages/packages_xiu.c
+    ${FASTFETCH_DIR}/src/detection/packages/packages_chimera.c
     ${FASTFETCH_DIR}/src/detection/physicaldisk/physicaldisk_nosupport.c
     ${FASTFETCH_DIR}/src/detection/physicalmemory/physicalmemory_nosupport.c
     ${FASTFETCH_DIR}/src/detection/poweradapter/poweradapter_nosupport.c
-    ${FASTFETCH_DIR}/src/detection/processes/processes_xiu.c
+    ${FASTFETCH_DIR}/src/detection/processes/processes_chimera.c
     ${FASTFETCH_DIR}/src/detection/publicip/publicip.c
     ${FASTFETCH_DIR}/src/detection/sound/sound_nosupport.c
     ${FASTFETCH_DIR}/src/detection/swap/swap_nosupport.c
     ${FASTFETCH_DIR}/src/detection/terminalfont/terminalfont.c
     ${FASTFETCH_DIR}/src/detection/terminalfont/terminalfont_nosupport.c
-    ${FASTFETCH_DIR}/src/detection/terminalshell/terminalshell_xiu.c
+    ${FASTFETCH_DIR}/src/detection/terminalshell/terminalshell_chimera.c
     ${FASTFETCH_DIR}/src/detection/terminalsize/terminalsize_linux.c
     ${FASTFETCH_DIR}/src/detection/terminaltheme/terminaltheme.c
     ${FASTFETCH_DIR}/src/detection/theme/theme_nosupport.c
     ${FASTFETCH_DIR}/src/detection/top/top.c
     ${FASTFETCH_DIR}/src/detection/top/top_nosupport.c
     ${FASTFETCH_DIR}/src/detection/tpm/tpm_nosupport.c
-    ${FASTFETCH_DIR}/src/detection/uptime/uptime_xiu.c
-    ${FASTFETCH_DIR}/src/detection/users/users_xiu.c
+    ${FASTFETCH_DIR}/src/detection/uptime/uptime_chimera.c
+    ${FASTFETCH_DIR}/src/detection/users/users_chimera.c
     ${FASTFETCH_DIR}/src/detection/version/version.c
     ${FASTFETCH_DIR}/src/detection/vulkan/vulkan.c
     ${FASTFETCH_DIR}/src/detection/wallpaper/wallpaper_nosupport.c
@@ -1101,8 +1104,8 @@ add_executable(fastfetch
     ${FASTFETCH_SRCS}
     ${FASTFETCH_DIR}/src/fastfetch.c
 )
-xiu_add_user_crt(fastfetch)
-target_link_libraries(fastfetch system_xiu)
+chimera_add_user_crt(fastfetch)
+target_link_libraries(fastfetch system_chimera)
 target_include_directories(fastfetch PRIVATE
     ${CMAKE_SOURCE_DIR}/usr/libsystem/include
     ${FASTFETCH_DIR}/src
@@ -1111,7 +1114,7 @@ target_include_directories(fastfetch PRIVATE
 )
 target_compile_definitions(fastfetch PRIVATE
     -D__MACH__=1
-    -D__XIU__=1
+    -D__CHIMERA__=1
     -D__APPLE__=1
     -D_GNU_SOURCE=1
     -D_DARWIN_C_SOURCE=1
@@ -1127,8 +1130,8 @@ add_executable(flashfetch
     ${FASTFETCH_SRCS}
     ${FASTFETCH_DIR}/src/flashfetch.c
 )
-xiu_add_user_crt(flashfetch)
-target_link_libraries(flashfetch system_xiu)
+chimera_add_user_crt(flashfetch)
+target_link_libraries(flashfetch system_chimera)
 target_include_directories(flashfetch PRIVATE
     ${CMAKE_SOURCE_DIR}/usr/libsystem/include
     ${FASTFETCH_DIR}/src
@@ -1137,7 +1140,7 @@ target_include_directories(flashfetch PRIVATE
 )
 target_compile_definitions(flashfetch PRIVATE
     -D__MACH__=1
-    -D__XIU__=1
+    -D__CHIMERA__=1
     -D__APPLE__=1
     -D_GNU_SOURCE=1
     -D_DARWIN_C_SOURCE=1

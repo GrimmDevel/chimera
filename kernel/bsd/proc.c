@@ -1,5 +1,5 @@
 /* =============================================================================
- * XIU Operating System — BSD Personality & Process Management
+ * Chimera Operating System — BSD Personality & Process Management
  * kernel/bsd/proc.c
  * =============================================================================
  */
@@ -10,29 +10,29 @@
 #include <kernel/proc.h>
 #include <kernel/vfs_node.h>
 
-xiu_proc_t *proc_kernel = nullptr;
-xiu_proc_t *proc_launchd = nullptr;
-xiu_task_t *task_kernel = nullptr;
+chimera_proc_t *proc_kernel = nullptr;
+chimera_proc_t *proc_launchd = nullptr;
+chimera_task_t *task_kernel = nullptr;
 
 #define PROC_POOL_SIZE 64
-xiu_proc_t s_proc_pool[PROC_POOL_SIZE];
+chimera_proc_t s_proc_pool[PROC_POOL_SIZE];
 static spinlock_t s_proc_pool_lock = SPINLOCK_INIT;
 static _Atomic(u32) s_pid_seq = 1;
 
-xiu_proc_t s_kernel_proc_obj;
-static xiu_task_t s_kernel_task_obj;
+chimera_proc_t s_kernel_proc_obj;
+static chimera_task_t s_kernel_task_obj;
 
 void proc_init(void) {
   task_kernel = &s_kernel_task_obj;
-  __builtin_memset(task_kernel, 0, sizeof(xiu_task_t));
-  task_kernel->ta_signature = XIU_TASK_MAGIC;
+  __builtin_memset(task_kernel, 0, sizeof(chimera_task_t));
+  task_kernel->ta_signature = CHIMERA_TASK_MAGIC;
   task_kernel->ta_id = 0;
   task_kernel->ta_flags = TASK_FLAG_KERNEL | TASK_FLAG_64BIT;
   spinlock_init(&task_kernel->ta_lock);
 
   proc_kernel = &s_kernel_proc_obj;
-  __builtin_memset(proc_kernel, 0, sizeof(xiu_proc_t));
-  proc_kernel->p_signature = XIU_PROC_MAGIC;
+  __builtin_memset(proc_kernel, 0, sizeof(chimera_proc_t));
+  proc_kernel->p_signature = CHIMERA_PROC_MAGIC;
   proc_kernel->p_pid = 0;
   proc_kernel->p_task = task_kernel;
   proc_kernel->p_uid = 0;
@@ -45,7 +45,7 @@ void proc_init(void) {
   proc_kernel->p_pgrp = 0;
   proc_kernel->p_sid = 0;
   proc_kernel->p_state = PROC_STATE_RUNNING;
-  __builtin_strncpy(proc_kernel->p_comm, "kernel_task", XIU_PROC_NAME_MAX);
+  __builtin_strncpy(proc_kernel->p_comm, "kernel_task", CHIMERA_PROC_NAME_MAX);
   spinlock_init(&proc_kernel->p_lock);
   spinlock_init(&proc_kernel->p_fdlock);
 
@@ -53,25 +53,25 @@ void proc_init(void) {
   task_kernel->ta_thread_count = 1;
 }
 
-xiu_error_t proc_create(xiu_proc_t *parent, const char *name,
-                        xiu_proc_t **proc_out) {
-  XIU_ASSERT(proc_out != nullptr);
+chimera_error_t proc_create(chimera_proc_t *parent, const char *name,
+                        chimera_proc_t **proc_out) {
+  CHIMERA_ASSERT(proc_out != nullptr);
 
   irq_flags_t irq = spinlock_lock_irqsave(&s_proc_pool_lock);
-  xiu_proc_t *p = nullptr;
+  chimera_proc_t *p = nullptr;
   for (u32 i = 1; i < PROC_POOL_SIZE; i++) {
-    if (s_proc_pool[i].p_signature != XIU_PROC_MAGIC) {
+    if (s_proc_pool[i].p_signature != CHIMERA_PROC_MAGIC) {
       p = &s_proc_pool[i];
       break;
     }
   }
   if (!p) {
     spinlock_unlock_irqrestore(&s_proc_pool_lock, irq);
-    return XIU_ERR_NOMEM;
+    return CHIMERA_ERR_NOMEM;
   }
 
-  __builtin_memset(p, 0, sizeof(xiu_proc_t));
-  p->p_signature = XIU_PROC_MAGIC;
+  __builtin_memset(p, 0, sizeof(chimera_proc_t));
+  p->p_signature = CHIMERA_PROC_MAGIC;
   p->p_pid = atomic_fetch_add(&s_pid_seq, 1);
   if (p->p_pid == 0)
     p->p_pid = atomic_fetch_add(&s_pid_seq, 1);
@@ -81,8 +81,10 @@ xiu_error_t proc_create(xiu_proc_t *parent, const char *name,
   if (parent) {
     p->p_uid = parent->p_uid;
     p->p_euid = parent->p_euid;
+    p->p_svuid = parent->p_svuid;
     p->p_gid = parent->p_gid;
     p->p_egid = parent->p_egid;
+    p->p_svgid = parent->p_svgid;
     p->p_ngroups = parent->p_ngroups;
     __builtin_memcpy(p->p_groups, parent->p_groups, sizeof(p->p_groups));
     __builtin_memcpy(p->p_login, parent->p_login, sizeof(p->p_login));
@@ -93,22 +95,24 @@ xiu_error_t proc_create(xiu_proc_t *parent, const char *name,
   } else {
     p->p_uid = 0;
     p->p_euid = 0;
+    p->p_svuid = 0;
     p->p_gid = 0;
     p->p_egid = 0;
+    p->p_svgid = 0;
     p->p_ngroups = 1;
     p->p_groups[0] = 0;
     p->p_umask = 022;
     p->p_pgrp = p->p_pid;
     p->p_sid = p->p_pid;
   }
-  __builtin_strncpy(p->p_comm, name, XIU_PROC_NAME_MAX);
+  __builtin_strncpy(p->p_comm, name, CHIMERA_PROC_NAME_MAX);
   spinlock_init(&p->p_lock);
   spinlock_init(&p->p_fdlock);
   spinlock_unlock_irqrestore(&s_proc_pool_lock, irq);
 
   // create associated Mach task
-  xiu_error_t err = task_create(parent ? parent->p_task : nullptr, &p->p_task);
-  if (XIU_FAILED(err))
+  chimera_error_t err = task_create(parent ? parent->p_task : nullptr, &p->p_task);
+  if (CHIMERA_FAILED(err))
     return err;
 
   p->p_task->ta_proc = p;
@@ -117,9 +121,9 @@ xiu_error_t proc_create(xiu_proc_t *parent, const char *name,
   if (parent && parent->p_cwd) {
     p->p_cwd = parent->p_cwd;
   } else {
-    extern xiu_error_t vfs_lookup(const char *path, vnode_t **vp_out);
+    extern chimera_error_t vfs_lookup(const char *path, vnode_t **vp_out);
     vnode_t *root_vnode = nullptr;
-    if (vfs_lookup("/", &root_vnode) == XIU_SUCCESS && root_vnode) {
+    if (vfs_lookup("/", &root_vnode) == CHIMERA_SUCCESS && root_vnode) {
       p->p_cwd = root_vnode;
     }
   }
@@ -127,7 +131,7 @@ xiu_error_t proc_create(xiu_proc_t *parent, const char *name,
   bool has_parent_fds = false;
   if (parent) {
     irq_flags_t pirq = spinlock_lock_irqsave(&parent->p_fdlock);
-    for (int i = 0; i < XIU_PROC_MAX_FDS; i++) {
+    for (int i = 0; i < CHIMERA_PROC_MAX_FDS; i++) {
       if (parent->p_fd_table[i]) {
         has_parent_fds = true;
         break;
@@ -135,8 +139,8 @@ xiu_error_t proc_create(xiu_proc_t *parent, const char *name,
     }
     if (has_parent_fds) {
       irq_flags_t cirq = spinlock_lock_irqsave(&p->p_fdlock);
-      for (int i = 0; i < XIU_PROC_MAX_FDS; i++) {
-        xiu_fileproc_t *fp = parent->p_fd_table[i];
+      for (int i = 0; i < CHIMERA_PROC_MAX_FDS; i++) {
+        chimera_fileproc_t *fp = parent->p_fd_table[i];
         if (fp) {
           fp_retain(fp);
           p->p_fd_table[i] = fp;
@@ -149,32 +153,32 @@ xiu_error_t proc_create(xiu_proc_t *parent, const char *name,
   }
 
   if (!has_parent_fds) {
-    extern xiu_error_t vfs_lookup(const char *path, vnode_t **vp_out);
-    extern xiu_fileproc_t *fp_alloc(vnode_t * vp, u32 flags);
-    extern int proc_fd_install(xiu_proc_t * p, xiu_fileproc_t * fp);
-    extern void fp_release(xiu_fileproc_t * fp);
+    extern chimera_error_t vfs_lookup(const char *path, vnode_t **vp_out);
+    extern chimera_fileproc_t *fp_alloc(vnode_t * vp, u32 flags);
+    extern int proc_fd_install(chimera_proc_t * p, chimera_fileproc_t * fp);
+    extern void fp_release(chimera_fileproc_t * fp);
 
     vnode_t *dev_con = nullptr;
-    if (vfs_lookup("/dev/console", &dev_con) != XIU_SUCCESS || !dev_con) {
+    if (vfs_lookup("/dev/console", &dev_con) != CHIMERA_SUCCESS || !dev_con) {
       vfs_lookup("/dev/null", &dev_con);
     }
     if (dev_con) {
       // fd 0: stdin
-      xiu_fileproc_t *fp0 = fp_alloc(dev_con, FP_READABLE);
+      chimera_fileproc_t *fp0 = fp_alloc(dev_con, FP_READABLE);
       if (fp0) {
         proc_fd_install(p, fp0);
         fp_release(fp0);
       }
 
       // fd 1: stdout
-      xiu_fileproc_t *fp1 = fp_alloc(dev_con, FP_WRITABLE);
+      chimera_fileproc_t *fp1 = fp_alloc(dev_con, FP_WRITABLE);
       if (fp1) {
         proc_fd_install(p, fp1);
         fp_release(fp1);
       }
 
       // fd 2: stderr
-      xiu_fileproc_t *fp2 = fp_alloc(dev_con, FP_WRITABLE);
+      chimera_fileproc_t *fp2 = fp_alloc(dev_con, FP_WRITABLE);
       if (fp2) {
         proc_fd_install(p, fp2);
         fp_release(fp2);
@@ -194,32 +198,55 @@ xiu_error_t proc_create(xiu_proc_t *parent, const char *name,
   p->p_sigpending = 0;
 
   *proc_out = p;
-  return XIU_SUCCESS;
+  return CHIMERA_SUCCESS;
 }
 
-xiu_proc_t *proc_find_by_pid(xiu_pid_t pid) {
-  if (pid == 0)
-    return proc_kernel;
-  if (pid == 1)
-    return proc_launchd;
-  for (u32 i = 1; i < PROC_POOL_SIZE; i++) {
-    xiu_proc_t *p = &s_proc_pool[i];
-    if (p->p_signature != XIU_PROC_MAGIC)
-      continue;
-    if (p->p_pid == pid)
+chimera_proc_t *proc_find_by_pid(chimera_pid_t pid) {
+  irq_flags_t irq = spinlock_lock_irqsave(&s_proc_pool_lock);
+  for (u32 i = 0; i < PROC_POOL_SIZE; i++) {
+    chimera_proc_t *p = &s_proc_pool[i];
+    if (p->p_signature == CHIMERA_PROC_MAGIC && p->p_pid == pid) {
+      spinlock_unlock_irqrestore(&s_proc_pool_lock, irq);
+      return p;
+    }
+  }
+  spinlock_unlock_irqrestore(&s_proc_pool_lock, irq);
+  return nullptr;
+}
+
+chimera_proc_t *proc_find_by_name(const char *name) {
+  if (!name)
+    return nullptr;
+  irq_flags_t irq = spinlock_lock_irqsave(&s_proc_pool_lock);
+  for (u32 i = 0; i < PROC_POOL_SIZE; i++) {
+    chimera_proc_t *p = &s_proc_pool[i];
+    if (p->p_signature == CHIMERA_PROC_MAGIC &&
+        __builtin_strcmp(p->p_comm, name) == 0) {
+      spinlock_unlock_irqrestore(&s_proc_pool_lock, irq);
+      return p;
+    }
+  }
+  spinlock_unlock_irqrestore(&s_proc_pool_lock, irq);
+  return nullptr;
+}
+
+chimera_proc_t *proc_find_by_pgrp(chimera_pid_t pgrp) {
+  for (u32 i = 0; i < PROC_POOL_SIZE; i++) {
+    chimera_proc_t *p = &s_proc_pool[i];
+    if (p->p_signature == CHIMERA_PROC_MAGIC && p->p_pgrp == pgrp)
       return p;
   }
   return nullptr;
 }
 
-void proc_mark_exited(xiu_proc_t *proc, u32 code) {
+void proc_mark_exited(chimera_proc_t *proc, u32 code) {
   if (!proc)
     return;
 
   // 1. Close all open file descriptors
   irq_flags_t fd_irq = spinlock_lock_irqsave(&proc->p_fdlock);
-  for (int i = 0; i < XIU_PROC_MAX_FDS; i++) {
-    xiu_fileproc_t *fp = proc->p_fd_table[i];
+  for (int i = 0; i < CHIMERA_PROC_MAX_FDS; i++) {
+    chimera_fileproc_t *fp = proc->p_fd_table[i];
     if (fp) {
       proc->p_fd_table[i] = nullptr;
       fp_release(fp);
@@ -231,23 +258,24 @@ void proc_mark_exited(xiu_proc_t *proc, u32 code) {
   proc->p_text_node = nullptr;
   proc->p_cwd = nullptr;
 
-  // 3. Destroy user address space and clean up task/threads immediately
+  // 3. Halt and remove all threads BEFORE destroying address space
   if (proc->p_task) {
-    if (proc->p_task->ta_vm_map) {
-      extern void pmap_destroy_user_space(u64 pml4_phys);
-      pmap_destroy_user_space((u64)proc->p_task->ta_vm_map);
-      proc->p_task->ta_vm_map = nullptr;
-    }
-
-    xiu_thread_t *th = proc->p_task->ta_threads;
+    chimera_thread_t *th = proc->p_task->ta_threads;
     while (th) {
-      xiu_thread_t *next = th->th_task_next;
+      chimera_thread_t *next = th->th_task_next;
+      th->th_state = THREAD_STATE_HALTED;
       scheduler_remove_thread(th);
       th->th_signature = 0;
       th = next;
     }
     proc->p_task->ta_threads = nullptr;
     proc->p_task->ta_thread_count = 0;
+
+    if (proc->p_task->ta_vm_map) {
+      extern void pmap_destroy_user_space(u64 pml4_phys);
+      pmap_destroy_user_space((u64)proc->p_task->ta_vm_map);
+      proc->p_task->ta_vm_map = nullptr;
+    }
 
     if (proc->p_task->ta_ipc_space) {
       extern void ipc_space_destroy(ipc_space_t * space);
@@ -259,8 +287,8 @@ void proc_mark_exited(xiu_proc_t *proc, u32 code) {
   // 4. Reparent orphan children to launchd (PID 1)
   irq_flags_t pool_irq = spinlock_lock_irqsave(&s_proc_pool_lock);
   for (u32 i = 1; i < PROC_POOL_SIZE; i++) {
-    xiu_proc_t *child = &s_proc_pool[i];
-    if (child->p_signature == XIU_PROC_MAGIC &&
+    chimera_proc_t *child = &s_proc_pool[i];
+    if (child->p_signature == CHIMERA_PROC_MAGIC &&
         (child->p_parent == proc || child->p_ppid == proc->p_pid)) {
       child->p_parent = proc_launchd;
       child->p_ppid = (proc_launchd ? proc_launchd->p_pid : 1);
@@ -280,7 +308,7 @@ void proc_mark_exited(xiu_proc_t *proc, u32 code) {
   }
 }
 
-void proc_reap(xiu_proc_t *proc) {
+void proc_reap(chimera_proc_t *proc) {
   if (!proc || proc->p_state != PROC_STATE_EXITED)
     return;
   irq_flags_t irq = spinlock_lock_irqsave(&proc->p_lock);
@@ -295,18 +323,21 @@ void proc_reap(xiu_proc_t *proc) {
     proc->p_task = nullptr;
   }
 
-  // Clear process slot for reuse
+  spinlock_unlock_irqrestore(&proc->p_lock, irq);
+
+  // Clear process slot for reuse under global pool lock
+  irq_flags_t pool_irq = spinlock_lock_irqsave(&s_proc_pool_lock);
   proc->p_signature = 0;
   proc->p_state = 0;
   proc->p_pid = 0;
   proc->p_ppid = 0;
   proc->p_parent = nullptr;
-  spinlock_unlock_irqrestore(&proc->p_lock, irq);
+  spinlock_unlock_irqrestore(&s_proc_pool_lock, pool_irq);
 }
 
-xiu_error_t proc_signal(xiu_proc_t *proc, int sig) {
+chimera_error_t proc_signal(chimera_proc_t *proc, int sig) {
   if (!proc || sig <= 0 || sig >= 32)
-    return XIU_ERR_INVALID;
+    return CHIMERA_ERR_INVALID;
   irq_flags_t irq = spinlock_lock_irqsave(&proc->p_lock);
 
   if (sig == 9) {
@@ -315,13 +346,13 @@ xiu_error_t proc_signal(xiu_proc_t *proc, int sig) {
     if (proc->p_task && proc->p_task->ta_threads) {
       thread_wake(proc->p_task->ta_threads);
     }
-    return XIU_SUCCESS;
+    return CHIMERA_SUCCESS;
   }
 
   u64 act = proc->p_sigacts[sig];
   if (act == 1) {
     spinlock_unlock_irqrestore(&proc->p_lock, irq);
-    return XIU_SUCCESS;
+    return CHIMERA_SUCCESS;
   }
 
   proc->p_sigpending |= (1U << sig);
@@ -330,7 +361,7 @@ xiu_error_t proc_signal(xiu_proc_t *proc, int sig) {
   if (proc->p_task && proc->p_task->ta_threads) {
     thread_wake(proc->p_task->ta_threads);
   }
-  return XIU_SUCCESS;
+  return CHIMERA_SUCCESS;
 }
 
 typedef struct syscall_user_frame_alias {
@@ -343,8 +374,8 @@ typedef struct syscall_user_frame_alias {
 extern i64 sys_exit_internal(u64 code);
 
 void proc_deliver_signals(void *frame_ptr) {
-  xiu_task_t *task = current_task();
-  xiu_proc_t *proc = task ? task->ta_proc : nullptr;
+  chimera_task_t *task = current_task();
+  chimera_proc_t *proc = task ? task->ta_proc : nullptr;
   if (!proc || proc->p_pid == 0 || !frame_ptr)
     return;
 
@@ -378,16 +409,16 @@ void proc_deliver_signals(void *frame_ptr) {
   spinlock_unlock_irqrestore(&proc->p_lock, irq);
 }
 
-xiu_proc_t *proc_find_waitable_child(xiu_proc_t *parent, xiu_pid_t pid) {
+chimera_proc_t *proc_find_waitable_child(chimera_proc_t *parent, chimera_pid_t pid) {
   if (!parent)
     return nullptr;
   for (u32 i = 1; i < PROC_POOL_SIZE; i++) {
-    xiu_proc_t *p = &s_proc_pool[i];
-    if (p->p_signature != XIU_PROC_MAGIC)
+    chimera_proc_t *p = &s_proc_pool[i];
+    if (p->p_signature != CHIMERA_PROC_MAGIC)
       continue;
     if (p->p_parent != parent && p->p_ppid != parent->p_pid)
       continue;
-    if (pid != (xiu_pid_t)-1 && pid != 0 && p->p_pid != pid)
+    if (pid != (chimera_pid_t)-1 && pid != 0 && p->p_pid != pid)
       continue;
     if (p->p_state == PROC_STATE_EXITED)
       return p;
@@ -395,12 +426,12 @@ xiu_proc_t *proc_find_waitable_child(xiu_proc_t *parent, xiu_pid_t pid) {
   return nullptr;
 }
 
-int proc_has_children(xiu_proc_t *parent) {
+int proc_has_children(chimera_proc_t *parent) {
   if (!parent)
     return 0;
   for (u32 i = 1; i < PROC_POOL_SIZE; i++) {
-    xiu_proc_t *p = &s_proc_pool[i];
-    if (p->p_signature != XIU_PROC_MAGIC)
+    chimera_proc_t *p = &s_proc_pool[i];
+    if (p->p_signature != CHIMERA_PROC_MAGIC)
       continue;
     if (p->p_parent == parent || p->p_ppid == parent->p_pid)
       return 1;
@@ -408,18 +439,18 @@ int proc_has_children(xiu_proc_t *parent) {
   return 0;
 }
 
-xiu_error_t task_create(xiu_task_t *parent, xiu_task_t **task_out) {
-  XIU_ASSERT(task_out != nullptr);
+chimera_error_t task_create(chimera_task_t *parent, chimera_task_t **task_out) {
+  CHIMERA_ASSERT(task_out != nullptr);
   (void)parent;
 
-  static xiu_task_t s_task_pool[64];
+  static chimera_task_t s_task_pool[64];
   static spinlock_t s_task_pool_lock = SPINLOCK_INIT;
 
   irq_flags_t irq = spinlock_lock_irqsave(&s_task_pool_lock);
-  xiu_task_t *t = nullptr;
+  chimera_task_t *t = nullptr;
   u32 idx = 0;
   for (u32 i = 1; i < 64; i++) {
-    if (s_task_pool[i].ta_signature != XIU_TASK_MAGIC) {
+    if (s_task_pool[i].ta_signature != CHIMERA_TASK_MAGIC) {
       t = &s_task_pool[i];
       idx = i;
       break;
@@ -427,11 +458,11 @@ xiu_error_t task_create(xiu_task_t *parent, xiu_task_t **task_out) {
   }
   if (!t) {
     spinlock_unlock_irqrestore(&s_task_pool_lock, irq);
-    return XIU_ERR_NOMEM;
+    return CHIMERA_ERR_NOMEM;
   }
 
-  __builtin_memset(t, 0, sizeof(xiu_task_t));
-  t->ta_signature = XIU_TASK_MAGIC;
+  __builtin_memset(t, 0, sizeof(chimera_task_t));
+  t->ta_signature = CHIMERA_TASK_MAGIC;
   t->ta_id = idx;
   t->ta_thread_count = 1;
   spinlock_init(&t->ta_lock);
@@ -441,13 +472,13 @@ xiu_error_t task_create(xiu_task_t *parent, xiu_task_t **task_out) {
   u64 pml4_phys = pmap_create();
   t->ta_vm_map = (void *)pml4_phys;
 
-  xiu_error_t err = ipc_space_create(t, &t->ta_ipc_space);
-  if (XIU_FAILED(err))
+  chimera_error_t err = ipc_space_create(t, &t->ta_ipc_space);
+  if (CHIMERA_FAILED(err))
     return err;
 
   mach_port_name_t tp_name;
   err = ipc_port_alloc(t->ta_ipc_space, &tp_name, "task.self");
-  if (XIU_SUCCEEDED(err)) {
+  if (CHIMERA_SUCCEEDED(err)) {
     struct ipc_port *tp = t->ta_ipc_space->is_table[tp_name].ie_object;
     if (tp) {
       tp->ip_kobject = t;
@@ -457,9 +488,9 @@ xiu_error_t task_create(xiu_task_t *parent, xiu_task_t **task_out) {
   }
 
   *task_out = t;
-  return XIU_SUCCESS;
+  return CHIMERA_SUCCESS;
 }
-xiu_task_t *current_task(void) {
-  xiu_thread_t *th = current_thread();
+chimera_task_t *current_task(void) {
+  chimera_thread_t *th = current_thread();
   return th ? th->th_task : nullptr;
 }

@@ -1,6 +1,6 @@
 #!/bin/bash
 # =============================================================================
-# XIU Operating System — ISO Creation Script (Limine)
+# Chimera Operating System — ISO Creation Script (Limine)
 # scripts/make_iso.sh
 # =============================================================================
 
@@ -8,16 +8,16 @@ set -e
 
 ARCH=${1:-x86_64}
 CMDLINE_ARG=${2:-""}
-KERNEL="build/${ARCH}/kernel/xiu_kernel.elf"
-ISO="build/xiu-${ARCH}.iso"
+KERNEL="build/${ARCH}/kernel/chimera_kernel.elf"
+ISO="build/chimera-${ARCH}.iso"
 ISO_ROOT="build/iso_root"
 
 if [ ! -f "$KERNEL" ]; then
-    echo "[XIU] Error: Kernel not found at $KERNEL"
+    echo "[CHIMERA] Error: Kernel not found at $KERNEL"
     exit 1
 fi
 
-echo "[XIU] Preparing ISO root..."
+echo "[CHIMERA] Preparing ISO root..."
 rm -rf "$ISO_ROOT"
 mkdir -p "$ISO_ROOT"
 
@@ -64,24 +64,24 @@ for u in root fvr user; do
     mkdir -p "$ISO_ROOT/Users/$u/Desktop" "$ISO_ROOT/Users/$u/Documents" "$ISO_ROOT/Users/$u/Downloads" "$ISO_ROOT/Users/$u/Library" "$ISO_ROOT/Users/$u/Pictures" "$ISO_ROOT/Users/$u/Public"
     touch "$ISO_ROOT/Users/$u/Desktop/.localized" "$ISO_ROOT/Users/$u/Documents/.localized" "$ISO_ROOT/Users/$u/Downloads/.localized" "$ISO_ROOT/Users/$u/Library/.localized" "$ISO_ROOT/Users/$u/Pictures/.localized" "$ISO_ROOT/Users/$u/Public/.localized"
     printf 'export PATH="/bin:/usr/bin:/sbin:/usr/sbin:/usr/local/bin"\nexport TERM="xterm-256color"\nexport PROMPT="%%n@%%m %%~ %%# "\nexport PS1="%%n@%%m %%~ %%# "\nunsetopt zle\nunsetopt promptcr\nunsetopt promptsp\n' > "$ISO_ROOT/Users/$u/.zshrc"
-    printf '#include <stdio.h>\n\nint main() {\n    printf("Hello from self-hosted XIU C compiler!\\n");\n    return 0;\n}\n' > "$ISO_ROOT/Users/$u/hello.c"
+    printf '#include <stdio.h>\n\nint main() {\n    printf("Hello from self-hosted Chimera C compiler!\\n");\n    return 0;\n}\n' > "$ISO_ROOT/Users/$u/hello.c"
 done
 
 
-printf "Welcome to XIU Operating System!\nApple Darwin / Mach-BSD Hybrid Architecture.\n" > "$ISO_ROOT/private/etc/motd"
-printf "XIU OS v0.1.0 (Darwin 24.0.0 %s)\n" "$ARCH" > "$ISO_ROOT/private/etc/version"
-printf "127.0.0.1\tlocalhost\n10.0.2.15\txiu-mac\n" > "$ISO_ROOT/private/etc/hosts"
+printf "Welcome to Chimera Operating System!\nApple Darwin / Mach-BSD Hybrid Architecture.\n" > "$ISO_ROOT/private/etc/motd"
+printf "Chimera OS v0.1.0 (Darwin 24.0.0 %s)\n" "$ARCH" > "$ISO_ROOT/private/etc/version"
+printf "127.0.0.1\tlocalhost\n10.0.2.15\tchimera-mac\n" > "$ISO_ROOT/private/etc/hosts"
 
 # Generate complete limine.conf with all kernel modules
 cat << EOF > "$ISO_ROOT/limine.conf"
 # =============================================================================
-# XIU Operating System — Limine Configuration (v8.x Format)
+# Chimera Operating System — Limine Configuration (v8.x Format)
 # limine.conf
 # =============================================================================
 
 timeout: 0
 
-/XIU Operating System
+/Chimera Operating System
     protocol: limine
     kernel_path: boot():/kernel.elf
 EOF
@@ -113,7 +113,7 @@ if [ ! -d "$LIMINE_DIR" ]; then
 fi
 
 if [ ! -d "$LIMINE_DIR" ] || [ ! -f "$LIMINE_DIR/limine-bios.sys" ]; then
-    echo "[XIU] Error: Limine directory or limine-bios.sys not found."
+    echo "[CHIMERA] Error: Limine directory or limine-bios.sys not found."
     echo "      Please install limine (e.g. 'brew install limine') or place it in build/limine"
     exit 1
 fi
@@ -127,21 +127,21 @@ cp "$LIMINE_DIR/limine-uefi-cd.bin" "$ISO_ROOT/"
 [ -f "$LIMINE_DIR/BOOTIA32.EFI" ] && cp "$LIMINE_DIR/BOOTIA32.EFI" "$ISO_ROOT/EFI/BOOT/"
 [ -f "$LIMINE_DIR/BOOTAA64.EFI" ] && cp "$LIMINE_DIR/BOOTAA64.EFI" "$ISO_ROOT/EFI/BOOT/"
 
-echo "[XIU] Creating ISO with xorriso..."
+echo "[CHIMERA] Creating ISO with xorriso..."
 xorriso -as mkisofs -b limine-bios-cd.bin \
         -no-emul-boot -boot-load-size 4 -boot-info-table \
         --efi-boot limine-uefi-cd.bin \
         -efi-boot-part --efi-boot-image --protective-msdos-label \
         "$ISO_ROOT" -o "$ISO"
 
-echo "[XIU] Installing Limine to ISO..."
+echo "[CHIMERA] Installing Limine to ISO..."
 if [ -f "./build/limine/limine" ]; then
     ./build/limine/limine bios-install "$ISO"
 elif command -v limine &> /dev/null; then
     limine bios-install "$ISO"
 else
-    echo "[XIU] Warning: 'limine' tool not found. BIOS boot may not work."
+    echo "[CHIMERA] Warning: 'limine' tool not found. BIOS boot may not work."
     echo "      Install it with 'brew install limine' for full BIOS support."
 fi
 
-echo "[XIU] ISO created: $ISO"
+echo "[CHIMERA] ISO created: $ISO"

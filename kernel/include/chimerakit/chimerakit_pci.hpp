@@ -1,13 +1,13 @@
 /* =============================================================================
- * XIU Operating System — XIU-Kit PCI Driver Foundation
- * kernel/include/xiukit/xiukit_pci.hpp
+ * Chimera Operating System — ChimeraKit PCI Driver Foundation
+ * kernel/include/chimerakit/chimerakit_pci.hpp
  * ============================================================================= */
 
 #pragma once
 #ifndef XIUKIT_PCI_HPP
 #define XIUKIT_PCI_HPP
 
-#include <kernel/xiu_types.h>
+#include <kernel/chimera_types.h>
 
 #ifdef __cplusplus
 namespace XIUKit {
@@ -30,7 +30,7 @@ public:
     void configWrite32(u8 offset, u32 value);
 
     // resource Management
-    xiu_paddr_t getBAR(u8 index);
+    chimera_paddr_t getBAR(u8 index);
     usize       getBARSize(u8 index);
 
 protected:
@@ -61,7 +61,7 @@ private:
 extern "C" {
 #endif
 
-void xiukit_pci_init(void);
+void chimerakit_pci_init(void);
 
 #ifdef __cplusplus
 }

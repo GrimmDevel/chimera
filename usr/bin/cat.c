@@ -1,5 +1,5 @@
 // cat - concatenate and print files
-#include <kernel/xiu_types.h>
+#include <kernel/chimera_types.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <string.h>

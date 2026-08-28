@@ -1,5 +1,5 @@
 // clear - clear terminal screen
-#include <kernel/xiu_types.h>
+#include <kernel/chimera_types.h>
 #include <unistd.h>
 
 int main(void) {

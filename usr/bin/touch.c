@@ -1,4 +1,4 @@
-#include <kernel/xiu_types.h>
+#include <kernel/chimera_types.h>
 
 extern i64 open(const char *path, int flags, int mode);
 extern i64 close(int fd);

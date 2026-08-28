@@ -1,5 +1,5 @@
 /* =============================================================================
- * XIU Operating System — Network Subsystem Initializer (net_init)
+ * Chimera Operating System — Network Subsystem Initializer (net_init)
  * kernel/net/net_init.c
  * ============================================================================= */
 
@@ -17,7 +17,7 @@ extern void icmp_init(void);
 extern void udp_init(void);
 extern void tcp_init(void);
 extern void uipc_socket_init(void);
-extern xiu_error_t e1000_init(u64 bar0_phys);
+extern chimera_error_t e1000_init(u64 bar0_phys);
 extern void dhcp_discover(ifnet_t *ifp);
 
 void net_init(void) {

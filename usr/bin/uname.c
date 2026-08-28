@@ -1,5 +1,5 @@
 // uname - print system information
-#include <kernel/xiu_types.h>
+#include <kernel/chimera_types.h>
 #include <stdio.h>
 #include <string.h>
 

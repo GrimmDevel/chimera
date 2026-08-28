@@ -1,5 +1,5 @@
 // cp - copy files and directories
-#include <kernel/xiu_types.h>
+#include <kernel/chimera_types.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <dirent.h>

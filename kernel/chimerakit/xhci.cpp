@@ -3,17 +3,17 @@
 #include <kernel/input.h>
 #include <kernel/panic.h>
 #include <kernel/spinlock.h>
-#include <kernel/xiu_types.h>
+#include <kernel/chimera_types.h>
 
 extern "C" void kprintf(const char *fmt, ...);
-extern "C" xiu_paddr_t pmm_alloc_page(void);
-extern "C" xiu_paddr_t pmm_alloc_pages(usize count);
+extern "C" chimera_paddr_t pmm_alloc_page(void);
+extern "C" chimera_paddr_t pmm_alloc_pages(usize count);
 extern "C" void console_in_push(char c);
 extern "C" void console_scroll_viewport(int delta);
 extern "C" void console_scroll_to_bottom(void);
-extern "C" void xiukit_hid_push_key_event(u32 scancode, u32 unicode, u32 mods,
+extern "C" void chimerakit_hid_push_key_event(u32 scancode, u32 unicode, u32 mods,
                                           bool release);
-extern "C" void xiukit_hid_push_mouse_event(i32 dx, i32 dy, i32 dz,
+extern "C" void chimerakit_hid_push_mouse_event(i32 dx, i32 dy, i32 dz,
                                             u32 buttons);
 
 // cap regs
@@ -83,13 +83,13 @@ static inline u32 xhci_port_state_to_neutral(u32 portsc) {
 #define TRB_TYPE_CMD_COMPLETION 33
 #define TRB_TYPE_PORT_STATUS_CHANGE 34
 
-typedef struct XIU_PACKED {
+typedef struct CHIMERA_PACKED {
   u64 param;
   u32 status;
   u32 control;
 } xhci_trb_t;
 
-typedef struct XIU_PACKED {
+typedef struct CHIMERA_PACKED {
   u64 ring_base;
   u32 ring_size;
   u32 reserved;
@@ -105,17 +105,17 @@ typedef struct {
   bool active;
 
   xhci_trb_t *transfer_ring;
-  xiu_paddr_t transfer_ring_phys;
+  chimera_paddr_t transfer_ring_phys;
   u32 transfer_cycle;
   u32 transfer_enqueue;
 
   xhci_trb_t *ep1_ring;
-  xiu_paddr_t ep1_ring_phys;
+  chimera_paddr_t ep1_ring_phys;
   u32 ep1_cycle;
   u32 ep1_enqueue;
 
   u8 report_buffer[64];
-  xiu_paddr_t report_buffer_phys;
+  chimera_paddr_t report_buffer_phys;
   u8 prev_keys[6];
   u8 prev_modifiers;
   u8 prev_mouse_buttons;
@@ -137,17 +137,17 @@ private:
   u32 m_context_size = 32;
 
   u64 *m_dcbaa = nullptr;
-  xiu_paddr_t m_dcbaa_phys = 0;
+  chimera_paddr_t m_dcbaa_phys = 0;
 
   xhci_trb_t *m_cmd_ring = nullptr;
-  xiu_paddr_t m_cmd_ring_phys = 0;
+  chimera_paddr_t m_cmd_ring_phys = 0;
   u32 m_cmd_enqueue = 0;
   u32 m_cmd_cycle = 1;
 
   xhci_trb_t *m_ev_ring = nullptr;
-  xiu_paddr_t m_ev_ring_phys = 0;
+  chimera_paddr_t m_ev_ring_phys = 0;
   xhci_erst_entry_t *m_erst = nullptr;
-  xiu_paddr_t m_erst_phys = 0;
+  chimera_paddr_t m_erst_phys = 0;
   u32 m_ev_dequeue = 0;
   u32 m_ev_cycle = 1;
   u64 m_interrupter0 = 0;
@@ -606,21 +606,21 @@ private:
     u8 modifiers = report[0];
     u32 mods = 0;
     if (modifiers & 0x01)
-      mods |= XIU_MOD_LCTRL | XIU_MOD_CTRL;
+      mods |= CHIMERA_MOD_LCTRL | CHIMERA_MOD_CTRL;
     if (modifiers & 0x02)
-      mods |= XIU_MOD_LSHIFT | XIU_MOD_SHIFT;
+      mods |= CHIMERA_MOD_LSHIFT | CHIMERA_MOD_SHIFT;
     if (modifiers & 0x04)
-      mods |= XIU_MOD_LALT | XIU_MOD_ALT;
+      mods |= CHIMERA_MOD_LALT | CHIMERA_MOD_ALT;
     if (modifiers & 0x08)
-      mods |= XIU_MOD_LCMD | XIU_MOD_CMD;
+      mods |= CHIMERA_MOD_LCMD | CHIMERA_MOD_CMD;
     if (modifiers & 0x10)
-      mods |= XIU_MOD_RCTRL | XIU_MOD_CTRL;
+      mods |= CHIMERA_MOD_RCTRL | CHIMERA_MOD_CTRL;
     if (modifiers & 0x20)
-      mods |= XIU_MOD_RSHIFT | XIU_MOD_SHIFT;
+      mods |= CHIMERA_MOD_RSHIFT | CHIMERA_MOD_SHIFT;
     if (modifiers & 0x40)
-      mods |= XIU_MOD_RALT | XIU_MOD_ALT;
+      mods |= CHIMERA_MOD_RALT | CHIMERA_MOD_ALT;
     if (modifiers & 0x80)
-      mods |= XIU_MOD_RCMD | XIU_MOD_CMD;
+      mods |= CHIMERA_MOD_RCMD | CHIMERA_MOD_CMD;
 
     for (int i = 2; i < 8; i++) {
       u8 key = report[i];
@@ -634,7 +634,7 @@ private:
         }
         if (!was_pressed) {
           u32 unicode = 0;
-          bool shift = (mods & XIU_MOD_SHIFT) != 0;
+          bool shift = (mods & CHIMERA_MOD_SHIFT) != 0;
 
           if (key >= 0x04 && key <= 0x1D) {
             unicode = shift ? ('A' + (key - 0x04)) : ('a' + (key - 0x04));
@@ -718,7 +718,7 @@ private:
           }
 
           if (unicode != 0) {
-            xiukit_hid_push_key_event(key, unicode, mods, false);
+            chimerakit_hid_push_key_event(key, unicode, mods, false);
           }
         }
       }
@@ -735,7 +735,7 @@ private:
           }
         }
         if (!still_pressed) {
-          xiukit_hid_push_key_event(old_key, 0, mods, true);
+          chimerakit_hid_push_key_event(old_key, 0, mods, true);
         }
       }
     }
@@ -770,7 +770,7 @@ private:
       dz = (i8)report[3];
     }
 
-    xiukit_hid_push_mouse_event((i32)dx, (i32)dy, (i32)dz, (u32)buttons);
+    chimerakit_hid_push_mouse_event((i32)dx, (i32)dy, (i32)dz, (u32)buttons);
   }
 
 public:
@@ -834,12 +834,12 @@ public:
 
     if (max_scratch > 0) {
       usize array_pages = (max_scratch * sizeof(u64) + 4095) / 4096;
-      xiu_paddr_t sp_array_phys = pmm_alloc_pages(array_pages);
+      chimera_paddr_t sp_array_phys = pmm_alloc_pages(array_pages);
       u64 *sp_array = (u64 *)(sp_array_phys + g_hhdm_base);
       __builtin_memset(sp_array, 0, array_pages * 4096);
 
       for (u32 i = 0; i < max_scratch; i++) {
-        xiu_paddr_t sp_page = pmm_alloc_pages(1);
+        chimera_paddr_t sp_page = pmm_alloc_pages(1);
         __builtin_memset((void *)(sp_page + g_hhdm_base), 0, 4096);
         sp_array[i] = sp_page;
       }
@@ -1006,7 +1006,7 @@ public:
     dev->report_buffer_phys = pmm_alloc_pages(1);
     __builtin_memset((void *)(dev->report_buffer_phys + g_hhdm_base), 0, 4096);
 
-    xiu_paddr_t in_ctx_phys = pmm_alloc_pages(1);
+    chimera_paddr_t in_ctx_phys = pmm_alloc_pages(1);
     u8 *in_ctx = (u8 *)(in_ctx_phys + g_hhdm_base);
     __builtin_memset(in_ctx, 0, 4096);
 
@@ -1026,7 +1026,7 @@ public:
     ep0[3] = (u32)(ep0_tr_ptr >> 32);
     ep0[4] = 8;
 
-    xiu_paddr_t out_ctx_phys = pmm_alloc_pages(1);
+    chimera_paddr_t out_ctx_phys = pmm_alloc_pages(1);
     __builtin_memset((void *)(out_ctx_phys + g_hhdm_base), 0, 4096);
     m_dcbaa[slot_id] = out_ctx_phys;
 
@@ -1220,7 +1220,7 @@ public:
 
   void dump_status() {
     if (!m_initialized) {
-      kprintf("\n[XIU USB STATUS] xHCI Controller: NOT INITIALIZED\n\n");
+      kprintf("\n[CHIMERA USB STATUS] xHCI Controller: NOT INITIALIZED\n\n");
       return;
     }
 
@@ -1232,7 +1232,7 @@ public:
 
     kprintf("\n=======================================================\n");
     kprintf(
-        "[XIU USB STATUS] xHCI Controller Diagnostics (Ports=%u, Devices=%u)\n",
+        "[CHIMERA USB STATUS] xHCI Controller Diagnostics (Ports=%u, Devices=%u)\n",
         m_max_ports, m_num_devices);
     kprintf("  Registers: USBCMD=0x%08x (RS=%u) | USBSTS=0x%08x (HCH=%u, "
             "CNR=%u) | CONFIG=0x%08x\n",
@@ -1287,10 +1287,10 @@ static XHCIDriver s_xhci;
 
 } // namespace XIUKit
 
-extern "C" void xiukit_xhci_init(u64 pci_bar0) {
+extern "C" void chimerakit_xhci_init(u64 pci_bar0) {
   XIUKit::s_xhci.init(pci_bar0);
 }
 
-extern "C" void xiukit_xhci_poll(void) { XIUKit::s_xhci.poll_events(); }
+extern "C" void chimerakit_xhci_poll(void) { XIUKit::s_xhci.poll_events(); }
 
-extern "C" void xiukit_xhci_dump_status(void) { XIUKit::s_xhci.dump_status(); }
+extern "C" void chimerakit_xhci_dump_status(void) { XIUKit::s_xhci.dump_status(); }

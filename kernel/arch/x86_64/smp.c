@@ -1,5 +1,5 @@
 /* =============================================================================
- * XIU Operating System — Symmetric Multiprocessing (SMP) Subsystem
+ * Chimera Operating System — Symmetric Multiprocessing (SMP) Subsystem
  * kernel/arch/x86_64/smp.c
  *
  * Implements Application Processor (AP) booting via Limine SMP protocol,
@@ -13,7 +13,7 @@
 #include <limine/limine.h>
 
 extern void kprintf(const char *fmt, ...);
-extern xiu_paddr_t pmm_alloc_pages(usize count);
+extern chimera_paddr_t pmm_alloc_pages(usize count);
 extern void scheduler_ap_run(void);
 extern void idt_reload(void);
 
@@ -30,12 +30,12 @@ extern void idt_reload(void);
 extern void x86_64_syscall_entry(void);
 
 // per-CPU Data Blocks
-cpu_local_t g_cpu_data[XIU_MAX_CPUS];
+cpu_local_t g_cpu_data[CHIMERA_MAX_CPUS];
 u32 g_active_cpus = 1;
 static u32 s_total_cpus = 1;
 
-static u64 s_ap_gdt[XIU_MAX_CPUS][7];
-static struct tss_entry s_ap_tss[XIU_MAX_CPUS];
+static u64 s_ap_gdt[CHIMERA_MAX_CPUS][7];
+static struct tss_entry s_ap_tss[CHIMERA_MAX_CPUS];
 
 static inline u64 rdmsr(u32 msr) {
     u32 low, high;
@@ -109,6 +109,11 @@ void smp_init(void) {
     g_cpu_data[0].cpu_lapic_id = lapic_get_id();
     g_cpu_data[0].cpu_is_bsp = 1;
     g_cpu_data[0].cpu_is_active = 1;
+    chimera_paddr_t bsp_stack_phys = pmm_alloc_pages(4);
+    if (bsp_stack_phys && bsp_stack_phys != (chimera_paddr_t)-1) {
+        u64 stack_top = bsp_stack_phys + g_hhdm_base + (4 * 4096);
+        g_cpu_data[0].cpu_kernel_stack = (void *)stack_top;
+    }
     g_active_cpus = 1;
 
     // ensure BSP GS base is set to g_cpu_data[0]
@@ -126,7 +131,7 @@ void smp_init(void) {
 
     struct limine_smp_response *resp = smp_request.response;
     s_total_cpus = (u32)resp->cpu_count;
-    if (s_total_cpus > XIU_MAX_CPUS) s_total_cpus = XIU_MAX_CPUS;
+    if (s_total_cpus > CHIMERA_MAX_CPUS) s_total_cpus = CHIMERA_MAX_CPUS;
 
     kprintf("[SMP] Discovered %u CPU cores via Limine SMP\n", s_total_cpus);
 
@@ -147,7 +152,7 @@ void smp_init(void) {
         g_cpu_data[cpu_idx].cpu_tss_ptr = &s_ap_tss[cpu_idx];
 
         // allocate 16 KB kernel stack for this AP
-        xiu_paddr_t stack_phys = pmm_alloc_pages(4);
+        chimera_paddr_t stack_phys = pmm_alloc_pages(4);
         if (stack_phys) {
             u64 stack_top = stack_phys + HHDM_BASE + (4 * 4096);
             g_cpu_data[cpu_idx].cpu_kernel_stack = (void *)stack_top;

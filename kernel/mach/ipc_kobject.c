@@ -4,11 +4,11 @@
 #include <kernel/ipc_port.h>
 #include <kernel/proc.h>
 #include <kernel/panic.h>
-#include <kernel/xiu_types.h>
+#include <kernel/chimera_types.h>
 
 extern void kprintf(const char *fmt, ...);
-extern xiu_paddr_t pmm_alloc_page(void);
-extern void pmm_release_page(xiu_paddr_t addr);
+extern chimera_paddr_t pmm_alloc_page(void);
+extern void pmm_release_page(chimera_paddr_t addr);
 extern u64 pmap_map_user_page(u64 target_pml4_phys, u64 vaddr, u64 paddr, u32 flags);
 extern void pmap_unmap_user_range(u64 pml4_phys, u64 vaddr, usize len);
 
@@ -23,7 +23,7 @@ void ipc_kobject_set(struct ipc_port *port, void *kobject, ipc_kobject_type_t ty
 static void send_mig_reply_ret(struct ipc_port *reply_port, mach_msg_id_t reply_id, i32 ret_code) {
     if (!reply_port) return;
 
-    typedef struct XIU_PACKED {
+    typedef struct CHIMERA_PACKED {
         mach_msg_header_t hdr;
         u32               ret_code;
     } mig_reply_msg_t;
@@ -45,8 +45,8 @@ static void send_mig_reply_ret(struct ipc_port *reply_port, mach_msg_id_t reply_
     }
 }
 
-xiu_error_t ipc_kobject_server(struct ipc_port *port, ipc_kmsg_t *kmsg) {
-    if (!port || !kmsg) return XIU_ERR_INVALID;
+chimera_error_t ipc_kobject_server(struct ipc_port *port, ipc_kmsg_t *kmsg) {
+    if (!port || !kmsg) return CHIMERA_ERR_INVALID;
 
     mach_msg_header_t *hdr = kmsg->ikm_header;
     mach_msg_id_t msg_id = hdr->msgh_id;
@@ -54,41 +54,55 @@ xiu_error_t ipc_kobject_server(struct ipc_port *port, ipc_kmsg_t *kmsg) {
     u8 *req_data = (u8 *)(hdr + 1);
 
     if (port->ip_kotype == IKOT_TASK) {
-        xiu_task_t *target_task = (xiu_task_t *)port->ip_kobject;
+        chimera_task_t *target_task = (chimera_task_t *)port->ip_kobject;
         if (!target_task) target_task = current_task();
 
         switch (msg_id) {
             case MACH_VM_ALLOCATE_ID: {
-                typedef struct XIU_PACKED {
+                typedef struct CHIMERA_PACKED {
                     u64 address;
                     u64 size;
                     u32 flags;
                 } req_vm_alloc_t;
 
                 req_vm_alloc_t *req = (req_vm_alloc_t *)req_data;
-                u64 req_size = (req->size + 4095) & ~4095ULL;
-                u64 target_va = req->address;
+                u32 ret_code = 0;
+                u64 target_va = 0;
 
-                if (target_va == 0 || (req->flags & 1)) {
-                    static u64 s_next_mmap_va = 0x0000600000000000ULL;
-                    target_va = s_next_mmap_va;
-                    s_next_mmap_va += req_size + 4096;
-                    if (s_next_mmap_va > 0x00006f0000000000ULL) s_next_mmap_va = 0x0000600000000000ULL;
-                }
+                if (!target_task || !target_task->ta_vm_map || req->size == 0 || req->size > 0x100000000ULL) {
+                    ret_code = 4; // KERN_INVALID_ARGUMENT
+                } else {
+                    u64 req_size = (req->size + 4095) & ~4095ULL;
+                    target_va = req->address;
 
-                if (target_task && target_task->ta_vm_map) {
-                    for (u64 offset = 0; offset < req_size; offset += 4096) {
-                        xiu_paddr_t paddr = pmm_alloc_page();
-                        if (paddr) {
-                            void *page = (void *)(paddr + HHDM_BASE);
-                            __builtin_memset(page, 0, 4096);
-                            pmap_map_user_page((u64)target_task->ta_vm_map, target_va + offset,
-                                               paddr, (1ULL << 0) | (1ULL << 1) | (1ULL << 2));
+                    if (target_va == 0 || (req->flags & 1)) {
+                        if (!target_task->ta_mmap_next || target_task->ta_mmap_next < 0x0000600000000000ULL) {
+                            target_task->ta_mmap_next = 0x0000600000000000ULL;
+                        }
+                        target_va = target_task->ta_mmap_next;
+                        target_task->ta_mmap_next += req_size + 4096;
+                        if (target_task->ta_mmap_next > 0x0000780000000000ULL) {
+                            target_task->ta_mmap_next = 0x0000600000000000ULL;
+                        }
+                    }
+
+                    if (target_va < 0x1000 || target_va >= 0x0000800000000000ULL ||
+                        req_size >= 0x0000800000000000ULL || (target_va + req_size) > 0x0000800000000000ULL) {
+                        ret_code = 4; // KERN_INVALID_ARGUMENT
+                    } else {
+                        for (u64 offset = 0; offset < req_size; offset += 4096) {
+                            chimera_paddr_t paddr = pmm_alloc_page();
+                            if (paddr && paddr != (chimera_paddr_t)-1) {
+                                void *page = (void *)(paddr + HHDM_BASE);
+                                __builtin_memset(page, 0, 4096);
+                                pmap_map_user_page((u64)target_task->ta_vm_map, target_va + offset,
+                                                   paddr, (1ULL << 0) | (1ULL << 1) | (1ULL << 2));
+                            }
                         }
                     }
                 }
 
-                typedef struct XIU_PACKED {
+                typedef struct CHIMERA_PACKED {
                     mach_msg_header_t hdr;
                     u32               ret_code;
                     u64               address;
@@ -98,8 +112,8 @@ xiu_error_t ipc_kobject_server(struct ipc_port *port, ipc_kmsg_t *kmsg) {
                 __builtin_memset(&rep, 0, sizeof(rep));
                 rep.hdr.msgh_size = sizeof(rep);
                 rep.hdr.msgh_id = MACH_VM_ALLOCATE_ID + 100;
-                rep.ret_code = 0;
-                rep.address = target_va;
+                rep.ret_code = ret_code;
+                rep.address = (ret_code == 0) ? target_va : 0;
 
                 if (reply_port) {
                     ipc_kmsg_t *rep_kmsg = ipc_kmsg_alloc(sizeof(rep));
@@ -110,26 +124,31 @@ xiu_error_t ipc_kobject_server(struct ipc_port *port, ipc_kmsg_t *kmsg) {
                     }
                 }
                 ipc_kmsg_free(kmsg);
-                return XIU_SUCCESS;
+                return CHIMERA_SUCCESS;
             }
 
             case MACH_VM_DEALLOCATE_ID: {
-                typedef struct XIU_PACKED {
+                typedef struct CHIMERA_PACKED {
                     u64 address;
                     u64 size;
                 } req_vm_dealloc_t;
 
                 req_vm_dealloc_t *req = (req_vm_dealloc_t *)req_data;
-                if (target_task && target_task->ta_vm_map && req->size > 0) {
+                u32 ret_code = 0;
+                if (target_task && target_task->ta_vm_map && req->size > 0 &&
+                    req->address >= 0x1000 && req->address < 0x0000800000000000ULL &&
+                    req->size < 0x0000800000000000ULL && (req->address + req->size) <= 0x0000800000000000ULL) {
                     pmap_unmap_user_range((u64)target_task->ta_vm_map, req->address, req->size);
+                } else {
+                    ret_code = 4; // KERN_INVALID_ARGUMENT
                 }
-                send_mig_reply_ret(reply_port, MACH_VM_DEALLOCATE_ID + 100, 0);
+                send_mig_reply_ret(reply_port, MACH_VM_DEALLOCATE_ID + 100, ret_code);
                 ipc_kmsg_free(kmsg);
-                return XIU_SUCCESS;
+                return CHIMERA_SUCCESS;
             }
 
             case TASK_GET_SPECIAL_PORT_ID: {
-                typedef struct XIU_PACKED {
+                typedef struct CHIMERA_PACKED {
                     u32 which_port;
                 } req_task_get_port_t;
 
@@ -142,7 +161,7 @@ xiu_error_t ipc_kobject_server(struct ipc_port *port, ipc_kmsg_t *kmsg) {
                     found_name = target_task->ta_task_port;
                 }
 
-                typedef struct XIU_PACKED {
+                typedef struct CHIMERA_PACKED {
                     mach_msg_header_t           hdr;
                     mach_msg_body_t             body;
                     mach_msg_port_descriptor_t  port;
@@ -168,11 +187,11 @@ xiu_error_t ipc_kobject_server(struct ipc_port *port, ipc_kmsg_t *kmsg) {
                     }
                 }
                 ipc_kmsg_free(kmsg);
-                return XIU_SUCCESS;
+                return CHIMERA_SUCCESS;
             }
 
             case TASK_SET_SPECIAL_PORT_ID: {
-                typedef struct XIU_PACKED {
+                typedef struct CHIMERA_PACKED {
                     u32 which_port;
                     mach_port_name_t port_name;
                 } req_task_set_port_t;
@@ -183,11 +202,11 @@ xiu_error_t ipc_kobject_server(struct ipc_port *port, ipc_kmsg_t *kmsg) {
                 }
                 send_mig_reply_ret(reply_port, TASK_SET_SPECIAL_PORT_ID + 100, 0);
                 ipc_kmsg_free(kmsg);
-                return XIU_SUCCESS;
+                return CHIMERA_SUCCESS;
             }
 
             case TASK_INFO_ID: {
-                typedef struct XIU_PACKED {
+                typedef struct CHIMERA_PACKED {
                     mach_msg_header_t hdr;
                     u32               ret_code;
                     u32               pid;
@@ -213,7 +232,7 @@ xiu_error_t ipc_kobject_server(struct ipc_port *port, ipc_kmsg_t *kmsg) {
                     }
                 }
                 ipc_kmsg_free(kmsg);
-                return XIU_SUCCESS;
+                return CHIMERA_SUCCESS;
             }
 
             default:
@@ -223,5 +242,5 @@ xiu_error_t ipc_kobject_server(struct ipc_port *port, ipc_kmsg_t *kmsg) {
 
     send_mig_reply_ret(reply_port, msg_id + 100, -1);
     ipc_kmsg_free(kmsg);
-    return XIU_SUCCESS;
+    return CHIMERA_SUCCESS;
 }

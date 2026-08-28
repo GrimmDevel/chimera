@@ -1,5 +1,5 @@
 /* =============================================================================
- * XIU Operating System — FAT32 Filesystem Driver (Full Read & Write)
+ * Chimera Operating System — FAT32 Filesystem Driver (Full Read & Write)
  * kernel/vfs/fat32.c
  * ============================================================================= */
 
@@ -12,10 +12,10 @@
 #include <kernel/proc.h>
 
 extern void kprintf(const char *fmt, ...);
-extern xiu_error_t vfs_register(const char *path, vnode_t *vp);
-extern xiu_error_t vfs_lookup(const char *path, vnode_t **vp_out);
-extern xiu_error_t copyout(const void *kaddr, void *uaddr, usize len);
-extern xiu_error_t copyin(const void *uaddr, void *kaddr, usize len);
+extern chimera_error_t vfs_register(const char *path, vnode_t *vp);
+extern chimera_error_t vfs_lookup(const char *path, vnode_t **vp_out);
+extern chimera_error_t copyout(const void *kaddr, void *uaddr, usize len);
+extern chimera_error_t copyin(const void *uaddr, void *kaddr, usize len);
 
 fat32_fs_t g_fat32;
 static spinlock_t s_fat_lock = SPINLOCK_INIT;
@@ -47,7 +47,7 @@ static u32 fat32_cluster_to_lba(u32 cluster) {
 static u32 s_cached_fat_sec = (u32)-1;
 static u8  s_cached_fat_buf[ATA_SECTOR_SIZE];
 
-static u32 fat32_get_next_cluster(u32 cluster) {
+static u32 fat32_get_next_cluster_unlocked(u32 cluster) {
     if (cluster < 2 || cluster >= 0x0FFFFFF8) return 0x0FFFFFFF;
 
     u32 fat_offset_bytes = cluster * 4;
@@ -55,7 +55,7 @@ static u32 fat32_get_next_cluster(u32 cluster) {
     u32 entry_offset = fat_offset_bytes % ATA_SECTOR_SIZE;
 
     if (s_cached_fat_sec != fat_sector) {
-        if (ata_read_sectors(fat_sector, 1, s_cached_fat_buf) != XIU_SUCCESS) {
+        if (ata_read_sectors(fat_sector, 1, s_cached_fat_buf) != CHIMERA_SUCCESS) {
             return 0x0FFFFFFF;
         }
         s_cached_fat_sec = fat_sector;
@@ -65,8 +65,15 @@ static u32 fat32_get_next_cluster(u32 cluster) {
     return next_cluster;
 }
 
-static xiu_error_t fat32_set_fat_entry(u32 cluster, u32 val) {
-    if (cluster < 2 || cluster >= 0x0FFFFFF8) return XIU_ERR_INVALID;
+static u32 fat32_get_next_cluster(u32 cluster) {
+    irq_flags_t irq = spinlock_lock_irqsave(&s_fat_lock);
+    u32 next = fat32_get_next_cluster_unlocked(cluster);
+    spinlock_unlock_irqrestore(&s_fat_lock, irq);
+    return next;
+}
+
+static chimera_error_t fat32_set_fat_entry(u32 cluster, u32 val) {
+    if (cluster < 2 || cluster >= 0x0FFFFFF8) return CHIMERA_ERR_INVALID;
 
     u32 fat_offset_bytes = cluster * 4;
     u32 fat_sector_idx = fat_offset_bytes / ATA_SECTOR_SIZE;
@@ -79,16 +86,16 @@ static xiu_error_t fat32_set_fat_entry(u32 cluster, u32 val) {
 
     // update FAT1
     u32 fat1_sec = g_fat32.reserved_sectors + fat_sector_idx;
-    if (ata_read_sectors(fat1_sec, 1, buf) != XIU_SUCCESS) return XIU_ERR_GENERIC;
+    if (ata_read_sectors(fat1_sec, 1, buf) != CHIMERA_SUCCESS) return CHIMERA_ERR_GENERIC;
     u32 orig = *(u32 *)(buf + entry_offset);
     *(u32 *)(buf + entry_offset) = (val & 0x0FFFFFFF) | (orig & 0xF0000000);
-    if (ata_write_sectors(fat1_sec, 1, buf) != XIU_SUCCESS) return XIU_ERR_GENERIC;
+    if (ata_write_sectors(fat1_sec, 1, buf) != CHIMERA_SUCCESS) return CHIMERA_ERR_GENERIC;
 
     // update FAT2
     u32 fat2_sec = g_fat32.reserved_sectors + g_fat32.sectors_per_fat + fat_sector_idx;
-    if (ata_write_sectors(fat2_sec, 1, buf) != XIU_SUCCESS) return XIU_ERR_GENERIC;
+    if (ata_write_sectors(fat2_sec, 1, buf) != CHIMERA_SUCCESS) return CHIMERA_ERR_GENERIC;
 
-    return XIU_SUCCESS;
+    return CHIMERA_SUCCESS;
 }
 
 static u32 fat32_alloc_cluster(void) {
@@ -97,7 +104,7 @@ static u32 fat32_alloc_cluster(void) {
 
     for (u32 sec = 0; sec < g_fat32.sectors_per_fat; sec++) {
         u32 lba = g_fat32.reserved_sectors + sec;
-        if (ata_read_sectors(lba, 1, buf) != XIU_SUCCESS) break;
+        if (ata_read_sectors(lba, 1, buf) != CHIMERA_SUCCESS) break;
 
         for (u32 off = 0; off < ATA_SECTOR_SIZE; off += 4) {
             u32 cluster = (sec * ATA_SECTOR_SIZE + off) / 4;
@@ -202,8 +209,8 @@ static void fat32_make_83_name(const char *in_name, u8 *out_83) {
 
 // directory entry on-disk mutation
 
-static xiu_error_t fat32_update_dir_entry(fat32_node_data_t *nd) {
-    if (!nd || nd->parent_dir_cluster < 2) return XIU_SUCCESS;
+static chimera_error_t fat32_update_dir_entry(fat32_node_data_t *nd) {
+    if (!nd || nd->parent_dir_cluster < 2) return CHIMERA_SUCCESS;
 
     u32 cluster = nd->parent_dir_cluster;
     u32 offset = nd->dir_entry_offset;
@@ -214,13 +221,13 @@ static xiu_error_t fat32_update_dir_entry(fat32_node_data_t *nd) {
         offset -= cluster_size;
     }
 
-    if (cluster < 2 || cluster >= 0x0FFFFFF8) return XIU_ERR_INVALID;
+    if (cluster < 2 || cluster >= 0x0FFFFFF8) return CHIMERA_ERR_INVALID;
 
     u32 lba = fat32_cluster_to_lba(cluster) + (offset / ATA_SECTOR_SIZE);
     u32 sec_off = offset % ATA_SECTOR_SIZE;
 
     u8 sec[ATA_SECTOR_SIZE];
-    if (ata_read_sectors(lba, 1, sec) != XIU_SUCCESS) return XIU_ERR_GENERIC;
+    if (ata_read_sectors(lba, 1, sec) != CHIMERA_SUCCESS) return CHIMERA_ERR_GENERIC;
 
     u8 *entry = sec + sec_off;
     *(u16 *)(entry + 20) = (u16)((nd->start_cluster >> 16) & 0xFFFF);
@@ -231,10 +238,10 @@ static xiu_error_t fat32_update_dir_entry(fat32_node_data_t *nd) {
 }
 
 // read/write file data
-xiu_error_t fat32_read_file(u32 start_cluster, u32 file_size, u32 offset, void *dst, u32 len, u32 *bytes_read) {
+chimera_error_t fat32_read_file(u32 start_cluster, u32 file_size, u32 offset, void *dst, u32 len, u32 *bytes_read) {
     if (bytes_read) *bytes_read = 0;
     if (!g_fat32.mounted || start_cluster < 2 || offset >= file_size || len == 0) {
-        return XIU_SUCCESS;
+        return CHIMERA_SUCCESS;
     }
 
     u32 to_read = len;
@@ -248,7 +255,7 @@ xiu_error_t fat32_read_file(u32 start_cluster, u32 file_size, u32 offset, void *
     u32 cluster_skip = offset / cluster_size;
     for (u32 i = 0; i < cluster_skip; i++) {
         cluster = fat32_get_next_cluster(cluster);
-        if (cluster >= 0x0FFFFFF8 || cluster < 2) return XIU_ERR_GENERIC;
+        if (cluster >= 0x0FFFFFF8 || cluster < 2) return CHIMERA_ERR_GENERIC;
     }
 
     u32 cluster_offset = offset % cluster_size;
@@ -262,13 +269,16 @@ xiu_error_t fat32_read_file(u32 start_cluster, u32 file_size, u32 offset, void *
             count = sizeof(cluster_buf) / ATA_SECTOR_SIZE;
         }
 
-        if (ata_read_sectors(lba, count, cluster_buf) != XIU_SUCCESS) return XIU_ERR_GENERIC;
+        if (ata_read_sectors(lba, count, cluster_buf) != CHIMERA_SUCCESS) return CHIMERA_ERR_GENERIC;
 
-        u32 avail = cluster_size - cluster_offset;
+        u32 buf_bytes = count * ATA_SECTOR_SIZE;
+        u32 avail = (buf_bytes > cluster_offset) ? (buf_bytes - cluster_offset) : 0;
         u32 chunk = (to_read - read_so_far) < avail ? (to_read - read_so_far) : avail;
 
-        __builtin_memcpy((u8 *)dst + read_so_far, cluster_buf + cluster_offset, chunk);
-        read_so_far += chunk;
+        if (chunk > 0) {
+            __builtin_memcpy((u8 *)dst + read_so_far, cluster_buf + cluster_offset, chunk);
+            read_so_far += chunk;
+        }
         cluster_offset = 0;
 
         if (read_so_far < to_read) {
@@ -277,13 +287,13 @@ xiu_error_t fat32_read_file(u32 start_cluster, u32 file_size, u32 offset, void *
     }
 
     if (bytes_read) *bytes_read = read_so_far;
-    return XIU_SUCCESS;
+    return CHIMERA_SUCCESS;
 }
 
-xiu_error_t fat32_write_node(void *node_data, u32 offset, const void *src, u32 len, u32 *bytes_written) {
+chimera_error_t fat32_write_node(void *node_data, u32 offset, const void *src, u32 len, u32 *bytes_written) {
     if (bytes_written) *bytes_written = 0;
     fat32_node_data_t *nd = (fat32_node_data_t *)node_data;
-    if (!nd || !g_fat32.mounted || len == 0) return XIU_SUCCESS;
+    if (!nd || !g_fat32.mounted || len == 0) return CHIMERA_SUCCESS;
 
     irq_flags_t irq = spinlock_lock_irqsave(&s_fat_lock);
 
@@ -292,7 +302,7 @@ xiu_error_t fat32_write_node(void *node_data, u32 offset, const void *src, u32 l
         nd->start_cluster = fat32_alloc_cluster();
         if (nd->start_cluster < 2) {
             spinlock_unlock_irqrestore(&s_fat_lock, irq);
-            return XIU_ERR_NORESOURCE;
+            return CHIMERA_ERR_NORESOURCE;
         }
         fat32_update_dir_entry(nd);
     }
@@ -305,12 +315,12 @@ xiu_error_t fat32_write_node(void *node_data, u32 offset, const void *src, u32 l
     u32 cluster_skip = offset / cluster_size;
     for (u32 i = 0; i < cluster_skip; i++) {
         prev_cluster = cluster;
-        cluster = fat32_get_next_cluster(cluster);
+        cluster = fat32_get_next_cluster_unlocked(cluster);
         if (cluster >= 0x0FFFFFF8 || cluster < 2) {
             cluster = fat32_alloc_cluster();
             if (cluster < 2) {
                 spinlock_unlock_irqrestore(&s_fat_lock, irq);
-                return XIU_ERR_NORESOURCE;
+                return CHIMERA_ERR_NORESOURCE;
             }
             fat32_set_fat_entry(prev_cluster, cluster);
         }
@@ -327,19 +337,23 @@ xiu_error_t fat32_write_node(void *node_data, u32 offset, const void *src, u32 l
             count = sizeof(cluster_buf) / ATA_SECTOR_SIZE;
         }
 
+        u32 buf_bytes = count * ATA_SECTOR_SIZE;
+
         // read existing cluster if partial write
-        if (cluster_offset != 0 || (len - written_so_far) < cluster_size) {
+        if (cluster_offset != 0 || (len - written_so_far) < buf_bytes) {
             ata_read_sectors(lba, count, cluster_buf);
         }
 
-        u32 avail = cluster_size - cluster_offset;
+        u32 avail = (buf_bytes > cluster_offset) ? (buf_bytes - cluster_offset) : 0;
         u32 chunk = (len - written_so_far) < avail ? (len - written_so_far) : avail;
 
-        __builtin_memcpy(cluster_buf + cluster_offset, (const u8 *)src + written_so_far, chunk);
+        if (chunk > 0) {
+            __builtin_memcpy(cluster_buf + cluster_offset, (const u8 *)src + written_so_far, chunk);
+        }
 
-        if (ata_write_sectors(lba, count, cluster_buf) != XIU_SUCCESS) {
+        if (ata_write_sectors(lba, count, cluster_buf) != CHIMERA_SUCCESS) {
             spinlock_unlock_irqrestore(&s_fat_lock, irq);
-            return XIU_ERR_GENERIC;
+            return CHIMERA_ERR_GENERIC;
         }
 
         written_so_far += chunk;
@@ -347,7 +361,7 @@ xiu_error_t fat32_write_node(void *node_data, u32 offset, const void *src, u32 l
 
         if (written_so_far < len) {
             prev_cluster = cluster;
-            cluster = fat32_get_next_cluster(cluster);
+            cluster = fat32_get_next_cluster_unlocked(cluster);
             if (cluster >= 0x0FFFFFF8 || cluster < 2) {
                 cluster = fat32_alloc_cluster();
                 if (cluster < 2) break;
@@ -365,22 +379,22 @@ xiu_error_t fat32_write_node(void *node_data, u32 offset, const void *src, u32 l
     spinlock_unlock_irqrestore(&s_fat_lock, irq);
 
     if (bytes_written) *bytes_written = written_so_far;
-    return XIU_SUCCESS;
+    return CHIMERA_SUCCESS;
 }
 
 // vnode ops for fat32 files
 
-static xiu_error_t fat32_vop_read(vnode_t *vp, struct uio *uio, int flags, vfs_context_t *ctx) {
+static chimera_error_t fat32_vop_read(vnode_t *vp, struct uio *uio, int flags, vfs_context_t *ctx) {
     (void)flags; (void)ctx;
-    if (!vp || !uio || !uio->uio_buf || uio->uio_resid == 0) return XIU_SUCCESS;
+    if (!vp || !uio || !uio->uio_buf || uio->uio_resid == 0) return CHIMERA_SUCCESS;
 
     fat32_node_data_t *data = (fat32_node_data_t *)vp->v_data;
-    if (!data) return XIU_ERR_INVALID;
+    if (!data) return CHIMERA_ERR_INVALID;
 
     u32 to_read = (u32)uio->uio_resid;
     u32 offset = (u32)uio->uio_offset;
 
-    if (offset >= data->file_size) return XIU_SUCCESS;
+    if (offset >= data->file_size) return CHIMERA_SUCCESS;
     if (offset + to_read > data->file_size) {
         to_read = data->file_size - offset;
     }
@@ -391,11 +405,11 @@ static xiu_error_t fat32_vop_read(vnode_t *vp, struct uio *uio, int flags, vfs_c
     while (total_transferred < to_read) {
         u32 chunk = (to_read - total_transferred) < sizeof(temp_buf) ? (to_read - total_transferred) : sizeof(temp_buf);
         u32 actual = 0;
-        xiu_error_t err = fat32_read_file(data->start_cluster, data->file_size, offset + total_transferred, temp_buf, chunk, &actual);
-        if (err != XIU_SUCCESS || actual == 0) break;
+        chimera_error_t err = fat32_read_file(data->start_cluster, data->file_size, offset + total_transferred, temp_buf, chunk, &actual);
+        if (err != CHIMERA_SUCCESS || actual == 0) break;
 
-        if (copyout(temp_buf, (void *)((uptr)uio->uio_buf + total_transferred), actual) != XIU_SUCCESS) {
-            return XIU_ERR_GENERIC;
+        if (copyout(temp_buf, (void *)((uptr)uio->uio_buf + total_transferred), actual) != CHIMERA_SUCCESS) {
+            return CHIMERA_ERR_GENERIC;
         }
 
         total_transferred += actual;
@@ -405,15 +419,15 @@ static xiu_error_t fat32_vop_read(vnode_t *vp, struct uio *uio, int flags, vfs_c
     uio->uio_resid -= total_transferred;
     uio->uio_offset += total_transferred;
 
-    return XIU_SUCCESS;
+    return CHIMERA_SUCCESS;
 }
 
-static xiu_error_t fat32_vop_write(vnode_t *vp, struct uio *uio, int flags, vfs_context_t *ctx) {
+static chimera_error_t fat32_vop_write(vnode_t *vp, struct uio *uio, int flags, vfs_context_t *ctx) {
     (void)flags; (void)ctx;
-    if (!vp || !uio || !uio->uio_buf || uio->uio_resid == 0) return XIU_SUCCESS;
+    if (!vp || !uio || !uio->uio_buf || uio->uio_resid == 0) return CHIMERA_SUCCESS;
 
     fat32_node_data_t *data = (fat32_node_data_t *)vp->v_data;
-    if (!data) return XIU_ERR_INVALID;
+    if (!data) return CHIMERA_ERR_INVALID;
 
     u32 to_write = (u32)uio->uio_resid;
     u32 offset = (u32)uio->uio_offset;
@@ -423,13 +437,13 @@ static xiu_error_t fat32_vop_write(vnode_t *vp, struct uio *uio, int flags, vfs_
 
     while (total_written < to_write) {
         u32 chunk = (to_write - total_written) < sizeof(temp_buf) ? (to_write - total_written) : sizeof(temp_buf);
-        if (copyin((const void *)((uptr)uio->uio_buf + total_written), temp_buf, chunk) != XIU_SUCCESS) {
-            return XIU_ERR_GENERIC;
+        if (copyin((const void *)((uptr)uio->uio_buf + total_written), temp_buf, chunk) != CHIMERA_SUCCESS) {
+            return CHIMERA_ERR_GENERIC;
         }
 
         u32 actual = 0;
-        xiu_error_t err = fat32_write_node(data, offset + total_written, temp_buf, chunk, &actual);
-        if (err != XIU_SUCCESS || actual == 0) break;
+        chimera_error_t err = fat32_write_node(data, offset + total_written, temp_buf, chunk, &actual);
+        if (err != CHIMERA_SUCCESS || actual == 0) break;
 
         total_written += actual;
     }
@@ -438,14 +452,14 @@ static xiu_error_t fat32_vop_write(vnode_t *vp, struct uio *uio, int flags, vfs_
     uio->uio_resid -= total_written;
     uio->uio_offset += total_written;
 
-    return XIU_SUCCESS;
+    return CHIMERA_SUCCESS;
 }
 
-static xiu_error_t fat32_vop_getattr(vnode_t *vp, vattr_t *vap, vfs_context_t *ctx) {
+static chimera_error_t fat32_vop_getattr(vnode_t *vp, vattr_t *vap, vfs_context_t *ctx) {
     (void)ctx;
-    if (!vp || !vap) return XIU_ERR_INVALID;
+    if (!vp || !vap) return CHIMERA_ERR_INVALID;
     *vap = vp->v_attr;
-    return XIU_SUCCESS;
+    return CHIMERA_SUCCESS;
 }
 
 static vnode_ops_t s_fat32_file_ops = {
@@ -482,15 +496,15 @@ static void split_parent_child_path(const char *path, char *parent, char *child)
     }
 }
 
-xiu_error_t fat32_create_file(const char *path, vnode_t **out_vp) {
-    if (!path || !out_vp) return XIU_ERR_INVALID;
+chimera_error_t fat32_create_file(const char *path, vnode_t **out_vp) {
+    if (!path || !out_vp) return CHIMERA_ERR_INVALID;
     *out_vp = nullptr;
 
     // check if already exists
     vnode_t *existing = nullptr;
-    if (vfs_lookup(path, &existing) == XIU_SUCCESS && existing) {
+    if (vfs_lookup(path, &existing) == CHIMERA_SUCCESS && existing) {
         *out_vp = existing;
-        return XIU_SUCCESS;
+        return CHIMERA_SUCCESS;
     }
 
     char parent[256];
@@ -498,8 +512,8 @@ xiu_error_t fat32_create_file(const char *path, vnode_t **out_vp) {
     split_parent_child_path(path, parent, child);
 
     vnode_t *pdir_vp = nullptr;
-    if (vfs_lookup(parent, &pdir_vp) != XIU_SUCCESS || !pdir_vp) {
-        return XIU_ERR_NOTFOUND;
+    if (vfs_lookup(parent, &pdir_vp) != CHIMERA_SUCCESS || !pdir_vp) {
+        return CHIMERA_ERR_NOTFOUND;
     }
 
     fat32_node_data_t *pdir_data = (fat32_node_data_t *)pdir_vp->v_data;
@@ -518,7 +532,7 @@ xiu_error_t fat32_create_file(const char *path, vnode_t **out_vp) {
         u32 count = g_fat32.sectors_per_cluster;
         if (count > (sizeof(cluster_buf) / ATA_SECTOR_SIZE)) count = sizeof(cluster_buf) / ATA_SECTOR_SIZE;
 
-        if (ata_read_sectors(lba, count, cluster_buf) != XIU_SUCCESS) break;
+        if (ata_read_sectors(lba, count, cluster_buf) != CHIMERA_SUCCESS) break;
 
         for (u32 i = 0; i < g_fat32.cluster_size_bytes; i += 32) {
             u8 *ent = cluster_buf + i;
@@ -537,7 +551,7 @@ xiu_error_t fat32_create_file(const char *path, vnode_t **out_vp) {
             if (next >= 0x0FFFFFF8 || next < 2) {
                 // extend directory with new cluster
                 u32 new_c = fat32_alloc_cluster();
-                if (new_c < 2) return XIU_ERR_NORESOURCE;
+                if (new_c < 2) return CHIMERA_ERR_NORESOURCE;
                 fat32_set_fat_entry(cluster, new_c);
                 cluster = new_c;
                 target_lba = fat32_cluster_to_lba(new_c);
@@ -549,14 +563,14 @@ xiu_error_t fat32_create_file(const char *path, vnode_t **out_vp) {
         }
     }
 
-    if (!found_slot) return XIU_ERR_NORESOURCE;
+    if (!found_slot) return CHIMERA_ERR_NORESOURCE;
 
     // format 8.3 entry
     u8 name_83[11];
     fat32_make_83_name(child, name_83);
 
     u8 sec[ATA_SECTOR_SIZE];
-    if (ata_read_sectors(target_lba, 1, sec) != XIU_SUCCESS) return XIU_ERR_GENERIC;
+    if (ata_read_sectors(target_lba, 1, sec) != CHIMERA_SUCCESS) return CHIMERA_ERR_GENERIC;
 
     u8 *entry = sec + target_sec_off;
     __builtin_memset(entry, 0, 32);
@@ -566,17 +580,17 @@ xiu_error_t fat32_create_file(const char *path, vnode_t **out_vp) {
     *(u16 *)(entry + 26) = 0;
     *(u32 *)(entry + 28) = 0;
 
-    if (ata_write_sectors(target_lba, 1, sec) != XIU_SUCCESS) return XIU_ERR_GENERIC;
+    if (ata_write_sectors(target_lba, 1, sec) != CHIMERA_SUCCESS) return CHIMERA_ERR_GENERIC;
 
     // allocate VFS vnode
-    if (s_fat_vnode_count >= FAT32_MAX_VNODES) return XIU_ERR_NORESOURCE;
+    if (s_fat_vnode_count >= FAT32_MAX_VNODES) return CHIMERA_ERR_NORESOURCE;
 
     vnode_t *vp = &s_fat_vnodes[s_fat_vnode_count];
     fat32_node_data_t *nd = &s_fat_data[s_fat_vnode_count];
     s_fat_vnode_count++;
 
     __builtin_memset(vp, 0, sizeof(vnode_t));
-    vp->v_signature = XIU_VNODE_MAGIC;
+    vp->v_signature = CHIMERA_VNODE_MAGIC;
     vp->v_type = VREG;
     vp->v_flags = VN_SYSTEM;
     vp->v_op = &s_fat32_file_ops;
@@ -596,11 +610,11 @@ xiu_error_t fat32_create_file(const char *path, vnode_t **out_vp) {
 
     *out_vp = vp;
     kprintf("[FAT32] Created file: %s (in parent cluster %u)\n", path, parent_cluster);
-    return XIU_SUCCESS;
+    return CHIMERA_SUCCESS;
 }
 
-xiu_error_t fat32_create_dir(const char *path, vnode_t **out_vp) {
-    if (!path || !out_vp) return XIU_ERR_INVALID;
+chimera_error_t fat32_create_dir(const char *path, vnode_t **out_vp) {
+    if (!path || !out_vp) return CHIMERA_ERR_INVALID;
     *out_vp = nullptr;
 
     char parent[256];
@@ -608,15 +622,15 @@ xiu_error_t fat32_create_dir(const char *path, vnode_t **out_vp) {
     split_parent_child_path(path, parent, child);
 
     vnode_t *pdir_vp = nullptr;
-    if (vfs_lookup(parent, &pdir_vp) != XIU_SUCCESS || !pdir_vp) {
-        return XIU_ERR_NOTFOUND;
+    if (vfs_lookup(parent, &pdir_vp) != CHIMERA_SUCCESS || !pdir_vp) {
+        return CHIMERA_ERR_NOTFOUND;
     }
 
     fat32_node_data_t *pdir_data = (fat32_node_data_t *)pdir_vp->v_data;
     u32 parent_cluster = pdir_data ? pdir_data->start_cluster : g_fat32.root_cluster;
 
     u32 new_dir_cluster = fat32_alloc_cluster();
-    if (new_dir_cluster < 2) return XIU_ERR_NORESOURCE;
+    if (new_dir_cluster < 2) return CHIMERA_ERR_NORESOURCE;
 
     // write . and .. inside new directory cluster
     u8 dir_sec[ATA_SECTOR_SIZE];
@@ -653,7 +667,7 @@ xiu_error_t fat32_create_dir(const char *path, vnode_t **out_vp) {
         u32 count = g_fat32.sectors_per_cluster;
         if (count > (sizeof(cluster_buf) / ATA_SECTOR_SIZE)) count = sizeof(cluster_buf) / ATA_SECTOR_SIZE;
 
-        if (ata_read_sectors(lba, count, cluster_buf) != XIU_SUCCESS) break;
+        if (ata_read_sectors(lba, count, cluster_buf) != CHIMERA_SUCCESS) break;
 
         for (u32 i = 0; i < g_fat32.cluster_size_bytes; i += 32) {
             u8 *ent = cluster_buf + i;
@@ -671,7 +685,7 @@ xiu_error_t fat32_create_dir(const char *path, vnode_t **out_vp) {
         }
     }
 
-    if (!found_slot) return XIU_ERR_NORESOURCE;
+    if (!found_slot) return CHIMERA_ERR_NORESOURCE;
 
     u8 name_83[11];
     fat32_make_83_name(child, name_83);
@@ -687,14 +701,14 @@ xiu_error_t fat32_create_dir(const char *path, vnode_t **out_vp) {
     *(u32 *)(entry + 28) = 0;
     ata_write_sectors(target_lba, 1, sec);
 
-    if (s_fat_vnode_count >= FAT32_MAX_VNODES) return XIU_ERR_NORESOURCE;
+    if (s_fat_vnode_count >= FAT32_MAX_VNODES) return CHIMERA_ERR_NORESOURCE;
 
     vnode_t *vp = &s_fat_vnodes[s_fat_vnode_count];
     fat32_node_data_t *nd = &s_fat_data[s_fat_vnode_count];
     s_fat_vnode_count++;
 
     __builtin_memset(vp, 0, sizeof(vnode_t));
-    vp->v_signature = XIU_VNODE_MAGIC;
+    vp->v_signature = CHIMERA_VNODE_MAGIC;
     vp->v_type = VDIR;
     vp->v_flags = VN_SYSTEM;
     vp->v_op = &s_fat32_dir_ops;
@@ -714,15 +728,15 @@ xiu_error_t fat32_create_dir(const char *path, vnode_t **out_vp) {
 
     *out_vp = vp;
     kprintf("[FAT32] Created directory: %s (cluster %u)\n", path, new_dir_cluster);
-    return XIU_SUCCESS;
+    return CHIMERA_SUCCESS;
 }
 
-xiu_error_t fat32_unlink_file(const char *path) {
+chimera_error_t fat32_unlink_file(const char *path) {
     vnode_t *vp = nullptr;
-    if (vfs_lookup(path, &vp) != XIU_SUCCESS || !vp) return XIU_ERR_NOTFOUND;
+    if (vfs_lookup(path, &vp) != CHIMERA_SUCCESS || !vp) return CHIMERA_ERR_NOTFOUND;
 
     fat32_node_data_t *nd = (fat32_node_data_t *)vp->v_data;
-    if (!nd || nd->parent_dir_cluster < 2) return XIU_ERR_INVALID;
+    if (!nd || nd->parent_dir_cluster < 2) return CHIMERA_ERR_INVALID;
 
     // mark directory entry as deleted
     u32 cluster = nd->parent_dir_cluster;
@@ -738,7 +752,7 @@ xiu_error_t fat32_unlink_file(const char *path) {
         u32 lba = fat32_cluster_to_lba(cluster) + (offset / ATA_SECTOR_SIZE);
         u32 sec_off = offset % ATA_SECTOR_SIZE;
         u8 sec[ATA_SECTOR_SIZE];
-        if (ata_read_sectors(lba, 1, sec) == XIU_SUCCESS) {
+        if (ata_read_sectors(lba, 1, sec) == CHIMERA_SUCCESS) {
             sec[sec_off] = 0xE5; // deleted
             ata_write_sectors(lba, 1, sec);
         }
@@ -752,7 +766,7 @@ xiu_error_t fat32_unlink_file(const char *path) {
     nd->file_size = 0;
     vp->v_attr.va_size = 0;
 
-    return XIU_SUCCESS;
+    return CHIMERA_SUCCESS;
 }
 
 static void fat32_map_canonical_name(char *name, usize max_len, bool is_dir) {
@@ -785,11 +799,11 @@ typedef struct {
 
 static void fat32_scan_directory(u32 dir_cluster, const char *parent_path, int depth) {
     if (depth > 12) return;
-    extern xiu_paddr_t pmm_alloc_page(void);
-    extern void pmm_release_page(xiu_paddr_t addr);
+    extern chimera_paddr_t pmm_alloc_page(void);
+    extern void pmm_release_page(chimera_paddr_t addr);
     
-    xiu_paddr_t phys = pmm_alloc_page();
-    if (!phys || phys == (xiu_paddr_t)-1) return;
+    chimera_paddr_t phys = pmm_alloc_page();
+    if (!phys || phys == (chimera_paddr_t)-1) return;
     
     u8 *cluster_buf = (u8 *)(phys + g_hhdm_base);
     u32 cluster = dir_cluster;
@@ -805,7 +819,7 @@ static void fat32_scan_directory(u32 dir_cluster, const char *parent_path, int d
         }
         u32 read_bytes = count * ATA_SECTOR_SIZE;
 
-        if (ata_read_sectors(lba, count, cluster_buf) != XIU_SUCCESS) break;
+        if (ata_read_sectors(lba, count, cluster_buf) != CHIMERA_SUCCESS) break;
 
         for (u32 i = 0; i < read_bytes; i += 32) {
             u8 *entry = cluster_buf + i;
@@ -926,7 +940,7 @@ static void fat32_scan_directory(u32 dir_cluster, const char *parent_path, int d
                 s_fat_vnode_count++;
 
                 __builtin_memset(vp, 0, sizeof(vnode_t));
-                vp->v_signature = XIU_VNODE_MAGIC;
+                vp->v_signature = CHIMERA_VNODE_MAGIC;
                 vp->v_type = is_dir ? VDIR : VREG;
                 vp->v_flags = VN_SYSTEM;
                 vp->v_op = is_dir ? &s_fat32_dir_ops : &s_fat32_file_ops;
@@ -968,7 +982,7 @@ static void fat32_scan_directory(u32 dir_cluster, const char *parent_path, int d
     pmm_release_page(phys);
 }
 
-xiu_error_t fat32_init(void) {
+chimera_error_t fat32_init(void) {
     irq_flags_t irq = spinlock_lock_irqsave(&s_fat_lock);
 
     __builtin_memset(&g_fat32, 0, sizeof(fat32_fs_t));
@@ -976,14 +990,14 @@ xiu_error_t fat32_init(void) {
     if (!ata_is_present()) {
         spinlock_unlock_irqrestore(&s_fat_lock, irq);
         kprintf("[FAT32] Cannot mount: ATA drive not present.\n");
-        return XIU_ERR_NOTFOUND;
+        return CHIMERA_ERR_NOTFOUND;
     }
 
     u8 boot_sec[ATA_SECTOR_SIZE];
-    if (ata_read_sectors(0, 1, boot_sec) != XIU_SUCCESS) {
+    if (ata_read_sectors(0, 1, boot_sec) != CHIMERA_SUCCESS) {
         spinlock_unlock_irqrestore(&s_fat_lock, irq);
         kprintf("[FAT32] Failed to read sector 0.\n");
-        return XIU_ERR_GENERIC;
+        return CHIMERA_ERR_GENERIC;
     }
 
     // check Boot Signature
@@ -991,7 +1005,7 @@ xiu_error_t fat32_init(void) {
         spinlock_unlock_irqrestore(&s_fat_lock, irq);
         kprintf("[FAT32] Invalid boot sector signature (0x%02x, 0x%02x).\n",
                 boot_sec[510], boot_sec[511]);
-        return XIU_ERR_INVALID;
+        return CHIMERA_ERR_INVALID;
     }
 
     g_fat32.bytes_per_sector = *(u16 *)(boot_sec + 11);
@@ -1002,11 +1016,12 @@ xiu_error_t fat32_init(void) {
     g_fat32.sectors_per_fat = *(u32 *)(boot_sec + 36);
     g_fat32.root_cluster = *(u32 *)(boot_sec + 44);
 
-    if (g_fat32.bytes_per_sector != 512 || g_fat32.sectors_per_cluster == 0 || g_fat32.sectors_per_fat == 0) {
+    if (g_fat32.bytes_per_sector != 512 || g_fat32.sectors_per_cluster == 0 ||
+        g_fat32.sectors_per_cluster > 64 || g_fat32.sectors_per_fat == 0) {
         spinlock_unlock_irqrestore(&s_fat_lock, irq);
         kprintf("[FAT32] Unsupported FAT parameters (bytes/sec=%u, sec/clust=%u).\n",
                 g_fat32.bytes_per_sector, g_fat32.sectors_per_cluster);
-        return XIU_ERR_NOTSUP;
+        return CHIMERA_ERR_NOTSUP;
     }
 
     g_fat32.data_start_lba = g_fat32.reserved_sectors + (g_fat32.num_fats * g_fat32.sectors_per_fat);
@@ -1021,5 +1036,5 @@ xiu_error_t fat32_init(void) {
     // scan and register all files and directories on disk into VFS
     fat32_scan_directory(g_fat32.root_cluster, "", 0);
 
-    return XIU_SUCCESS;
+    return CHIMERA_SUCCESS;
 }

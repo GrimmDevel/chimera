@@ -1,9 +1,9 @@
 // network interface (ifnet) architecture
 #pragma once
-#ifndef XIU_NET_IF_H
-#define XIU_NET_IF_H
+#ifndef CHIMERA_NET_IF_H
+#define CHIMERA_NET_IF_H
 
-#include <kernel/xiu_types.h>
+#include <kernel/chimera_types.h>
 #include <kernel/spinlock.h>
 #include <net/mbuf.h>
 #include <net/socket.h>
@@ -43,8 +43,8 @@ typedef struct ifnet {
 
     struct if_data      if_data;
 
-    xiu_error_t       (*if_output)(struct ifnet *ifp, mbuf_t *m, struct in_addr dest_ip);
-    xiu_error_t       (*if_ioctl)(struct ifnet *ifp, u64 cmd, void *data);
+    chimera_error_t       (*if_output)(struct ifnet *ifp, mbuf_t *m, struct in_addr dest_ip);
+    chimera_error_t       (*if_ioctl)(struct ifnet *ifp, u64 cmd, void *data);
 
     void               *if_softc;
     struct ifnet       *if_next;
@@ -56,7 +56,7 @@ extern "C" {
 #endif
 
 void        if_init(void);
-xiu_error_t if_attach(ifnet_t *ifp);
+chimera_error_t if_attach(ifnet_t *ifp);
 void        if_detach(ifnet_t *ifp);
 ifnet_t    *if_lookup(const char *name);
 ifnet_t    *if_get_default(void);

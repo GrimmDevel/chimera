@@ -1,5 +1,5 @@
 /* =============================================================================
- * XIU Operating System — User Datagram Protocol (UDP)
+ * Chimera Operating System — User Datagram Protocol (UDP)
  * kernel/net/udp.c
  * ============================================================================= */
 
@@ -28,7 +28,7 @@ void udp_init(void) {
     for (int i = 0; i < UDP_MAX_SOCKETS; i++) s_udp_pcbs[i].so = nullptr;
 }
 
-xiu_error_t udp_attach(socket_t *so) {
+chimera_error_t udp_attach(socket_t *so) {
     irq_flags_t flags = spinlock_lock_irqsave(&s_udp_lock);
     for (int i = 0; i < UDP_MAX_SOCKETS; i++) {
         if (!s_udp_pcbs[i].so) {
@@ -40,11 +40,11 @@ xiu_error_t udp_attach(socket_t *so) {
             s_udp_pcbs[i].bound = false;
             so->so_pcb = &s_udp_pcbs[i];
             spinlock_unlock_irqrestore(&s_udp_lock, flags);
-            return XIU_SUCCESS;
+            return CHIMERA_SUCCESS;
         }
     }
     spinlock_unlock_irqrestore(&s_udp_lock, flags);
-    return XIU_ERR_NOMEM;
+    return CHIMERA_ERR_NOMEM;
 }
 
 void udp_detach(socket_t *so) {
@@ -58,8 +58,8 @@ void udp_detach(socket_t *so) {
     spinlock_unlock_irqrestore(&s_udp_lock, flags);
 }
 
-xiu_error_t udp_bind(socket_t *so, struct sockaddr_in *sin) {
-    if (!so || !so->so_pcb || !sin) return XIU_ERR_INVALID;
+chimera_error_t udp_bind(socket_t *so, struct sockaddr_in *sin) {
+    if (!so || !so->so_pcb || !sin) return CHIMERA_ERR_INVALID;
 
     udp_pcb_t *pcb = (udp_pcb_t *)so->so_pcb;
     irq_flags_t flags = spinlock_lock_irqsave(&s_udp_lock);
@@ -74,7 +74,7 @@ xiu_error_t udp_bind(socket_t *so, struct sockaddr_in *sin) {
     for (int i = 0; i < UDP_MAX_SOCKETS; i++) {
         if (s_udp_pcbs[i].so && s_udp_pcbs[i].bound && s_udp_pcbs[i].local_port == port) {
             spinlock_unlock_irqrestore(&s_udp_lock, flags);
-            return XIU_ERR_BUSY;
+            return CHIMERA_ERR_BUSY;
         }
     }
 
@@ -83,13 +83,13 @@ xiu_error_t udp_bind(socket_t *so, struct sockaddr_in *sin) {
     pcb->bound = true;
 
     spinlock_unlock_irqrestore(&s_udp_lock, flags);
-    return XIU_SUCCESS;
+    return CHIMERA_SUCCESS;
 }
 
-extern xiu_error_t ip_output(mbuf_t *m, struct in_addr src_ip, struct in_addr dst_ip, u8 proto);
+extern chimera_error_t ip_output(mbuf_t *m, struct in_addr src_ip, struct in_addr dst_ip, u8 proto);
 
-xiu_error_t udp_sendto(socket_t *so, const void *buf, usize len, struct sockaddr_in *dest) {
-    if (!so || !so->so_pcb || !dest || len > 1472) return XIU_ERR_INVALID;
+chimera_error_t udp_sendto(socket_t *so, const void *buf, usize len, struct sockaddr_in *dest) {
+    if (!so || !so->so_pcb || !dest || len > 1472) return CHIMERA_ERR_INVALID;
 
     udp_pcb_t *pcb = (udp_pcb_t *)so->so_pcb;
     if (!pcb->bound) {
@@ -99,7 +99,7 @@ xiu_error_t udp_sendto(socket_t *so, const void *buf, usize len, struct sockaddr
     }
 
     mbuf_t *m = m_getcl(MT_DATA);
-    if (!m) return XIU_ERR_NOMEM;
+    if (!m) return CHIMERA_ERR_NOMEM;
 
     udp_header_t *uh = (udp_header_t *)m->m_data;
     uh->uh_sport = htons(pcb->local_port);

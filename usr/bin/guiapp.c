@@ -15,9 +15,9 @@ typedef struct {
     char               kernel_name[32];
     char               architecture[16];
     char               hostname[64];
-} xiu_sysinfo_t;
+} chimera_sysinfo_t;
 
-extern int sysinfo(xiu_sysinfo_t *info);
+extern int sysinfo(chimera_sysinfo_t *info);
 
 int main(int argc, char **argv) {
     (void)argc;
@@ -68,7 +68,7 @@ int main(int argc, char **argv) {
             gui_draw_text(win, 20, 16, "XIU Darwin Activity Monitor", GUI_COLOR_WHITE);
             gui_draw_text(win, 20, 32, "Hybrid Mach/BSD Microkernel", GUI_COLOR_LIGHT_GRAY);
 
-            xiu_sysinfo_t info;
+            chimera_sysinfo_t info;
             memset(&info, 0, sizeof(info));
             if (sysinfo(&info) == 0) {
                 char buf[64];

@@ -1,5 +1,5 @@
 /* =============================================================================
- * XIU Operating System — Darwin Mach Virtual Memory Map Subsystem
+ * Chimera Operating System — Darwin Mach Virtual Memory Map Subsystem
  * kernel/mm/vm_map.c
  *
  * Implements address space management (vm_map_t) using doubly linked ranges
@@ -10,7 +10,7 @@
 #include <kernel/zone.h>
 #include <kernel/panic.h>
 #include <kernel/spinlock.h>
-#include <kernel/xiu_types.h>
+#include <kernel/chimera_types.h>
 
 extern void kprintf(const char *fmt, ...);
 extern u64  g_hhdm_base;
@@ -93,13 +93,13 @@ void vm_map_deallocate(vm_map_t map) {
     spinlock_unlock_irqrestore(&map->vmm_lock, irq);
 }
 
-xiu_error_t vm_map_enter(vm_map_t map, vm_offset_t *address, vm_size_t size,
+chimera_error_t vm_map_enter(vm_map_t map, vm_offset_t *address, vm_size_t size,
                          vm_offset_t mask, int flags, vm_object_t object,
                          vm_object_offset_t offset, bool copy,
                          vm_prot_t cur_protection, vm_prot_t max_protection,
                          vm_inherit_t inheritance) {
     (void)mask; (void)flags; (void)copy;
-    if (!map || !address || size == 0) return XIU_ERR_INVALID;
+    if (!map || !address || size == 0) return CHIMERA_ERR_INVALID;
 
     size = (size + 4095) & ~4095ULL;
     vm_offset_t start = *address;
@@ -124,7 +124,7 @@ xiu_error_t vm_map_enter(vm_map_t map, vm_offset_t *address, vm_size_t size,
     vm_map_entry_t *entry = (vm_map_entry_t *)zalloc(s_vm_map_entry_zone);
     if (!entry) {
         spinlock_unlock_irqrestore(&map->vmm_lock, irq);
-        return XIU_ERR_NOMEM;
+        return CHIMERA_ERR_NOMEM;
     }
 
     __builtin_memset(entry, 0, sizeof(*entry));
@@ -164,11 +164,11 @@ xiu_error_t vm_map_enter(vm_map_t map, vm_offset_t *address, vm_size_t size,
     map->vmm_size += size;
 
     spinlock_unlock_irqrestore(&map->vmm_lock, irq);
-    return XIU_SUCCESS;
+    return CHIMERA_SUCCESS;
 }
 
-xiu_error_t vm_map_remove(vm_map_t map, vm_offset_t start, vm_offset_t end) {
-    if (!map || start >= end) return XIU_ERR_INVALID;
+chimera_error_t vm_map_remove(vm_map_t map, vm_offset_t start, vm_offset_t end) {
+    if (!map || start >= end) return CHIMERA_ERR_INVALID;
 
     start = start & ~4095ULL;
     end = (end + 4095) & ~4095ULL;
@@ -209,12 +209,12 @@ xiu_error_t vm_map_remove(vm_map_t map, vm_offset_t start, vm_offset_t end) {
     }
 
     spinlock_unlock_irqrestore(&map->vmm_lock, irq);
-    return XIU_SUCCESS;
+    return CHIMERA_SUCCESS;
 }
 
-xiu_error_t vm_map_protect(vm_map_t map, vm_offset_t start, vm_offset_t end,
+chimera_error_t vm_map_protect(vm_map_t map, vm_offset_t start, vm_offset_t end,
                            vm_prot_t new_prot, bool set_max) {
-    if (!map || start >= end) return XIU_ERR_INVALID;
+    if (!map || start >= end) return CHIMERA_ERR_INVALID;
 
     start = start & ~4095ULL;
     end = (end + 4095) & ~4095ULL;
@@ -238,7 +238,7 @@ xiu_error_t vm_map_protect(vm_map_t map, vm_offset_t start, vm_offset_t end,
     }
 
     spinlock_unlock_irqrestore(&map->vmm_lock, irq);
-    return XIU_SUCCESS;
+    return CHIMERA_SUCCESS;
 }
 
 vm_map_t vm_map_fork(vm_map_t src_map) {

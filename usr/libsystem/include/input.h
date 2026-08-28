@@ -4,14 +4,14 @@
 #define _XIU_INPUT_H_
 
 typedef enum {
-  XIU_EVENT_MOUSE_MOVED = 0,
-  XIU_EVENT_MOUSE_DOWN = 1,
-  XIU_EVENT_MOUSE_UP = 2,
-  XIU_EVENT_MOUSE_CLICKED = 3,
-  XIU_EVENT_KEY_PRESSED = 4,
-  XIU_EVENT_KEY_RELEASED = 5,
-  XIU_EVENT_MOUSE_SCROLLED = 6,
-} xiu_event_type_t;
+  CHIMERA_EVENT_MOUSE_MOVED = 0,
+  CHIMERA_EVENT_MOUSE_DOWN = 1,
+  CHIMERA_EVENT_MOUSE_UP = 2,
+  CHIMERA_EVENT_MOUSE_CLICKED = 3,
+  CHIMERA_EVENT_KEY_PRESSED = 4,
+  CHIMERA_EVENT_KEY_RELEASED = 5,
+  CHIMERA_EVENT_MOUSE_SCROLLED = 6,
+} chimera_event_type_t;
 
 typedef struct __attribute__((packed)) {
   unsigned int type;
@@ -28,6 +28,6 @@ typedef struct __attribute__((packed)) {
       unsigned int modifiers;
     } keyboard;
   } data;
-} xiu_event_t;
+} chimera_event_t;
 
 #endif

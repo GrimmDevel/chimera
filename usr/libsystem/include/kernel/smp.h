@@ -1,22 +1,22 @@
 /* =============================================================================
- * XIU Operating System — Symmetric Multiprocessing (SMP) Subsystem
+ * Chimera Operating System — Symmetric Multiprocessing (SMP) Subsystem
  * kernel/include/kernel/smp.h
  *
  * Apple XNU-style multi-core CPU discovery, AP boot sequence, and topology
  * ============================================================================= */
 
 #pragma once
-#ifndef XIU_SMP_H
-#define XIU_SMP_H
+#ifndef CHIMERA_SMP_H
+#define CHIMERA_SMP_H
 
-#include <kernel/xiu_types.h>
+#include <kernel/chimera_types.h>
 #include <kernel/proc.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-#define XIU_MAX_CPUS 16
+#define CHIMERA_MAX_CPUS 16
 
 // core SMP Functions
 void smp_init(void);
@@ -33,4 +33,4 @@ void smp_tlb_shootdown(void);
 }
 #endif
 
-#endif /* XIU_SMP_H */
+#endif /* CHIMERA_SMP_H */

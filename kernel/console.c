@@ -1,5 +1,5 @@
 /*
- * XIU Operating System — Console Core & Darwin Multiplexer
+ * Chimera Operating System — Console Core & Darwin Multiplexer
  * Adapts Darwin/XNU video_console + serial for Ring 0/Ring 3.
  */
 
@@ -7,7 +7,7 @@
 #include <kernel/proc.h>
 #include <kernel/spinlock.h>
 #include <kernel/video_console.h>
-#include <kernel/xiu_types.h>
+#include <kernel/chimera_types.h>
 #include <stdarg.h>
 
 #define COM1_PORT 0x3f8
@@ -201,7 +201,7 @@ static void console_poll_serial(void) {
   }
 }
 
-extern void xiukit_hid_poll(void);
+extern void chimerakit_hid_poll(void);
 
 void console_push_char(char c) {
   irq_flags_t irq = spinlock_lock_irqsave(&s_in_lock);
@@ -233,7 +233,7 @@ usize console_read(char *buf, usize count) {
 
   for (;;) {
     console_poll_serial();
-    xiukit_hid_poll();
+    chimerakit_hid_poll();
 
     irq_flags_t irq = spinlock_lock_irqsave(&s_in_lock);
     if (vc_get_raw_mode()) {
@@ -281,7 +281,7 @@ usize console_read(char *buf, usize count) {
 
 bool console_has_input(void) {
   console_poll_serial();
-  xiukit_hid_poll();
+  chimerakit_hid_poll();
   irq_flags_t irq = spinlock_lock_irqsave(&s_in_lock);
   bool ready = vc_get_raw_mode() ? (s_raw_count > 0) : s_line_ready;
   spinlock_unlock_irqrestore(&s_in_lock, irq);
@@ -304,7 +304,7 @@ void console_set_raw_mode(bool raw) {
   spinlock_unlock_irqrestore(&s_in_lock, irq);
 }
 
-typedef struct xiu_darwin_termios {
+typedef struct chimera_darwin_termios {
   u64 c_iflag;
   u64 c_oflag;
   u64 c_cflag;
@@ -313,18 +313,18 @@ typedef struct xiu_darwin_termios {
   u8 _pad[4];
   u64 c_ispeed;
   u64 c_ospeed;
-} xiu_darwin_termios_t;
+} chimera_darwin_termios_t;
 
-typedef struct xiu_winsize_raw {
+typedef struct chimera_winsize_raw {
   u16 ws_row;
   u16 ws_col;
   u16 ws_xpixel;
   u16 ws_ypixel;
-} xiu_winsize_raw_t;
+} chimera_winsize_raw_t;
 
-xiu_error_t console_ioctl(u64 cmd, xiu_vaddr_t arg) {
-  extern xiu_error_t copyout(const void *kaddr, void *uaddr, usize len);
-  extern xiu_error_t copyin(const void *uaddr, void *kaddr, usize len);
+chimera_error_t console_ioctl(u64 cmd, chimera_vaddr_t arg) {
+  extern chimera_error_t copyout(const void *kaddr, void *uaddr, usize len);
+  extern chimera_error_t copyin(const void *uaddr, void *kaddr, usize len);
 
   // FIODTYPE (0x4004667a or 0x2004667a or 0x8004667a)
   if (cmd == 0x4004667a || cmd == 0x2004667a || cmd == 0x8004667a) {
@@ -332,14 +332,14 @@ xiu_error_t console_ioctl(u64 cmd, xiu_vaddr_t arg) {
       int d_type = 3; // D_TTY
       return copyout(&d_type, (void *)arg, sizeof(int));
     }
-    return XIU_SUCCESS;
+    return CHIMERA_SUCCESS;
   }
 
   // TIOCGETA (0x40487413 in Darwin 64-bit, 0x402c7413 in FreeBSD, 0x5401 in
   // Linux)
   if (cmd == 0x40487413 || cmd == 0x402c7413 || cmd == 0x5401 ||
       (cmd & 0xff) == 19) {
-    xiu_darwin_termios_t dt;
+    chimera_darwin_termios_t dt;
     __builtin_memset(&dt, 0, sizeof(dt));
     dt.c_iflag = 0x00000000;
     dt.c_oflag = 0x00000003; // OPOST | ONLCR
@@ -365,9 +365,9 @@ xiu_error_t console_ioctl(u64 cmd, xiu_vaddr_t arg) {
       cmd == 0x802c7414 || cmd == 0x802c7415 || cmd == 0x802c7416 ||
       cmd == 0x5402 || cmd == 0x5403 || cmd == 0x5404 || (cmd & 0xff) == 20 ||
       (cmd & 0xff) == 21 || (cmd & 0xff) == 22) {
-    xiu_darwin_termios_t dt;
-    if (copyin((const void *)arg, &dt, sizeof(dt)) != XIU_SUCCESS)
-      return XIU_ERR_INVALID;
+    chimera_darwin_termios_t dt;
+    if (copyin((const void *)arg, &dt, sizeof(dt)) != CHIMERA_SUCCESS)
+      return CHIMERA_ERR_INVALID;
     bool raw = false;
     if (cmd == 0x5402 || cmd == 0x5403 || cmd == 0x5404) {
       raw = (dt.c_lflag & 0x0002) == 0; // Linux ICANON
@@ -375,13 +375,13 @@ xiu_error_t console_ioctl(u64 cmd, xiu_vaddr_t arg) {
       raw = (dt.c_lflag & 0x0100) == 0; // Darwin BSD ICANON
     }
     console_set_raw_mode(raw);
-    return XIU_SUCCESS;
+    return CHIMERA_SUCCESS;
   }
 
   // TIOCGWINSZ
   if (cmd == 0x40087468 || cmd == 0x5413) {
     struct vc_info *vi = vc_get_info();
-    xiu_winsize_raw_t ws;
+    chimera_winsize_raw_t ws;
     ws.ws_row = vi ? vi->v_rows : 25;
     ws.ws_col = vi ? vi->v_columns : 80;
     ws.ws_xpixel = vi ? vi->v_width : 1280;
@@ -395,30 +395,30 @@ xiu_error_t console_ioctl(u64 cmd, xiu_vaddr_t arg) {
   if (cmd == 0x80047476 || cmd == 0x5410 || (cmd & 0xff) == 118) { // TIOCSPGRP
     if (arg) {
       int pgrp = 0;
-      if (copyin((const void *)arg, &pgrp, sizeof(int)) == XIU_SUCCESS) {
+      if (copyin((const void *)arg, &pgrp, sizeof(int)) == CHIMERA_SUCCESS) {
         s_console_pgrp = pgrp;
       }
     }
-    return XIU_SUCCESS;
+    return CHIMERA_SUCCESS;
   }
 
   if (cmd == 0x40047477 || cmd == 0x540f || (cmd & 0xff) == 119) { // TIOCGPGRP
     if (arg) {
-      xiu_task_t *cur = current_task();
+      chimera_task_t *cur = current_task();
       int pgrp = s_console_pgrp;
       if (pgrp <= 0) {
         pgrp = (cur && cur->ta_proc) ? (int)cur->ta_proc->p_pgrp : 1;
       }
       return copyout(&pgrp, (void *)arg, sizeof(int));
     }
-    return XIU_SUCCESS;
+    return CHIMERA_SUCCESS;
   }
 
   if (cmd == 0x20007461 || cmd == 0x20007471 || cmd == 0x2000745e ||
       cmd == 0x80047410 || cmd == 0x80017472 || (cmd & 0xff00) == 0x7400) {
-    return XIU_SUCCESS;
+    return CHIMERA_SUCCESS;
   }
-  return XIU_SUCCESS;
+  return CHIMERA_SUCCESS;
 }
 
 /* -----------------------------------------------------------------------------

@@ -1,5 +1,5 @@
 /* =============================================================================
- * XIU Operating System — Apple XML Property List (plist) Parser & DOM Engine
+ * Chimera Operating System — Apple XML Property List (plist) Parser & DOM Engine
  * usr/libsystem/plist.c
  * ============================================================================= */
 

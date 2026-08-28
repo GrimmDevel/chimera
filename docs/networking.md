@@ -1,4 +1,4 @@
-# networking (xiu-net)
+# networking (chimera-net)
 
 darwin bsd-derived network stack with intel e1000 driver and full tcp/ip.
 

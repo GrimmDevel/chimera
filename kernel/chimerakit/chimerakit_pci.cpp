@@ -1,9 +1,9 @@
 /* =============================================================================
- * XIU Operating System — XIU-Kit PCI Manager Implementation
- * kernel/xiukit/xiukit_pci.cpp
+ * Chimera Operating System — ChimeraKit PCI Manager Implementation
+ * kernel/chimerakit/chimerakit_pci.cpp
  * ============================================================================= */
 
-#include <xiukit/xiukit_pci.hpp>
+#include <chimerakit/chimerakit_pci.hpp>
 #include <kernel/panic.h>
 
 namespace XIUKit {
@@ -52,7 +52,7 @@ void PCIDevice::configWrite32(u8 offset, u32 value) {
     outl(PCI_CONFIG_DATA, value);
 }
 
-xiu_paddr_t PCIDevice::getBAR(u8 index) {
+chimera_paddr_t PCIDevice::getBAR(u8 index) {
     if (index >= 6) return 0;
     u32 bar = configRead32(0x10 + (index * 4));
     if (bar & 1) return bar & ~0x3; // i/O
@@ -71,8 +71,8 @@ PCIManager& PCIManager::getInstance() {
 }
 
 extern "C" u64 g_e1000_pci_bar0 = 0;
-extern "C" void xiukit_xhci_init(u64 pci_bar0);
-extern "C" void xiukit_ahci_init(u64 abar_phys);
+extern "C" void chimerakit_xhci_init(u64 pci_bar0);
+extern "C" void chimerakit_ahci_init(u64 abar_phys);
 
 struct DiscoveredPCIDevice {
     u8  bus, dev, func;
@@ -103,7 +103,7 @@ static const DriverPersonality s_registered_drivers[] = {
 };
 
 void PCIManager::probeAll() {
-    kprintf("[XIU-Kit] Enumerating PCI Bus...\n");
+    kprintf("[ChimeraKit] Enumerating PCI Bus...\n");
     s_discovered_count = 0;
 
     for (u16 bus = 0; bus < 256; bus++) {
@@ -179,7 +179,7 @@ void PCIManager::probeAll() {
                         }
 
                         u64 bar0 = device.getBAR(0);
-                        xiukit_xhci_init(bar0);
+                        chimerakit_xhci_init(bar0);
                     }
 
                     // ahci / sata controller (class 01, subclass 06)
@@ -187,7 +187,7 @@ void PCIManager::probeAll() {
                         u32 cmd = device.configRead32(0x04);
                         device.configWrite32(0x04, cmd | 0x07);
                         u64 abar = device.getBAR(5);
-                        xiukit_ahci_init(abar);
+                        chimerakit_ahci_init(abar);
                     }
 
                     // multi-function check
@@ -203,12 +203,12 @@ void PCIManager::probeAll() {
 
 } // namespace XIUKit
 
-extern "C" void xiukit_pci_init(void) {
+extern "C" void chimerakit_pci_init(void) {
     XIUKit::PCIManager::getInstance().probeAll();
 }
 
-extern "C" void xiu_kit_init(void) {
-    kprintf("[XIU-Kit] Driver Registry active (%zu registered driver personalities)\n",
+extern "C" void chimera_kit_init(void) {
+    kprintf("[ChimeraKit] Driver Registry active (%zu registered driver personalities)\n",
             sizeof(XIUKit::s_registered_drivers) / sizeof(XIUKit::s_registered_drivers[0]));
     for (usize i = 0; i < sizeof(XIUKit::s_registered_drivers) / sizeof(XIUKit::s_registered_drivers[0]); i++) {
         kprintf("        driver: %s [%s]\n",
@@ -217,8 +217,8 @@ extern "C" void xiu_kit_init(void) {
     }
 }
 
-extern "C" void xiu_kit_start_matching(void) {
-    kprintf("[XIU-Kit] Executing driver matching pass against %u discovered devices...\n",
+extern "C" void chimera_kit_start_matching(void) {
+    kprintf("[ChimeraKit] Executing driver matching pass against %u discovered devices...\n",
             XIUKit::s_discovered_count);
     u32 matched_count = 0;
 
@@ -256,5 +256,5 @@ extern "C" void xiu_kit_start_matching(void) {
     kprintf("        match: HID Controller (PS/2 & SMM USB Emulation)  -> \"AppleHIDDriver\" (ATTACHED)\n");
     matched_count++;
 
-    kprintf("[XIU-Kit] Driver matching complete: %u active driver instances bound to hardware\n", matched_count);
+    kprintf("[ChimeraKit] Driver matching complete: %u active driver instances bound to hardware\n", matched_count);
 }

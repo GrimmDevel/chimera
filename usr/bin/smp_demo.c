@@ -18,9 +18,9 @@ typedef struct {
     char               kernel_name[32];
     char               architecture[16];
     char               hostname[64];
-} xiu_sysinfo_t;
+} chimera_sysinfo_t;
 
-extern int sysinfo(xiu_sysinfo_t *info);
+extern int sysinfo(chimera_sysinfo_t *info);
 
 static void worker_task(int worker_id) {
     printf("   [Worker %d (PID %d)] Started parallel computational workload...\n",
@@ -42,7 +42,7 @@ int main(int argc, char **argv) {
 
     printf("=== XIU Darwin Multi-Core SMP Subsystem Verification ===\n\n");
 
-    xiu_sysinfo_t info;
+    chimera_sysinfo_t info;
     __builtin_memset(&info, 0, sizeof(info));
     
     int cpu_count = 4; // default

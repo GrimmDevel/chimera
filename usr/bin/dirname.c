@@ -1,5 +1,5 @@
 // dirname - strip last component from filename
-#include <kernel/xiu_types.h>
+#include <kernel/chimera_types.h>
 #include <stdio.h>
 #include <string.h>
 

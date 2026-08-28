@@ -1,5 +1,5 @@
 /* =============================================================================
- * XIU Operating System — Darwin Mach Physical Page Descriptor Interface
+ * Chimera Operating System — Darwin Mach Physical Page Descriptor Interface
  * kernel/include/kernel/vm_page.h
  * ============================================================================= */
 
@@ -7,7 +7,7 @@
 #define _KERNEL_VM_PAGE_H_
 
 #include <mach/vm_types.h>
-#include <kernel/xiu_types.h>
+#include <kernel/chimera_types.h>
 #include <kernel/spinlock.h>
 
 #define VM_PAGE_FREE        0x0001

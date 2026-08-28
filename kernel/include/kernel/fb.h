@@ -1,8 +1,8 @@
 // framebuffer info
-#ifndef XIU_FB_H
-#define XIU_FB_H
+#ifndef CHIMERA_FB_H
+#define CHIMERA_FB_H
 
-#include <kernel/xiu_types.h>
+#include <kernel/chimera_types.h>
 
 struct fb_info {
     u32 width;

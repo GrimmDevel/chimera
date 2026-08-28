@@ -1,5 +1,5 @@
 // date - print system date and time
-#include <kernel/xiu_types.h>
+#include <kernel/chimera_types.h>
 #include <sys/types.h>
 #include <stdio.h>
 #include <time.h>

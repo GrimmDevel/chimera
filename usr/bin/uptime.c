@@ -1,5 +1,5 @@
 // uptime - show system uptime
-#include <kernel/xiu_types.h>
+#include <kernel/chimera_types.h>
 #include <stdio.h>
 #include <time.h>
 
@@ -10,15 +10,15 @@ typedef struct {
     u32 cpu_count;
     u32 process_count;
     u32 thread_count;
-} xiu_sysinfo_t;
+} chimera_sysinfo_t;
 
-extern i64 sysinfo(xiu_sysinfo_t *info);
+extern i64 sysinfo(chimera_sysinfo_t *info);
 
 int main(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
 
-    xiu_sysinfo_t si;
+    chimera_sysinfo_t si;
     if (sysinfo(&si) < 0) {
         printf(" 00:00:00 up 0 min, 1 user, load average: 0.01, 0.02, 0.00\n");
         return 0;

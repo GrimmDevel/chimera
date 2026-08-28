@@ -1,16 +1,16 @@
 // network protocol headers
 #pragma once
-#ifndef XIU_NET_PROTOCOLS_H
-#define XIU_NET_PROTOCOLS_H
+#ifndef CHIMERA_NET_PROTOCOLS_H
+#define CHIMERA_NET_PROTOCOLS_H
 
-#include <kernel/xiu_types.h>
+#include <kernel/chimera_types.h>
 #include <net/if.h>
 
 #define ETHERTYPE_IP    0x0800
 #define ETHERTYPE_ARP   0x0806
 #define ETHERTYPE_IPV6  0x86DD
 
-typedef struct XIU_PACKED ether_header {
+typedef struct CHIMERA_PACKED ether_header {
     u8                  ether_dhost[ETHER_ADDR_LEN];
     u8                  ether_shost[ETHER_ADDR_LEN];
     u16                 ether_type;
@@ -20,7 +20,7 @@ typedef struct XIU_PACKED ether_header {
 #define ARPOP_REQUEST   1
 #define ARPOP_REPLY     2
 
-typedef struct XIU_PACKED ether_arp {
+typedef struct CHIMERA_PACKED ether_arp {
     u16                 ea_hdr;
     u16                 ea_pro;
     u8                  ea_hln;
@@ -32,7 +32,7 @@ typedef struct XIU_PACKED ether_arp {
     u8                  arp_tpa[4];
 } ether_arp_t;
 
-typedef struct XIU_PACKED ip_header {
+typedef struct CHIMERA_PACKED ip_header {
     u8                  ip_vhl;
     u8                  ip_tos;
     u16                 ip_len;
@@ -56,7 +56,7 @@ typedef struct XIU_PACKED ip_header {
 #define ICMP_ECHO       8
 #define ICMP_TIMXCEED   11
 
-typedef struct XIU_PACKED icmp_header {
+typedef struct CHIMERA_PACKED icmp_header {
     u8                  icmp_type;
     u8                  icmp_code;
     u16                 icmp_cksum;
@@ -73,7 +73,7 @@ typedef struct XIU_PACKED icmp_header {
     } icmp_hun;
 } icmp_header_t;
 
-typedef struct XIU_PACKED udp_header {
+typedef struct CHIMERA_PACKED udp_header {
     u16                 uh_sport;
     u16                 uh_dport;
     u16                 uh_ulen;
@@ -87,7 +87,7 @@ typedef struct XIU_PACKED udp_header {
 #define TH_ACK          0x10
 #define TH_URG          0x20
 
-typedef struct XIU_PACKED tcp_header {
+typedef struct CHIMERA_PACKED tcp_header {
     u16                 th_sport;
     u16                 th_dport;
     u32                 th_seq;

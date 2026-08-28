@@ -1,5 +1,5 @@
 /*
- * XIU Operating System — OpenPAM Extensions Header
+ * Chimera Operating System — OpenPAM Extensions Header
  */
 
 #ifndef _SECURITY_OPENPAM_H_

@@ -1,6 +1,6 @@
 # XIU Kernel — Core Subsystem Build
-add_executable(xiu_kernel
-    xiu_kernel_main.c
+add_executable(chimera_kernel
+    chimera_kernel_main.c
     console.c
     video_console.c
     iso_font.c
@@ -40,11 +40,11 @@ add_executable(xiu_kernel
     net/dhcp.c
     net/uipc_socket.c
     net/net_init.c
-    xiukit/xiukit_pci.cpp
-    xiukit/runtime.cpp
-    xiukit/hid.cpp
-    xiukit/xhci.cpp
-    xiukit/ahci.cpp
+    chimerakit/chimerakit_pci.cpp
+    chimerakit/runtime.cpp
+    chimerakit/hid.cpp
+    chimerakit/xhci.cpp
+    chimerakit/ahci.cpp
     arch/x86_64/gdt.c
     arch/x86_64/idt.c
     arch/x86_64/lapic.c
@@ -55,27 +55,27 @@ add_executable(xiu_kernel
     arch/x86_64/switch.S
 )
 
-target_include_directories(xiu_kernel PRIVATE
+target_include_directories(chimera_kernel PRIVATE
     ${CMAKE_SOURCE_DIR}/kernel/include
     ${CMAKE_SOURCE_DIR}/kernel
     ${CMAKE_SOURCE_DIR}/drivers
 )
 
-target_link_options(xiu_kernel PRIVATE "-T" "${CMAKE_SOURCE_DIR}/kernel/arch/x86_64/linker.ld")
+target_link_options(chimera_kernel PRIVATE "-T" "${CMAKE_SOURCE_DIR}/kernel/arch/x86_64/linker.ld")
 
-# Enable C++ for XIU-Kit
-set_target_properties(xiu_kernel PROPERTIES LINKER_LANGUAGE CXX)
-target_compile_options(xiu_kernel PRIVATE 
+# Enable C++ for ChimeraKit
+set_target_properties(chimera_kernel PROPERTIES LINKER_LANGUAGE CXX)
+target_compile_options(chimera_kernel PRIVATE 
     $<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions -fno-rtti -fno-threadsafe-statics -std=c++20>
 )
 
-option(XIU_VERBOSE "Enable verbose kernel and syscall debug logs" OFF)
-if(XIU_VERBOSE)
-    target_compile_definitions(xiu_kernel PRIVATE XIU_VERBOSE=1)
+option(CHIMERA_VERBOSE "Enable verbose kernel and syscall debug logs" OFF)
+if(CHIMERA_VERBOSE)
+    target_compile_definitions(chimera_kernel PRIVATE CHIMERA_VERBOSE=1)
 endif()
 
 # All linker flags are handled by the toolchain bypass on macOS
 # to ensure ELF compatibility.
 
 # Ensure symbols are not stripped for debugging
-set_target_properties(xiu_kernel PROPERTIES SUFFIX ".elf")
+set_target_properties(chimera_kernel PROPERTIES SUFFIX ".elf")

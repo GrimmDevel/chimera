@@ -1,5 +1,5 @@
 /*
- * XIU Operating System — Libinput & Event Subsystem Integration
+ * Chimera Operating System — Libinput & Event Subsystem Integration
  * ponytail: provides libinput API backed by XIU devfs (/dev/mouse, /dev/kbd)
  */
 

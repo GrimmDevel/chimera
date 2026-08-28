@@ -1,13 +1,13 @@
 /* =============================================================================
- * XIU Operating System — Apple XNU VFS Mount & File System Info
+ * Chimera Operating System — Apple XNU VFS Mount & File System Info
  * kernel/include/kernel/mount_xnu.h
  * Derived from XNU bsd/sys/mount.h
  * ============================================================================= */
 
-#ifndef XIU_MOUNT_XNU_H
-#define XIU_MOUNT_XNU_H
+#ifndef CHIMERA_MOUNT_XNU_H
+#define CHIMERA_MOUNT_XNU_H
 
-#include <kernel/xiu_types.h>
+#include <kernel/chimera_types.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -43,4 +43,4 @@ struct statfs {
 }
 #endif
 
-#endif /* XIU_MOUNT_XNU_H */
+#endif /* CHIMERA_MOUNT_XNU_H */

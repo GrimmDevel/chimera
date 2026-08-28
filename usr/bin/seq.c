@@ -1,5 +1,5 @@
 // seq - print a sequence of numbers
-#include <kernel/xiu_types.h>
+#include <kernel/chimera_types.h>
 #include <stdio.h>
 #include <stdlib.h>
 

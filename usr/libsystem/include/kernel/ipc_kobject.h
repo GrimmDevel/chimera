@@ -1,9 +1,9 @@
 // mach kernel objects and mig rpc subsystem
 #pragma once
-#ifndef XIU_IPC_KOBJECT_H
-#define XIU_IPC_KOBJECT_H
+#ifndef CHIMERA_IPC_KOBJECT_H
+#define CHIMERA_IPC_KOBJECT_H
 
-#include <kernel/xiu_types.h>
+#include <kernel/chimera_types.h>
 #include <kernel/ipc_port.h>
 #include <kernel/ipc_message.h>
 
@@ -35,7 +35,7 @@ typedef enum {
 #define TASK_BOOTSTRAP_PORT         4
 
 void ipc_kobject_set(ipc_port_t *port, void *kobject, ipc_kobject_type_t type);
-xiu_error_t ipc_kobject_server(ipc_port_t *port, ipc_kmsg_t *request_kmsg);
+chimera_error_t ipc_kobject_server(ipc_port_t *port, ipc_kmsg_t *request_kmsg);
 
 #ifdef __cplusplus
 }

@@ -1,7 +1,7 @@
-#include <kernel/xiu_types.h>
+#include <kernel/chimera_types.h>
 
 extern i64 write(int fd, const void *buf, usize len);
-extern i64 xiu_mkdir(const char *path, u32 mode);
+extern i64 chimera_mkdir(const char *path, u32 mode);
 extern usize strlen(const char *s);
 
 void print(const char *s) {
@@ -14,7 +14,7 @@ int main(int argc, char *argv[]) {
         return 1;
     }
     
-    if (xiu_mkdir(argv[1], 0755) < 0) {
+    if (chimera_mkdir(argv[1], 0755) < 0) {
         print("mkdir: failed to create directory\n");
         return 1;
     }

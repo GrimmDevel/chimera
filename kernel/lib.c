@@ -1,9 +1,9 @@
 /* =============================================================================
- * XIU Operating System — Minimal Freestanding Lib
+ * Chimera Operating System — Minimal Freestanding Lib
  * kernel/lib.c
  * ============================================================================= */
 
-#include <kernel/xiu_types.h>
+#include <kernel/chimera_types.h>
 
 void *memset(void *s, int c, usize n) {
     u8 *p = (u8 *)s;

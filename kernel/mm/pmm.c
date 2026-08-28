@@ -1,5 +1,5 @@
 /* =============================================================================
- * XIU Operating System — Physical Memory Manager (Darwin Mach VM Buddy Allocator)
+ * Chimera Operating System — Physical Memory Manager (Darwin Mach VM Buddy Allocator)
  * kernel/mm/pmm.c
  *
  * Implements an O(1) Binary Buddy Allocator for physical pages with orders
@@ -10,7 +10,7 @@
 #include <kernel/vm_page.h>
 #include <kernel/panic.h>
 #include <kernel/spinlock.h>
-#include <kernel/xiu_types.h>
+#include <kernel/chimera_types.h>
 #include <limine/limine.h>
 
 extern void kprintf(const char *fmt, ...);
@@ -74,7 +74,7 @@ static void buddy_free_block(ppnum_t pfn, u32 order) {
     buddy_list_add(order, merged_page);
 }
 
-void pmm_init(xiu_paddr_t memmap_base, usize memmap_count) {
+void pmm_init(chimera_paddr_t memmap_base, usize memmap_count) {
     s_max_phys_page = 0;
     s_total_ram_pages = 0;
     s_free_pages = 0;
@@ -108,15 +108,15 @@ void pmm_init(xiu_paddr_t memmap_base, usize memmap_count) {
         }
     }
 
-    s_max_phys_page = (usize)(max_phys_addr / XIU_PAGE_SIZE);
-    s_total_ram_pages = (usize)(total_ram_bytes / XIU_PAGE_SIZE);
+    s_max_phys_page = (usize)(max_phys_addr / CHIMERA_PAGE_SIZE);
+    s_total_ram_pages = (usize)(total_ram_bytes / CHIMERA_PAGE_SIZE);
 
     usize page_array_bytes = s_max_phys_page * sizeof(vm_page_t);
-    usize page_array_pages = (page_array_bytes + XIU_PAGE_SIZE - 1) / XIU_PAGE_SIZE;
+    usize page_array_pages = (page_array_bytes + CHIMERA_PAGE_SIZE - 1) / CHIMERA_PAGE_SIZE;
 
     // dynamically allocate page descriptor array from largest usable memory segment
     extern u64 g_hhdm_base;
-    xiu_paddr_t array_paddr = 0;
+    chimera_paddr_t array_paddr = 0;
     for (usize e = 0; e < memmap_count; e++) {
         struct limine_memmap_entry *entry = entries[e];
         if (!entry || entry->type != LIMINE_MEMMAP_USABLE) continue;
@@ -136,7 +136,7 @@ void pmm_init(xiu_paddr_t memmap_base, usize memmap_count) {
     }
 
     s_pages = (vm_page_t *)(array_paddr + g_hhdm_base);
-    usize array_first_page = (usize)(array_paddr / XIU_PAGE_SIZE);
+    usize array_first_page = (usize)(array_paddr / CHIMERA_PAGE_SIZE);
     usize array_last_page = array_first_page + page_array_pages;
 
     // initialize all page descriptors as wired/used initially
@@ -166,8 +166,8 @@ void pmm_init(xiu_paddr_t memmap_base, usize memmap_count) {
             len -= skip;
         }
 
-        usize first_page = (usize)(base / XIU_PAGE_SIZE);
-        usize last_page = (usize)((base + len) / XIU_PAGE_SIZE);
+        usize first_page = (usize)(base / CHIMERA_PAGE_SIZE);
+        usize last_page = (usize)((base + len) / CHIMERA_PAGE_SIZE);
         if (last_page > s_max_phys_page) last_page = s_max_phys_page;
 
         for (usize p = first_page; p < last_page; p++) {
@@ -184,8 +184,8 @@ void pmm_init(xiu_paddr_t memmap_base, usize memmap_count) {
     }
 
     kprintf("[pmm] Darwin Mach Buddy PMM: %zu free pages (%zu MiB) of %zu total RAM (%zu MiB)\n",
-            s_free_pages, (s_free_pages * XIU_PAGE_SIZE) / (1024 * 1024),
-            s_total_ram_pages, (s_total_ram_pages * XIU_PAGE_SIZE) / (1024 * 1024));
+            s_free_pages, (s_free_pages * CHIMERA_PAGE_SIZE) / (1024 * 1024),
+            s_total_ram_pages, (s_total_ram_pages * CHIMERA_PAGE_SIZE) / (1024 * 1024));
 }
 
 usize pmm_total_pages(void) {
@@ -196,8 +196,8 @@ usize pmm_free_pages(void) {
     return s_free_pages;
 }
 
-static xiu_paddr_t pmm_alloc_order_unlocked(u32 order) {
-    if (order > BUDDY_MAX_ORDER) return (xiu_paddr_t)-1;
+static chimera_paddr_t pmm_alloc_order_unlocked(u32 order) {
+    if (order > BUDDY_MAX_ORDER) return (chimera_paddr_t)-1;
 
     u32 cur_order = order;
     while (cur_order <= BUDDY_MAX_ORDER && s_buddy_freelist[cur_order] == nullptr) {
@@ -205,7 +205,7 @@ static xiu_paddr_t pmm_alloc_order_unlocked(u32 order) {
     }
 
     if (cur_order > BUDDY_MAX_ORDER) {
-        return (xiu_paddr_t)-1;
+        return (chimera_paddr_t)-1;
     }
 
     vm_page_t *block = s_buddy_freelist[cur_order];
@@ -229,34 +229,34 @@ static xiu_paddr_t pmm_alloc_order_unlocked(u32 order) {
     }
 
     s_free_pages -= num_pages;
-    return (xiu_paddr_t)block->phys_page * XIU_PAGE_SIZE;
+    return (chimera_paddr_t)block->phys_page * CHIMERA_PAGE_SIZE;
 }
 
-xiu_paddr_t pmm_alloc_page(void) {
+chimera_paddr_t pmm_alloc_page(void) {
     irq_flags_t irq = spinlock_lock_irqsave(&s_pmm_lock);
-    xiu_paddr_t addr = pmm_alloc_order_unlocked(0);
+    chimera_paddr_t addr = pmm_alloc_order_unlocked(0);
     spinlock_unlock_irqrestore(&s_pmm_lock, irq);
-    return (addr == (xiu_paddr_t)-1) ? 0 : addr;
+    return (addr == (chimera_paddr_t)-1) ? 0 : addr;
 }
 
-xiu_paddr_t pmm_alloc_pages(usize count) {
-    if (count == 0) return (xiu_paddr_t)-1;
+chimera_paddr_t pmm_alloc_pages(usize count) {
+    if (count == 0) return (chimera_paddr_t)-1;
     if (count == 1) return pmm_alloc_page();
 
     u32 order = 0;
     while ((1U << order) < count) {
         order++;
-        if (order > BUDDY_MAX_ORDER) return (xiu_paddr_t)-1;
+        if (order > BUDDY_MAX_ORDER) return (chimera_paddr_t)-1;
     }
 
     irq_flags_t irq = spinlock_lock_irqsave(&s_pmm_lock);
-    xiu_paddr_t addr = pmm_alloc_order_unlocked(order);
+    chimera_paddr_t addr = pmm_alloc_order_unlocked(order);
     spinlock_unlock_irqrestore(&s_pmm_lock, irq);
     return addr;
 }
 
-void pmm_retain_page(xiu_paddr_t addr) {
-    usize idx = addr / XIU_PAGE_SIZE;
+void pmm_retain_page(chimera_paddr_t addr) {
+    usize idx = addr / CHIMERA_PAGE_SIZE;
     if (idx >= s_max_phys_page) return;
 
     irq_flags_t irq = spinlock_lock_irqsave(&s_pmm_lock);
@@ -266,8 +266,8 @@ void pmm_retain_page(xiu_paddr_t addr) {
     spinlock_unlock_irqrestore(&s_pmm_lock, irq);
 }
 
-void pmm_release_page(xiu_paddr_t addr) {
-    usize idx = addr / XIU_PAGE_SIZE;
+void pmm_release_page(chimera_paddr_t addr) {
+    usize idx = addr / CHIMERA_PAGE_SIZE;
     if (idx >= s_max_phys_page) return;
 
     irq_flags_t irq = spinlock_lock_irqsave(&s_pmm_lock);
@@ -283,8 +283,8 @@ void pmm_release_page(xiu_paddr_t addr) {
     spinlock_unlock_irqrestore(&s_pmm_lock, irq);
 }
 
-u16 pmm_get_refcount(xiu_paddr_t addr) {
-    usize idx = addr / XIU_PAGE_SIZE;
+u16 pmm_get_refcount(chimera_paddr_t addr) {
+    usize idx = addr / CHIMERA_PAGE_SIZE;
     if (idx >= s_max_phys_page) return 0;
 
     irq_flags_t irq = spinlock_lock_irqsave(&s_pmm_lock);
@@ -293,13 +293,13 @@ u16 pmm_get_refcount(xiu_paddr_t addr) {
     return rc;
 }
 
-void pmm_free_page(xiu_paddr_t addr) {
+void pmm_free_page(chimera_paddr_t addr) {
     pmm_release_page(addr);
 }
 
-void pmm_free_contiguous(xiu_paddr_t addr, usize count) {
-    if (addr == (xiu_paddr_t)-1 || addr == 0 || count == 0) return;
+void pmm_free_contiguous(chimera_paddr_t addr, usize count) {
+    if (addr == (chimera_paddr_t)-1 || addr == 0 || count == 0) return;
     for (usize i = 0; i < count; i++) {
-        pmm_release_page(addr + (i * XIU_PAGE_SIZE));
+        pmm_release_page(addr + (i * CHIMERA_PAGE_SIZE));
     }
 }

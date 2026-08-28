@@ -1,13 +1,13 @@
 /* =============================================================================
- * XIU Operating System — Apple XNU kqueue / kevent Subsystem
+ * Chimera Operating System — Apple XNU kqueue / kevent Subsystem
  * kernel/include/kernel/kqueue_xnu.h
  * Derived from XNU bsd/sys/event.h
  * ============================================================================= */
 
-#ifndef XIU_KQUEUE_XNU_H
-#define XIU_KQUEUE_XNU_H
+#ifndef CHIMERA_KQUEUE_XNU_H
+#define CHIMERA_KQUEUE_XNU_H
 
-#include <kernel/xiu_types.h>
+#include <kernel/chimera_types.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -44,4 +44,4 @@ struct kevent {
 }
 #endif
 
-#endif /* XIU_KQUEUE_XNU_H */
+#endif /* CHIMERA_KQUEUE_XNU_H */

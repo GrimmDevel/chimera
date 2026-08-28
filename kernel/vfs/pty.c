@@ -1,5 +1,5 @@
 /* =============================================================================
- * XIU Operating System — PTY (Pseudo-Terminal) Implementation
+ * Chimera Operating System — PTY (Pseudo-Terminal) Implementation
  * kernel/vfs/pty.c
  *
  * Architecture:
@@ -78,16 +78,16 @@ static usize ring_read(const char *buf, u32 head, u32 *tail, u32 cap, char *dst,
 }
 
 // master operations
-static xiu_error_t pty_master_read(struct vnode *vp, struct uio *uio,
+static chimera_error_t pty_master_read(struct vnode *vp, struct uio *uio,
                                    int ioflags, vfs_context_t *ctx) {
   (void)vp;
   (void)ioflags;
   (void)ctx;
   if (!uio || uio->uio_resid == 0)
-    return XIU_SUCCESS;
+    return CHIMERA_SUCCESS;
 
   char tmp[512];
-  extern xiu_error_t copyout(const void *kaddr, void *uaddr, usize len);
+  extern chimera_error_t copyout(const void *kaddr, void *uaddr, usize len);
 
   spinlock_lock(&g_pty0.lock);
   usize avail = ring_used(g_pty0.slave_head, g_pty0.slave_tail, PTY_BUF_SIZE);
@@ -100,32 +100,32 @@ static xiu_error_t pty_master_read(struct vnode *vp, struct uio *uio,
                         PTY_BUF_SIZE, tmp, to_read);
     spinlock_unlock(&g_pty0.lock);
 
-    if (copyout(tmp, (void *)uio->uio_buf, n) == XIU_SUCCESS) {
+    if (copyout(tmp, (void *)uio->uio_buf, n) == CHIMERA_SUCCESS) {
       uio->uio_buf = (void *)((uptr)uio->uio_buf + n);
       uio->uio_resid -= n;
     }
-    return XIU_SUCCESS;
+    return CHIMERA_SUCCESS;
   }
   spinlock_unlock(&g_pty0.lock);
-  return XIU_SUCCESS;
+  return CHIMERA_SUCCESS;
 }
 
 // terminal writes keyboard input → goes through line discipline → dash reads it
-static xiu_error_t pty_master_write(struct vnode *vp, struct uio *uio,
+static chimera_error_t pty_master_write(struct vnode *vp, struct uio *uio,
                                     int ioflags, vfs_context_t *ctx) {
   (void)vp;
   (void)ioflags;
   (void)ctx;
   if (!uio || !uio->uio_buf || uio->uio_resid == 0)
-    return XIU_SUCCESS;
+    return CHIMERA_SUCCESS;
 
   char tmp[512];
-  extern xiu_error_t copyin(const void *uaddr, void *kaddr, usize len);
+  extern chimera_error_t copyin(const void *uaddr, void *kaddr, usize len);
 
   usize to_write =
       (uio->uio_resid > sizeof(tmp)) ? sizeof(tmp) : uio->uio_resid;
-  if (copyin((const void *)uio->uio_buf, tmp, to_write) != XIU_SUCCESS)
-    return XIU_ERR_GENERIC;
+  if (copyin((const void *)uio->uio_buf, tmp, to_write) != CHIMERA_SUCCESS)
+    return CHIMERA_ERR_GENERIC;
 
   spinlock_lock(&g_pty0.lock);
 
@@ -169,19 +169,19 @@ static xiu_error_t pty_master_write(struct vnode *vp, struct uio *uio,
   wait_queue_wakeup_one(&g_pty0.master_wq);
   spinlock_unlock(&g_pty0.lock);
 
-  return XIU_SUCCESS;
+  return CHIMERA_SUCCESS;
 }
 
-static xiu_error_t pty_slave_read(struct vnode *vp, struct uio *uio,
+static chimera_error_t pty_slave_read(struct vnode *vp, struct uio *uio,
                                   int ioflags, vfs_context_t *ctx) {
   (void)vp;
   (void)ioflags;
   (void)ctx;
   if (!uio || uio->uio_resid == 0)
-    return XIU_SUCCESS;
+    return CHIMERA_SUCCESS;
 
   char tmp[512];
-  extern xiu_error_t copyout(const void *kaddr, void *uaddr, usize len);
+  extern chimera_error_t copyout(const void *kaddr, void *uaddr, usize len);
 
   // block until master has sent at least one byte
   for (;;) {
@@ -197,32 +197,32 @@ static xiu_error_t pty_slave_read(struct vnode *vp, struct uio *uio,
                           &g_pty0.master_tail, PTY_BUF_SIZE, tmp, to_read);
       spinlock_unlock(&g_pty0.lock);
 
-      if (copyout(tmp, (void *)uio->uio_buf, n) == XIU_SUCCESS) {
+      if (copyout(tmp, (void *)uio->uio_buf, n) == CHIMERA_SUCCESS) {
         uio->uio_buf = (void *)((uptr)uio->uio_buf + n);
         uio->uio_resid -= n;
       }
-      return XIU_SUCCESS;
+      return CHIMERA_SUCCESS;
     }
     wait_queue_sleep(&g_pty0.slave_wq, &g_pty0.lock);
   }
 }
 
 // dash writes stdout → goes into slave_buf → Terminal reads and renders it
-static xiu_error_t pty_slave_write(struct vnode *vp, struct uio *uio,
+static chimera_error_t pty_slave_write(struct vnode *vp, struct uio *uio,
                                    int ioflags, vfs_context_t *ctx) {
   (void)vp;
   (void)ioflags;
   (void)ctx;
   if (!uio || !uio->uio_buf || uio->uio_resid == 0)
-    return XIU_SUCCESS;
+    return CHIMERA_SUCCESS;
 
   char tmp[512];
-  extern xiu_error_t copyin(const void *uaddr, void *kaddr, usize len);
+  extern chimera_error_t copyin(const void *uaddr, void *kaddr, usize len);
 
   usize to_write =
       (uio->uio_resid > sizeof(tmp)) ? sizeof(tmp) : uio->uio_resid;
-  if (copyin((const void *)uio->uio_buf, tmp, to_write) != XIU_SUCCESS)
-    return XIU_ERR_GENERIC;
+  if (copyin((const void *)uio->uio_buf, tmp, to_write) != CHIMERA_SUCCESS)
+    return CHIMERA_ERR_GENERIC;
 
   spinlock_lock(&g_pty0.lock);
   usize n = ring_write(g_pty0.slave_buf, &g_pty0.slave_head, g_pty0.slave_tail,
@@ -233,10 +233,10 @@ static xiu_error_t pty_slave_write(struct vnode *vp, struct uio *uio,
   wait_queue_wakeup_one(&g_pty0.master_wq);
   spinlock_unlock(&g_pty0.lock);
 
-  return XIU_SUCCESS;
+  return CHIMERA_SUCCESS;
 }
 
-static xiu_error_t pty_ioctl(struct vnode *vp, u64 cmd, xiu_vaddr_t arg,
+static chimera_error_t pty_ioctl(struct vnode *vp, u64 cmd, chimera_vaddr_t arg,
                              vfs_context_t *ctx) {
   (void)vp;
   (void)ctx;
@@ -244,12 +244,12 @@ static xiu_error_t pty_ioctl(struct vnode *vp, u64 cmd, xiu_vaddr_t arg,
   // tiocgwinsz
   if (cmd == 0x5413 && arg) {
     u16 ws[4] = {25, 80, 0, 0};
-    extern xiu_error_t copyout(const void *kaddr, void *uaddr, usize len);
+    extern chimera_error_t copyout(const void *kaddr, void *uaddr, usize len);
     return copyout(ws, (void *)arg, sizeof(ws));
   }
 
   // stage 1 TTY compatibility: treat other termios/job-control ioctls as OK.
-  return XIU_SUCCESS;
+  return CHIMERA_SUCCESS;
 }
 
 vnode_ops_t s_pty_master_ops = {.vop_name = "pty_master",

@@ -36,8 +36,6 @@ typedef struct __attribute__((packed)) {
     mach_port_name_t    msgh_local_port;
     mach_port_name_t    msgh_voucher_port;
     mach_msg_id_t       msgh_id;
-    unsigned int        msgh_reserved1;
-    unsigned int        msgh_reserved2;
 } mach_msg_header_t;
 
 typedef struct __attribute__((packed)) {

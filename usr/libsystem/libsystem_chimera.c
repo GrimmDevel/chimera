@@ -9,7 +9,7 @@
 #include "include/unistd.h"
 #include "include/signal.h"
 #include <kernel/syscall.h>
-#include <kernel/xiu_types.h>
+#include <kernel/chimera_types.h>
 #include "include/ctype.h"
 #include "include/sys/times.h"
 #include "include/sys/time.h"
@@ -37,74 +37,74 @@
 #include "include/errno.h"
 
 // prototypes for assembly stubs
-extern i64 xiu_exit(u64 code);
-extern i64 xiu_fork(void);
-extern i64 xiu_wait4(int pid, int *status, int options, void *rusage);
-extern i64 xiu_read(int fd, void *buf, usize len);
-extern i64 xiu_write(int fd, const void *buf, usize len);
-extern i64 xiu_open(const char *path, int flags, int mode);
-extern i64 xiu_close(int fd);
-extern i64 xiu_chdir(const char *path);
-extern i64 xiu_getpid(void);
-extern i64 xiu_execve(const char *path, char *const argv[], char *const envp[]);
-extern i64 xiu_mmap(void *addr, usize len, int prot, int flags, int fd,
+extern i64 chimera_exit(u64 code);
+extern i64 chimera_fork(void);
+extern i64 chimera_wait4(int pid, int *status, int options, void *rusage);
+extern i64 chimera_read(int fd, void *buf, usize len);
+extern i64 chimera_write(int fd, const void *buf, usize len);
+extern i64 chimera_open(const char *path, int flags, int mode);
+extern i64 chimera_close(int fd);
+extern i64 chimera_chdir(const char *path);
+extern i64 chimera_getpid(void);
+extern i64 chimera_execve(const char *path, char *const argv[], char *const envp[]);
+extern i64 chimera_mmap(void *addr, usize len, int prot, int flags, int fd,
                     u64 offset);
-extern i64 xiu_mach_msg(void *msg, u32 option, u32 send_sz, u32 rcv_sz,
+extern i64 chimera_mach_msg(void *msg, u32 option, u32 send_sz, u32 rcv_sz,
                         u32 rcv_name, u32 timeout);
-extern i64 xiu_getdents(int fd, void *buf, usize count);
-extern i64 xiu_stat(const char *path, struct stat *buf);
-extern i64 xiu_fstat(int fd, struct stat *buf);
-extern i64 xiu_lstat(const char *path, struct stat *buf);
-extern i64 xiu_mkdir(const char *path, u32 mode);
-extern i64 xiu_rmdir(u64 path);
-extern i64 xiu_unlink(u64 path);
-extern i64 xiu_access(const char *path, int mode);
-extern i64 xiu_chmod(const char *path, mode_t mode);
-extern i64 xiu_fchmod(int fd, mode_t mode);
-extern i64 xiu_chown(const char *path, uid_t owner, gid_t group);
-extern i64 xiu_fchown(int fd, uid_t owner, gid_t group);
-extern i64 xiu_truncate(const char *path, off_t length);
-extern i64 xiu_ftruncate(int fd, off_t length);
-extern i64 xiu_rename(const char *oldpath, const char *newpath);
-extern i64 xiu_umask(int mask);
-extern i64 xiu_ioctl(int fd, u64 cmd, void *arg);
-extern i64 xiu_fcntl(int fd, int cmd, u64 arg);
-extern i64 xiu_lseek(int fd, i64 offset, int whence);
-extern i64 xiu_getcwd(char *buf, usize size);
-extern i64 xiu_pipe(int pipefd[2]);
-extern i64 xiu_dup(int oldfd);
-extern i64 xiu_dup2(int oldfd, int newfd);
-extern i64 xiu_readv(int fd, const struct iovec *iov, int iovcnt);
-extern i64 xiu_writev(int fd, const struct iovec *iov, int iovcnt);
-extern i64 xiu_pread(int fd, void *buf, usize count, off_t offset);
-extern i64 xiu_pwrite(int fd, const void *buf, usize count, off_t offset);
-extern i64 xiu_getuid(void);
-extern i64 xiu_geteuid(void);
-extern i64 xiu_setuid(uid_t uid);
-extern i64 xiu_seteuid(uid_t euid);
-extern i64 xiu_getgid(void);
-extern i64 xiu_getegid(void);
-extern i64 xiu_setgid(gid_t gid);
-extern i64 xiu_setegid(gid_t egid);
-extern i64 xiu_getgroups(int size, gid_t list[]);
-extern i64 xiu_setgroups(int size, const gid_t *list);
-extern i64 xiu_getlogin(char *name, usize namelen);
-extern i64 xiu_setlogin(const char *name);
-extern i64 xiu_getppid(void);
-extern i64 xiu_getpgrp(void);
-extern i64 xiu_setpgid(pid_t pid, pid_t pgid);
-extern i64 xiu_setsid(void);
-extern i64 xiu_poll(struct pollfd *fds, unsigned int nfds, int timeout);
-extern i64 xiu_select(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds, struct timeval *timeout);
-extern i64 xiu_sysctl(int *name, unsigned int namelen, void *oldp, size_t *oldlenp, void *newp, size_t newlen);
-extern i64 xiu_gettimeofday(struct timeval *tv, void *tz);
-extern i64 xiu_settimeofday(const struct timeval *tv, const void *tz);
-extern i64 xiu_kill(int pid, int sig);
-extern i64 xiu_sigaction(int sig, const struct sigaction *act, struct sigaction *oldact);
-extern i64 xiu_sigprocmask(int how, const sigset_t *set, sigset_t *oldset);
-extern i64 xiu_spawn(const char *path, char *const argv[], char *const envp[],
+extern i64 chimera_getdents(int fd, void *buf, usize count);
+extern i64 chimera_stat(const char *path, struct stat *buf);
+extern i64 chimera_fstat(int fd, struct stat *buf);
+extern i64 chimera_lstat(const char *path, struct stat *buf);
+extern i64 chimera_mkdir(const char *path, u32 mode);
+extern i64 chimera_rmdir(u64 path);
+extern i64 chimera_unlink(u64 path);
+extern i64 chimera_access(const char *path, int mode);
+extern i64 chimera_chmod(const char *path, mode_t mode);
+extern i64 chimera_fchmod(int fd, mode_t mode);
+extern i64 chimera_chown(const char *path, uid_t owner, gid_t group);
+extern i64 chimera_fchown(int fd, uid_t owner, gid_t group);
+extern i64 chimera_truncate(const char *path, off_t length);
+extern i64 chimera_ftruncate(int fd, off_t length);
+extern i64 chimera_rename(const char *oldpath, const char *newpath);
+extern i64 chimera_umask(int mask);
+extern i64 chimera_ioctl(int fd, u64 cmd, void *arg);
+extern i64 chimera_fcntl(int fd, int cmd, u64 arg);
+extern i64 chimera_lseek(int fd, i64 offset, int whence);
+extern i64 chimera_getcwd(char *buf, usize size);
+extern i64 chimera_pipe(int pipefd[2]);
+extern i64 chimera_dup(int oldfd);
+extern i64 chimera_dup2(int oldfd, int newfd);
+extern i64 chimera_readv(int fd, const struct iovec *iov, int iovcnt);
+extern i64 chimera_writev(int fd, const struct iovec *iov, int iovcnt);
+extern i64 chimera_pread(int fd, void *buf, usize count, off_t offset);
+extern i64 chimera_pwrite(int fd, const void *buf, usize count, off_t offset);
+extern i64 chimera_getuid(void);
+extern i64 chimera_geteuid(void);
+extern i64 chimera_setuid(uid_t uid);
+extern i64 chimera_seteuid(uid_t euid);
+extern i64 chimera_getgid(void);
+extern i64 chimera_getegid(void);
+extern i64 chimera_setgid(gid_t gid);
+extern i64 chimera_setegid(gid_t egid);
+extern i64 chimera_getgroups(int size, gid_t list[]);
+extern i64 chimera_setgroups(int size, const gid_t *list);
+extern i64 chimera_getlogin(char *name, usize namelen);
+extern i64 chimera_setlogin(const char *name);
+extern i64 chimera_getppid(void);
+extern i64 chimera_getpgrp(void);
+extern i64 chimera_setpgid(pid_t pid, pid_t pgid);
+extern i64 chimera_setsid(void);
+extern i64 chimera_poll(struct pollfd *fds, unsigned int nfds, int timeout);
+extern i64 chimera_select(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds, struct timeval *timeout);
+extern i64 chimera_sysctl(int *name, unsigned int namelen, void *oldp, size_t *oldlenp, void *newp, size_t newlen);
+extern i64 chimera_gettimeofday(struct timeval *tv, void *tz);
+extern i64 chimera_settimeofday(const struct timeval *tv, const void *tz);
+extern i64 chimera_kill(int pid, int sig);
+extern i64 chimera_sigaction(int sig, const struct sigaction *act, struct sigaction *oldact);
+extern i64 chimera_sigprocmask(int how, const sigset_t *set, sigset_t *oldset);
+extern i64 chimera_spawn(const char *path, char *const argv[], char *const envp[],
                      const char *stdin_path, const char *stdout_path);
-extern i64 xiu_mach_msg(void *msg, u32 opt, u32 ssz, u32 rsz, u32 rport,
+extern i64 chimera_mach_msg(void *msg, u32 opt, u32 ssz, u32 rsz, u32 rport,
                         u32 timeout);
 
 static char *s_default_environ[] = {
@@ -150,17 +150,17 @@ void exit(int code) {
       g_atexit_funcs[i]();
     }
   }
-  xiu_exit((u64)code);
+  chimera_exit((u64)code);
   for (;;)
     ;
 }
 
 ssize_t write(int fd, const void *buf, size_t len) {
-  return xiu_write(fd, buf, len);
+  return chimera_write(fd, buf, len);
 }
 
 ssize_t read(int fd, void *buf, size_t len) {
-  return xiu_read(fd, buf, len);
+  return chimera_read(fd, buf, len);
 }
 
 int open(const char *path, int flags, ...) {
@@ -171,7 +171,7 @@ int open(const char *path, int flags, ...) {
         mode = (mode_t)va_arg(ap, int);
         va_end(ap);
     }
-    i64 ret = xiu_open(path, flags, mode);
+    i64 ret = chimera_open(path, flags, mode);
     if (ret < 0) {
         errno = (int)-ret;
         return -1;
@@ -179,15 +179,15 @@ int open(const char *path, int flags, ...) {
     return (int)ret;
 }
 
-int close(int fd) { return (int)xiu_close(fd); }
+int close(int fd) { return (int)chimera_close(fd); }
 
 int stat(const char *path, struct stat *buf) {
-  return (int)xiu_stat(path, buf);
+  return (int)chimera_stat(path, buf);
 }
 
-int mkdir(const char *path, mode_t mode) { return (int)xiu_mkdir(path, mode); }
+int mkdir(const char *path, mode_t mode) { return (int)chimera_mkdir(path, mode); }
 
-int ioctl(int fd, u64 cmd, void *arg) { return (int)xiu_ioctl(fd, cmd, arg); }
+int ioctl(int fd, u64 cmd, void *arg) { return (int)chimera_ioctl(fd, cmd, arg); }
 
 char *getcwd(char *buf, usize size) {
   if (!buf && size == 0) {
@@ -196,23 +196,23 @@ char *getcwd(char *buf, usize size) {
     if (!buf)
       return NULL;
   }
-  if (xiu_getcwd(buf, size) < 0)
+  if (chimera_getcwd(buf, size) < 0)
     return NULL;
   return buf;
 }
 
 
 void *mmap(void *addr, usize length, int prot, int flags, int fd, off_t offset) {
-  i64 res = xiu_mmap(addr, length, prot, flags, fd, (u64)offset);
+  i64 res = chimera_mmap(addr, length, prot, flags, fd, (u64)offset);
   if (res < 0)
     return (void *)-1;
   return (void *)res;
 }
 
-extern i64 xiu_munmap(void *addr, usize len);
+extern i64 chimera_munmap(void *addr, usize len);
 
 int munmap(void *addr, usize length) {
-  return (int)xiu_munmap(addr, length);
+  return (int)chimera_munmap(addr, length);
 }
 int memfd_create(const char *name, unsigned int flags) { return -1; }
 
@@ -241,7 +241,7 @@ DIR *opendir(const char *name) {
 struct dirent *readdir(DIR *dirp) {
   if (!dirp) return NULL;
   struct __xiu_dir_stream *xdir = (struct __xiu_dir_stream *)dirp;
-  if (xiu_getdents(xdir->dir.__dd_fd, &xdir->entry, sizeof(struct dirent)) <= 0) {
+  if (chimera_getdents(xdir->dir.__dd_fd, &xdir->entry, sizeof(struct dirent)) <= 0) {
     return NULL;
   }
   return &xdir->entry;
@@ -263,49 +263,49 @@ int closedir(DIR *dirp) {
 #include "include/mach/mach.h"
 #include "include/servers/bootstrap.h"
 
-typedef mach_msg_header_t xiu_msg_header_t;
+typedef mach_msg_header_t chimera_msg_header_t;
 
-extern i64 xiu_mach_port_allocate(ipc_space_t space, mach_port_right_t right,
+extern i64 chimera_mach_port_allocate(ipc_space_t space, mach_port_right_t right,
                                   mach_port_name_t *name);
-extern i64 xiu_mach_port_deallocate(u64 space, u64 name);
-extern i64 xiu_mach_port_type(u64 space, u64 name, u64 ptype_out);
-extern i64 xiu_mach_lookup_service(const char *name,
+extern i64 chimera_mach_port_deallocate(u64 space, u64 name);
+extern i64 chimera_mach_port_type(u64 space, u64 name, u64 ptype_out);
+extern i64 chimera_mach_lookup_service(const char *name,
                                    mach_port_name_t *port_out);
-extern i64 xiu_mach_msg(void *msg, u32 option, u32 send_sz, u32 rcv_sz,
+extern i64 chimera_mach_msg(void *msg, u32 option, u32 send_sz, u32 rcv_sz,
                         u32 rcv_name, u32 timeout);
-extern void xiu_yield(void);
-extern i64 xiu_log(const char *msg);
+extern void chimera_yield(void);
+extern i64 chimera_log(const char *msg);
 
 // allocate a new receive-right Mach port for this task
-i64 xiu_mach_alloc_port(u32 *port_out) {
-  return xiu_mach_port_allocate(MACH_PORT_NULL, MACH_PORT_RIGHT_RECEIVE,
+i64 chimera_mach_alloc_port(u32 *port_out) {
+  return chimera_mach_port_allocate(MACH_PORT_NULL, MACH_PORT_RIGHT_RECEIVE,
                                 port_out);
 }
 
 // synchronous send+receive
-i64 xiu_mach_send_recv(u32 dst_port, void *msg, u32 send_sz, void *reply_buf,
+i64 chimera_mach_send_recv(u32 dst_port, void *msg, u32 send_sz, void *reply_buf,
                        u32 rcv_sz, u32 reply_port) {
-  xiu_msg_header_t *hdr = (xiu_msg_header_t *)msg;
+  chimera_msg_header_t *hdr = (chimera_msg_header_t *)msg;
   hdr->msgh_remote_port = dst_port;
   hdr->msgh_local_port = reply_port;
   hdr->msgh_size = send_sz;
   hdr->msgh_bits = 0x0013;
 
   // 1. send message
-  i64 rc = xiu_mach_msg(msg, 1, send_sz, 0, 0, 5000);
+  i64 rc = chimera_mach_msg(msg, 1, send_sz, 0, 0, 5000);
   if (rc < 0)
     return rc;
 
   // 2. wait for reply
   u8 rcv_temp[2048];
   do {
-    rc = xiu_mach_msg(rcv_temp, 2, 0, sizeof(rcv_temp), reply_port, 5000);
+    rc = chimera_mach_msg(rcv_temp, 2, 0, sizeof(rcv_temp), reply_port, 5000);
     if (rc < 0)
-      xiu_yield();
+      chimera_yield();
   } while (rc < 0);
   
   // copy the actual message back to the caller's buffer
-  xiu_msg_header_t *rep = (xiu_msg_header_t *)rcv_temp;
+  chimera_msg_header_t *rep = (chimera_msg_header_t *)rcv_temp;
   u32 actual_sz = rep->msgh_size;
   if (actual_sz > rcv_sz) actual_sz = rcv_sz;
   memcpy(reply_buf, rcv_temp, actual_sz);
@@ -314,17 +314,17 @@ i64 xiu_mach_send_recv(u32 dst_port, void *msg, u32 send_sz, void *reply_buf,
 
 // fire-and-forget send
 i64 XIUPortSendMessage(u32 port, void *msg, u32 size) {
-  xiu_msg_header_t *hdr = (xiu_msg_header_t *)msg;
+  chimera_msg_header_t *hdr = (chimera_msg_header_t *)msg;
   hdr->msgh_remote_port = port;
   hdr->msgh_size = size;
   hdr->msgh_bits = 0x00001200;
-  return xiu_mach_msg(msg, 1, size, 0, 0, 0);
+  return chimera_mach_msg(msg, 1, size, 0, 0, 0);
 }
 
-pid_t fork(void) { return (pid_t)xiu_fork(); }
+pid_t fork(void) { return (pid_t)chimera_fork(); }
 
 pid_t waitpid(pid_t pid, int *status, int options) {
-    i64 ret = xiu_wait4(pid, status, options, NULL);
+    i64 ret = chimera_wait4(pid, status, options, NULL);
     if (ret < 0) {
         errno = (int)(-ret);
         return -1;
@@ -333,7 +333,7 @@ pid_t waitpid(pid_t pid, int *status, int options) {
 }
 
 pid_t wait4(pid_t pid, int *status, int options, struct rusage *rusage) {
-    i64 ret = xiu_wait4(pid, status, options, rusage);
+    i64 ret = chimera_wait4(pid, status, options, rusage);
     if (ret < 0) {
         errno = (int)(-ret);
         return -1;
@@ -341,10 +341,10 @@ pid_t wait4(pid_t pid, int *status, int options, struct rusage *rusage) {
     return (pid_t)ret;
 }
 
-pid_t getpid(void) { return (pid_t)xiu_getpid(); }
-int pipe(int pipefd[2]) { return (int)xiu_pipe(pipefd); }
+pid_t getpid(void) { return (pid_t)chimera_getpid(); }
+int pipe(int pipefd[2]) { return (int)chimera_pipe(pipefd); }
 
-i64 lseek(int fd, i64 offset, int whence) { return xiu_lseek(fd, offset, whence); }
+i64 lseek(int fd, i64 offset, int whence) { return chimera_lseek(fd, offset, whence); }
 int fcntl(int fd, int cmd, ...) {
   __builtin_va_list ap;
   u64 arg = 0;
@@ -355,22 +355,22 @@ int fcntl(int fd, int cmd, ...) {
   }
   __builtin_va_end(ap);
 
-  return (int)xiu_fcntl(fd, cmd, arg);
+  return (int)chimera_fcntl(fd, cmd, arg);
 }
 
-extern i64 xiu_unlink(u64 path);
-extern i64 xiu_rmdir(u64 path);
+extern i64 chimera_unlink(u64 path);
+extern i64 chimera_rmdir(u64 path);
 
 int unlink(const char *path) {
   if (!path) return -1;
-  i64 ret = xiu_unlink((u64)path);
+  i64 ret = chimera_unlink((u64)path);
   if (ret < 0) { errno = (int)-ret; return -1; }
   return 0;
 }
 
 int rmdir(const char *path) {
   if (!path) return -1;
-  i64 ret = xiu_rmdir((u64)path);
+  i64 ret = chimera_rmdir((u64)path);
   if (ret < 0) { errno = (int)-ret; return -1; }
   return 0;
 }
@@ -379,148 +379,148 @@ int mkstemp(char *tmpl) { return -1; }
 
 int access(const char *path, int mode) {
   if (!path) { errno = EFAULT; return -1; }
-  i64 ret = xiu_access(path, mode);
+  i64 ret = chimera_access(path, mode);
   if (ret < 0) { errno = (int)-ret; return -1; }
   return 0;
 }
 
 mode_t umask(mode_t mask) {
-  return (mode_t)xiu_umask(mask);
+  return (mode_t)chimera_umask(mask);
 }
 
 int chmod(const char *path, mode_t mode) {
-  i64 ret = xiu_chmod(path, mode);
+  i64 ret = chimera_chmod(path, mode);
   if (ret < 0) { errno = (int)-ret; return -1; }
   return 0;
 }
 
 int fchmod(int fd, mode_t mode) {
-  i64 ret = xiu_fchmod(fd, mode);
+  i64 ret = chimera_fchmod(fd, mode);
   if (ret < 0) { errno = (int)-ret; return -1; }
   return 0;
 }
 
 int chown(const char *path, uid_t owner, gid_t group) {
-  i64 ret = xiu_chown(path, owner, group);
+  i64 ret = chimera_chown(path, owner, group);
   if (ret < 0) { errno = (int)-ret; return -1; }
   return 0;
 }
 
 int fchown(int fd, uid_t owner, gid_t group) {
-  i64 ret = xiu_fchown(fd, owner, group);
+  i64 ret = chimera_fchown(fd, owner, group);
   if (ret < 0) { errno = (int)-ret; return -1; }
   return 0;
 }
 
 int truncate(const char *path, off_t length) {
-  i64 ret = xiu_truncate(path, length);
+  i64 ret = chimera_truncate(path, length);
   if (ret < 0) { errno = (int)-ret; return -1; }
   return 0;
 }
 
 int ftruncate(int fd, off_t length) {
-  i64 ret = xiu_ftruncate(fd, length);
+  i64 ret = chimera_ftruncate(fd, length);
   if (ret < 0) { errno = (int)-ret; return -1; }
   return 0;
 }
 
 int rename(const char *oldpath, const char *newpath) {
-  i64 ret = xiu_rename(oldpath, newpath);
+  i64 ret = chimera_rename(oldpath, newpath);
   if (ret < 0) { errno = (int)-ret; return -1; }
   return 0;
 }
 
 int dup(int oldfd) {
-  i64 ret = xiu_dup(oldfd);
+  i64 ret = chimera_dup(oldfd);
   if (ret < 0) { errno = (int)-ret; return -1; }
   return (int)ret;
 }
 
 int dup2(int oldfd, int newfd) {
-  i64 ret = xiu_dup2(oldfd, newfd);
+  i64 ret = chimera_dup2(oldfd, newfd);
   if (ret < 0) { errno = (int)-ret; return -1; }
   return (int)ret;
 }
 
 ssize_t readv(int fd, const struct iovec *iov, int iovcnt) {
-  i64 ret = xiu_readv(fd, iov, iovcnt);
+  i64 ret = chimera_readv(fd, iov, iovcnt);
   if (ret < 0) { errno = (int)-ret; return -1; }
   return (ssize_t)ret;
 }
 
 ssize_t writev(int fd, const struct iovec *iov, int iovcnt) {
-  i64 ret = xiu_writev(fd, iov, iovcnt);
+  i64 ret = chimera_writev(fd, iov, iovcnt);
   if (ret < 0) { errno = (int)-ret; return -1; }
   return (ssize_t)ret;
 }
 
 ssize_t pread(int fd, void *buf, size_t count, off_t offset) {
-  i64 ret = xiu_pread(fd, buf, count, offset);
+  i64 ret = chimera_pread(fd, buf, count, offset);
   if (ret < 0) { errno = (int)-ret; return -1; }
   return (ssize_t)ret;
 }
 
 ssize_t pwrite(int fd, const void *buf, size_t count, off_t offset) {
-  i64 ret = xiu_pwrite(fd, buf, count, offset);
+  i64 ret = chimera_pwrite(fd, buf, count, offset);
   if (ret < 0) { errno = (int)-ret; return -1; }
   return (ssize_t)ret;
 }
 
-uid_t getuid(void) { return (uid_t)xiu_getuid(); }
-uid_t geteuid(void) { return (uid_t)xiu_geteuid(); }
+uid_t getuid(void) { return (uid_t)chimera_getuid(); }
+uid_t geteuid(void) { return (uid_t)chimera_geteuid(); }
 int setuid(uid_t uid) {
-  i64 ret = xiu_setuid(uid);
+  i64 ret = chimera_setuid(uid);
   if (ret < 0) { errno = (int)-ret; return -1; }
   return 0;
 }
 int seteuid(uid_t euid) {
-  i64 ret = xiu_seteuid(euid);
+  i64 ret = chimera_seteuid(euid);
   if (ret < 0) { errno = (int)-ret; return -1; }
   return 0;
 }
-gid_t getgid(void) { return (gid_t)xiu_getgid(); }
-gid_t getegid(void) { return (gid_t)xiu_getegid(); }
+gid_t getgid(void) { return (gid_t)chimera_getgid(); }
+gid_t getegid(void) { return (gid_t)chimera_getegid(); }
 int setgid(gid_t gid) {
-  i64 ret = xiu_setgid(gid);
+  i64 ret = chimera_setgid(gid);
   if (ret < 0) { errno = (int)-ret; return -1; }
   return 0;
 }
 int setegid(gid_t egid) {
-  i64 ret = xiu_setegid(egid);
+  i64 ret = chimera_setegid(egid);
   if (ret < 0) { errno = (int)-ret; return -1; }
   return 0;
 }
 int getgroups(int size, gid_t list[]) {
-  i64 ret = xiu_getgroups(size, list);
+  i64 ret = chimera_getgroups(size, list);
   if (ret < 0) { errno = (int)-ret; return -1; }
   return (int)ret;
 }
 int setgroups(int size, const gid_t *list) {
-  i64 ret = xiu_setgroups(size, list);
+  i64 ret = chimera_setgroups(size, list);
   if (ret < 0) { errno = (int)-ret; return -1; }
   return 0;
 }
-pid_t getppid(void) { return (pid_t)xiu_getppid(); }
-pid_t getpgrp(void) { return (pid_t)xiu_getpgrp(); }
+pid_t getppid(void) { return (pid_t)chimera_getppid(); }
+pid_t getpgrp(void) { return (pid_t)chimera_getpgrp(); }
 int setpgid(pid_t pid, pid_t pgid) {
-  i64 ret = xiu_setpgid(pid, pgid);
+  i64 ret = chimera_setpgid(pid, pgid);
   if (ret < 0) { errno = (int)-ret; return -1; }
   return 0;
 }
 pid_t setsid(void) {
-  i64 ret = xiu_setsid();
+  i64 ret = chimera_setsid();
   if (ret < 0) { errno = (int)-ret; return -1; }
   return (pid_t)ret;
 }
 
 int poll(struct pollfd *fds, nfds_t nfds, int timeout) {
-  i64 ret = xiu_poll(fds, nfds, timeout);
+  i64 ret = chimera_poll(fds, nfds, timeout);
   if (ret < 0) { errno = (int)-ret; return -1; }
   return (int)ret;
 }
 
 int select(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds, struct timeval *timeout) {
-  i64 ret = xiu_select(nfds, readfds, writefds, exceptfds, timeout);
+  i64 ret = chimera_select(nfds, readfds, writefds, exceptfds, timeout);
   return (int)ret;
 }
 
@@ -550,19 +550,19 @@ char *setstate(const char *state) {
 }
 
 int gettimeofday(struct timeval *tv, void *tz) {
-  i64 ret = xiu_gettimeofday(tv, tz);
+  i64 ret = chimera_gettimeofday(tv, tz);
   if (ret < 0) { errno = (int)-ret; return -1; }
   return 0;
 }
 
 int settimeofday(const struct timeval *tv, const struct timezone *tz) {
-  i64 ret = xiu_settimeofday(tv, (const void *)tz);
+  i64 ret = chimera_settimeofday(tv, (const void *)tz);
   if (ret < 0) { errno = (int)-ret; return -1; }
   return 0;
 }
 
 int sysctl(int *name, unsigned int namelen, void *oldp, size_t *oldlenp, void *newp, size_t newlen) {
-  i64 ret = xiu_sysctl(name, namelen, oldp, oldlenp, newp, newlen);
+  i64 ret = chimera_sysctl(name, namelen, oldp, oldlenp, newp, newlen);
   if (ret < 0) { errno = (int)-ret; return -1; }
   return 0;
 }
@@ -1094,7 +1094,7 @@ int putchar(int c) {
 }
 
 int execve(const char *path, char *const argv[], char *const envp[]) {
-  i64 ret = xiu_execve(path, argv, envp);
+  i64 ret = chimera_execve(path, argv, envp);
   if (ret < 0) {
     errno = (int)-ret;
     return -1;
@@ -1215,30 +1215,30 @@ void free(void *ptr) {
 
 
 int fstat(int fd, struct stat *buf) {
-  i64 ret = xiu_fstat(fd, buf);
+  i64 ret = chimera_fstat(fd, buf);
   if (ret < 0) { errno = (int)-ret; return -1; }
   return 0;
 }
 
 int lstat(const char *path, struct stat *buf) {
-  i64 ret = xiu_lstat(path, buf);
+  i64 ret = chimera_lstat(path, buf);
   if (ret < 0) { errno = (int)-ret; return -1; }
   return 0;
 }
 
 
 int sched_yield(void) {
-    xiu_yield();
+    chimera_yield();
     return 0;
 }
 
 #include <sys/time.h>
 
-extern i64 xiu_nanosleep(const void *req, void *rem);
+extern i64 chimera_nanosleep(const void *req, void *rem);
 
 int nanosleep(const struct timespec *req, struct timespec *rem) {
     if (!req) return -1;
-    return (int)xiu_nanosleep(req, rem);
+    return (int)chimera_nanosleep(req, rem);
 }
 
 int usleep(unsigned int usec) {
@@ -1504,9 +1504,9 @@ int dlclose(void *handle) { (void)handle; return 0; }
 void *dlsym(void *handle, const char *symbol) { (void)handle; (void)symbol; return (void *)0; }
 char *dlerror(void) { return "Dynamic linking not supported"; }
 
-extern i64 xiu_mprotect(void *addr, usize len, int prot);
+extern i64 chimera_mprotect(void *addr, usize len, int prot);
 int mprotect(void *addr, usize len, int prot) {
-  return (int)xiu_mprotect(addr, len, prot);
+  return (int)chimera_mprotect(addr, len, prot);
 }
 
 float strtof(const char *nptr, char **endptr) {
@@ -1630,15 +1630,15 @@ int futimens(int fd, const struct timespec times[2]) {
   return 0;
 }
 
-extern i64 xiu_getpgid(pid_t pid);
-extern i64 xiu_getsid(pid_t pid);
+extern i64 chimera_getpgid(pid_t pid);
+extern i64 chimera_getsid(pid_t pid);
 
 pid_t getpgid(pid_t pid) {
-  return (pid_t)xiu_getpgid(pid);
+  return (pid_t)chimera_getpgid(pid);
 }
 
 pid_t getsid(pid_t pid) {
-  return (pid_t)xiu_getsid(pid);
+  return (pid_t)chimera_getsid(pid);
 }
 
 
@@ -2040,7 +2040,7 @@ void qsort(void *base, usize nmemb, usize size, int (*compar)(const void *, cons
 }
 
 int sigaction(int signum, const struct sigaction *act, struct sigaction *oldact) {
-    return (int)xiu_sigaction(signum, act, oldact);
+    return (int)chimera_sigaction(signum, act, oldact);
 }
 
 sig_t signal(int signum, sig_t handler) {
@@ -2048,14 +2048,14 @@ sig_t signal(int signum, sig_t handler) {
     act.sa_handler = handler;
     act.sa_flags = 0;
     act.sa_mask = 0;
-    if (xiu_sigaction(signum, &act, &oldact) < 0) {
+    if (chimera_sigaction(signum, &act, &oldact) < 0) {
         return SIG_ERR;
     }
     return oldact.sa_handler;
 }
 
 int kill(pid_t pid, int sig) {
-    return (int)xiu_kill((int)pid, sig);
+    return (int)chimera_kill((int)pid, sig);
 }
 
 int raise(int sig) {
@@ -2063,14 +2063,14 @@ int raise(int sig) {
 }
 
 int sigprocmask(int how, const sigset_t *set, sigset_t *oldset) {
-    return (int)xiu_sigprocmask(how, set, oldset);
+    return (int)chimera_sigprocmask(how, set, oldset);
 }
 
 
 int fstat64(int fd, struct stat64 *buf) { return fstat(fd, (struct stat *)buf); }
 intmax_t strtoimax(const char *nptr, char **endptr, int base) { return (intmax_t)strtoll(nptr, endptr, base); }
 
-int chdir(const char *path) { return (int)xiu_chdir(path); }
+int chdir(const char *path) { return (int)chimera_chdir(path); }
 
 
 void *memchr(const void *s, int c, usize n) {
@@ -2099,7 +2099,7 @@ int getopt(int argc, char * const argv[], const char *optstring) {
     char *p = strchr(optstring, c);
     if (p == NULL || c == ':') {
         optopt = c;
-        if (optstring[0] != ':' && opterr) xiu_log("Unknown option");
+        if (optstring[0] != ':' && opterr) chimera_log("Unknown option");
         if (argv[optind][optpos] == '\0') { optind++; optpos = 1; }
         return '?';
     }
@@ -2116,7 +2116,7 @@ int getopt(int argc, char * const argv[], const char *optstring) {
         } else {
             optopt = c;
             if (optstring[0] == ':') return ':';
-            if (opterr) xiu_log("Option requires argument");
+            if (opterr) chimera_log("Option requires argument");
             optind++;
             optpos = 1;
             return '?';
@@ -2131,7 +2131,7 @@ int getopt(int argc, char * const argv[], const char *optstring) {
 
 
 // generic syscall wrapper for variadic syscalls
-extern i64 xiu_syscall(u64 num, u64 arg1, u64 arg2, u64 arg3, u64 arg4, u64 arg5, u64 arg6);
+extern i64 chimera_syscall(u64 num, u64 arg1, u64 arg2, u64 arg3, u64 arg4, u64 arg5, u64 arg6);
 
 int syscall(int number, ...) {
     __builtin_va_list ap;
@@ -2146,7 +2146,7 @@ int syscall(int number, ...) {
     
     __builtin_va_end(ap);
     
-    return (long)xiu_syscall((u64)number, arg1, arg2, arg3, arg4, arg5, arg6);
+    return (long)chimera_syscall((u64)number, arg1, arg2, arg3, arg4, arg5, arg6);
 }
 
 mach_port_t mach_task_self_ = 1;
@@ -2161,20 +2161,20 @@ mach_msg_return_t mach_msg_trap(mach_msg_header_t *msg, mach_msg_option_t option
                                 mach_port_name_t rcv_name, mach_msg_timeout_t timeout,
                                 mach_port_name_t notify) {
     (void)notify;
-    return (mach_msg_return_t)xiu_mach_msg(msg, (u32)option, (u32)send_size, (u32)rcv_size,
+    return (mach_msg_return_t)chimera_mach_msg(msg, (u32)option, (u32)send_size, (u32)rcv_size,
                                           (u32)rcv_name, (u32)timeout);
 }
 
 int mach_port_allocate(unsigned int task, unsigned int right, unsigned int *name) {
-    return (int)xiu_mach_port_allocate((ipc_space_t)task, (mach_port_right_t)right, (mach_port_name_t *)name);
+    return (int)chimera_mach_port_allocate((ipc_space_t)task, (mach_port_right_t)right, (mach_port_name_t *)name);
 }
 
 int mach_port_deallocate(unsigned int task, unsigned int name) {
-    return (int)xiu_mach_port_deallocate((u64)task, (u64)name);
+    return (int)chimera_mach_port_deallocate((u64)task, (u64)name);
 }
 
 int mach_port_type(unsigned int task, unsigned int name, unsigned int *ptype) {
-    return (int)xiu_mach_port_type((u64)task, (u64)name, (u64)ptype);
+    return (int)chimera_mach_port_type((u64)task, (u64)name, (u64)ptype);
 }
 
 int mach_vm_allocate(unsigned int target, unsigned long long *address, unsigned long long size, int flags) {
@@ -2264,29 +2264,29 @@ int mach_vm_deallocate(unsigned int target, unsigned long long address, unsigned
 
 mach_port_t bootstrap_port = 1; // default root bootstrap port
 
-extern i64 xiu_mach_register_service(const char *name, mach_port_name_t port_name);
-extern i64 xiu_mach_lookup_service(const char *name, mach_port_name_t *port_out);
+extern i64 chimera_mach_register_service(const char *name, mach_port_name_t port_name);
+extern i64 chimera_mach_lookup_service(const char *name, mach_port_name_t *port_out);
 
 kern_return_t bootstrap_register(mach_port_t bp, name_t service_name, mach_port_t sp) {
     (void)bp;
     if (!service_name) return BOOTSTRAP_UNKNOWN_SERVICE;
-    return (xiu_mach_register_service(service_name, (mach_port_name_t)sp) == 0) ? BOOTSTRAP_SUCCESS : BOOTSTRAP_NO_MEMORY;
+    return (chimera_mach_register_service(service_name, (mach_port_name_t)sp) == 0) ? BOOTSTRAP_SUCCESS : BOOTSTRAP_NO_MEMORY;
 }
 
 kern_return_t bootstrap_look_up(mach_port_t bp, const name_t service_name, mach_port_t *sp) {
     (void)bp;
     if (!service_name || !sp) return BOOTSTRAP_UNKNOWN_SERVICE;
     mach_port_name_t p = 0;
-    if (xiu_mach_lookup_service(service_name, &p) == 0 && p != 0) {
+    if (chimera_mach_lookup_service(service_name, &p) == 0 && p != 0) {
         *sp = (mach_port_t)p;
         return BOOTSTRAP_SUCCESS;
     }
     if (strstr(service_name, "WindowServer")) {
-        if (xiu_mach_lookup_service("com.ravynos.WindowServer", &p) == 0 && p != 0) {
+        if (chimera_mach_lookup_service("com.ravynos.WindowServer", &p) == 0 && p != 0) {
             *sp = (mach_port_t)p;
             return BOOTSTRAP_SUCCESS;
         }
-        if (xiu_mach_lookup_service("com.apple.WindowServer", &p) == 0 && p != 0) {
+        if (chimera_mach_lookup_service("com.apple.WindowServer", &p) == 0 && p != 0) {
             *sp = (mach_port_t)p;
             return BOOTSTRAP_SUCCESS;
         }
@@ -2294,9 +2294,9 @@ kern_return_t bootstrap_look_up(mach_port_t bp, const name_t service_name, mach_
     return BOOTSTRAP_UNKNOWN_SERVICE;
 }
 
-extern i64 xiu_sysinfo(void *info);
+extern i64 chimera_sysinfo(void *info);
 int sysinfo(void *info) {
-    return (int)xiu_sysinfo(info);
+    return (int)chimera_sysinfo(info);
 }
 
 // darwin bsd socket apis
@@ -2305,65 +2305,65 @@ int sysinfo(void *info) {
 #include <netinet/in.h>
 #include <arpa/inet.h>
 
-extern i64 xiu_socket(u64 dom, u64 type, u64 proto);
-extern i64 xiu_bind(u64 fd, u64 addr, u64 addrlen);
-extern i64 xiu_connect(u64 fd, u64 addr, u64 addrlen);
-extern i64 xiu_listen(u64 fd, u64 backlog);
-extern i64 xiu_accept(u64 fd, u64 addr_out, u64 addrlen_out);
-extern i64 xiu_sendto(u64 fd, u64 buf, u64 len, u64 flags, u64 dest_addr, u64 addrlen);
-extern i64 xiu_recvfrom(u64 fd, u64 buf, u64 len, u64 flags, u64 src_addr, u64 addrlen_ptr);
-extern i64 xiu_shutdown(u64 fd, u64 how);
-extern i64 xiu_setsockopt(u64 fd, u64 level, u64 optname, u64 optval, u64 optlen);
-extern i64 xiu_getsockopt(u64 fd, u64 level, u64 optname, u64 optval, u64 optlen_ptr);
+extern i64 chimera_socket(u64 dom, u64 type, u64 proto);
+extern i64 chimera_bind(u64 fd, u64 addr, u64 addrlen);
+extern i64 chimera_connect(u64 fd, u64 addr, u64 addrlen);
+extern i64 chimera_listen(u64 fd, u64 backlog);
+extern i64 chimera_accept(u64 fd, u64 addr_out, u64 addrlen_out);
+extern i64 chimera_sendto(u64 fd, u64 buf, u64 len, u64 flags, u64 dest_addr, u64 addrlen);
+extern i64 chimera_recvfrom(u64 fd, u64 buf, u64 len, u64 flags, u64 src_addr, u64 addrlen_ptr);
+extern i64 chimera_shutdown(u64 fd, u64 how);
+extern i64 chimera_setsockopt(u64 fd, u64 level, u64 optname, u64 optval, u64 optlen);
+extern i64 chimera_getsockopt(u64 fd, u64 level, u64 optname, u64 optval, u64 optlen_ptr);
 
 int socket(int domain, int type, int protocol) {
-    return (int)xiu_socket((u64)domain, (u64)type, (u64)protocol);
+    return (int)chimera_socket((u64)domain, (u64)type, (u64)protocol);
 }
 
 int bind(int socket, const struct sockaddr *address, socklen_t address_len) {
-    return (int)xiu_bind((u64)socket, (u64)address, (u64)address_len);
+    return (int)chimera_bind((u64)socket, (u64)address, (u64)address_len);
 }
 
 int connect(int socket, const struct sockaddr *address, socklen_t address_len) {
-    return (int)xiu_connect((u64)socket, (u64)address, (u64)address_len);
+    return (int)chimera_connect((u64)socket, (u64)address, (u64)address_len);
 }
 
 int listen(int socket, int backlog) {
-    return (int)xiu_listen((u64)socket, (u64)backlog);
+    return (int)chimera_listen((u64)socket, (u64)backlog);
 }
 
 int accept(int socket, struct sockaddr *address, socklen_t *address_len) {
-    return (int)xiu_accept((u64)socket, (u64)address, (u64)address_len);
+    return (int)chimera_accept((u64)socket, (u64)address, (u64)address_len);
 }
 
 ssize_t send(int socket, const void *buffer, size_t length, int flags) {
-    return (ssize_t)xiu_sendto((u64)socket, (u64)buffer, (u64)length, (u64)flags, 0, 0);
+    return (ssize_t)chimera_sendto((u64)socket, (u64)buffer, (u64)length, (u64)flags, 0, 0);
 }
 
 ssize_t recv(int socket, void *buffer, size_t length, int flags) {
-    return (ssize_t)xiu_recvfrom((u64)socket, (u64)buffer, (u64)length, (u64)flags, 0, 0);
+    return (ssize_t)chimera_recvfrom((u64)socket, (u64)buffer, (u64)length, (u64)flags, 0, 0);
 }
 
 ssize_t sendto(int socket, const void *buffer, size_t length, int flags,
                const struct sockaddr *dest_addr, socklen_t dest_len) {
-    return (ssize_t)xiu_sendto((u64)socket, (u64)buffer, (u64)length, (u64)flags, (u64)dest_addr, (u64)dest_len);
+    return (ssize_t)chimera_sendto((u64)socket, (u64)buffer, (u64)length, (u64)flags, (u64)dest_addr, (u64)dest_len);
 }
 
 ssize_t recvfrom(int socket, void *buffer, size_t length, int flags,
                  struct sockaddr *address, socklen_t *address_len) {
-    return (ssize_t)xiu_recvfrom((u64)socket, (u64)buffer, (u64)length, (u64)flags, (u64)address, (u64)address_len);
+    return (ssize_t)chimera_recvfrom((u64)socket, (u64)buffer, (u64)length, (u64)flags, (u64)address, (u64)address_len);
 }
 
 int shutdown(int socket, int how) {
-    return (int)xiu_shutdown((u64)socket, (u64)how);
+    return (int)chimera_shutdown((u64)socket, (u64)how);
 }
 
 int setsockopt(int socket, int level, int option_name, const void *option_value, socklen_t option_len) {
-    return (int)xiu_setsockopt((u64)socket, (u64)level, (u64)option_name, (u64)option_value, (u64)option_len);
+    return (int)chimera_setsockopt((u64)socket, (u64)level, (u64)option_name, (u64)option_value, (u64)option_len);
 }
 
 int getsockopt(int socket, int level, int option_name, void *option_value, socklen_t *option_len) {
-    return (int)xiu_getsockopt((u64)socket, (u64)level, (u64)option_name, (u64)option_value, (u64)option_len);
+    return (int)chimera_getsockopt((u64)socket, (u64)level, (u64)option_name, (u64)option_value, (u64)option_len);
 }
 
 // endianness conversions
@@ -2615,7 +2615,7 @@ int __getlogin(char *name, int namelen) {
         errno = EINVAL;
         return -1;
     }
-    i64 ret = xiu_getlogin(name, (usize)namelen);
+    i64 ret = chimera_getlogin(name, (usize)namelen);
     if (ret < 0) {
         errno = EPERM;
         return -1;
@@ -2628,7 +2628,7 @@ int __setlogin(const char *name) {
         errno = EINVAL;
         return -1;
     }
-    i64 ret = xiu_setlogin(name);
+    i64 ret = chimera_setlogin(name);
     if (ret < 0) {
         errno = EPERM;
         return -1;
@@ -2662,15 +2662,15 @@ typedef struct {
   u32 state;
   u32 thread_count;
   char name[32];
-} xiu_procinfo_t;
+} chimera_procinfo_t;
 
-extern i64 xiu_proclist(xiu_procinfo_t *buf, u64 max_count);
+extern i64 chimera_proclist(chimera_procinfo_t *buf, u64 max_count);
 
 struct kinfo_proc *kvm_getprocs(kvm_t *kd, int op, int arg, int *cnt) {
     (void)kd; (void)op; (void)arg;
     static struct kinfo_proc s_kinfo_procs[64];
-    xiu_procinfo_t raw_procs[64];
-    int n = (int)xiu_proclist(raw_procs, 64);
+    chimera_procinfo_t raw_procs[64];
+    int n = (int)chimera_proclist(raw_procs, 64);
     if (n < 0) n = 0;
 
     memset(s_kinfo_procs, 0, sizeof(s_kinfo_procs));
@@ -2708,10 +2708,10 @@ double pow(double x, double y) {
 
 int pthread_create(pthread_t *thread, const pthread_attr_t *attr, void *(*start_routine)(void *), void *arg) {
     (void)attr;
-    i64 pid = xiu_fork();
+    i64 pid = chimera_fork();
     if (pid == 0) {
         start_routine(arg);
-        xiu_exit(0);
+        chimera_exit(0);
     }
     if (thread) *thread = (pthread_t)(uintptr_t)pid;
     return (pid < 0) ? -1 : 0;
@@ -2813,9 +2813,9 @@ int pthread_cond_broadcast(pthread_cond_t *cond) {
     return 0;
 }
 
-extern i64 xiu_fsync(u64 fd);
+extern i64 chimera_fsync(u64 fd);
 int fsync(int fd) {
-    i64 ret = xiu_fsync((u64)fd);
+    i64 ret = chimera_fsync((u64)fd);
     if (ret < 0) { errno = (int)-ret; return -1; }
     return 0;
 }
@@ -2824,10 +2824,10 @@ int getdtablesize(void) {
     return 1024;
 }
 
-extern i64 xiu_getsockname(u64 fd, u64 addr, u64 len);
+extern i64 chimera_getsockname(u64 fd, u64 addr, u64 len);
 int getsockname(int fd, struct sockaddr *addr, socklen_t *len) {
     if (!addr || !len) { errno = EFAULT; return -1; }
-    i64 ret = xiu_getsockname((u64)fd, (u64)addr, (u64)len);
+    i64 ret = chimera_getsockname((u64)fd, (u64)addr, (u64)len);
     if (ret < 0) { errno = (int)-ret; return -1; }
     return 0;
 }
@@ -2900,20 +2900,20 @@ int shmctl(int shmid, int cmd, struct shmid_ds *buf) {
 
 int system(const char *string) {
     if (!string) return 1;
-    i64 pid = xiu_fork();
+    i64 pid = chimera_fork();
     if (pid == 0) {
         char *argv[] = { "/bin/sh", "-c", (char *)string, NULL };
-        xiu_execve("/bin/sh", argv, NULL);
-        xiu_exit(127);
+        chimera_execve("/bin/sh", argv, NULL);
+        chimera_exit(127);
     }
     if (pid < 0) return -1;
     int status = 0;
-    xiu_wait4((int)pid, &status, 0, NULL);
+    chimera_wait4((int)pid, &status, 0, NULL);
     return status;
 }
 
 pid_t wait(int *stat_loc) {
-    return (pid_t)xiu_wait4(-1, stat_loc, 0, NULL);
+    return (pid_t)chimera_wait4(-1, stat_loc, 0, NULL);
 }
 
 char *strndup(const char *s, size_t n) {
@@ -2929,7 +2929,7 @@ char *strndup(const char *s, size_t n) {
 
 void _exit(int status) {
     while (1) {
-        xiu_exit((i64)status);
+        chimera_exit((i64)status);
     }
 }
 
@@ -2991,19 +2991,19 @@ kern_return_t bootstrap_check_in(mach_port_t bp, const name_t service_name, mach
         return BOOTSTRAP_NO_MEMORY;
     }
     *sp = port;
-    if (xiu_mach_register_service(service_name, (mach_port_name_t)port) != 0) {
+    if (chimera_mach_register_service(service_name, (mach_port_name_t)port) != 0) {
         return BOOTSTRAP_NO_MEMORY;
     }
     if (strstr(service_name, "WindowServer")) {
-        xiu_mach_register_service("com.apple.WindowServer", (mach_port_name_t)port);
-        xiu_mach_register_service("com.ravynos.WindowServer", (mach_port_name_t)port);
+        chimera_mach_register_service("com.apple.WindowServer", (mach_port_name_t)port);
+        chimera_mach_register_service("com.ravynos.WindowServer", (mach_port_name_t)port);
     }
     return BOOTSTRAP_SUCCESS;
 }
 
 mach_msg_return_t mach_msg(mach_msg_header_t *msg, mach_msg_option_t option, mach_msg_size_t send_size, mach_msg_size_t rcv_size, mach_port_name_t rcv_name, mach_msg_timeout_t timeout, mach_port_name_t notify) {
     (void)notify;
-    return (mach_msg_return_t)xiu_mach_msg(msg, option, send_size, rcv_size, rcv_name, timeout);
+    return (mach_msg_return_t)chimera_mach_msg(msg, option, send_size, rcv_size, rcv_name, timeout);
 }
 
 kern_return_t mach_port_insert_right(ipc_space_t task, mach_port_name_t name, mach_port_t poly, mach_msg_type_name_t polyPoly) {
@@ -3320,15 +3320,15 @@ typedef struct {
   char kernel_name[32];
   char architecture[16];
   char hostname[64];
-} xiu_sysinfo_t;
+} chimera_sysinfo_t;
 
 int getrusage(int who, struct rusage *usage) {
 
     (void)who;
     if (!usage) return -1;
     memset(usage, 0, sizeof(*usage));
-    xiu_sysinfo_t si;
-    if (xiu_sysinfo(&si) == 0) {
+    chimera_sysinfo_t si;
+    if (chimera_sysinfo(&si) == 0) {
         usage->ru_utime.tv_sec = si.uptime_seconds / 2;
         usage->ru_utime.tv_usec = 0;
         usage->ru_stime.tv_sec = si.uptime_seconds / 2;

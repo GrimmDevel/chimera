@@ -1,6 +1,6 @@
 #!/bin/bash
 # =============================================================================
-# XIU Operating System — QEMU Launch Script
+# Chimera Operating System — QEMU Launch Script
 # scripts/run_qemu.sh
 # =============================================================================
 
@@ -28,10 +28,10 @@ if [ "$WSERVER" = "1" ] || [ "$GUI" = "1" ]; then
     CMDLINE_ARG="-wserver"
 fi
 
-KERNEL="build/${ARCH}/kernel/xiu_kernel.elf"
+KERNEL="build/${ARCH}/kernel/chimera_kernel.elf"
 
 if [ ! -f "$KERNEL" ]; then
-    echo "[XIU] Error: Kernel not found at $KERNEL"
+    echo "[CHIMERA] Error: Kernel not found at $KERNEL"
     echo "      Please run 'make build' first."
     exit 1
 fi
@@ -67,17 +67,17 @@ else
 fi
 
 if [ "$DEBUG" == "1" ]; then
-    echo "[XIU] Starting in DEBUG mode (waiting for GDB on :1234)..."
+    echo "[CHIMERA] Starting in DEBUG mode (waiting for GDB on :1234)..."
     QEMU_FLAGS+=("-s" "-S")
 fi
 
 case "$ARCH" in
     x86_64)
-        echo "[XIU] Launching QEMU (x86_64) via ISO & Hard Disk..."
+        echo "[CHIMERA] Launching QEMU (x86_64) via ISO & Hard Disk..."
         qemu-system-x86_64 \
             -M q35,vmport=off \
             -boot d \
-            -cdrom "build/xiu-${ARCH}.iso" \
+            -cdrom "build/chimera-${ARCH}.iso" \
             -device piix3-ide,id=ide \
             -drive file="build/disk.img",format=raw,if=none,id=disk,cache=writeback \
             -device ide-hd,drive=disk,bus=ide.0,unit=0 \
@@ -86,15 +86,15 @@ case "$ARCH" in
             "${QEMU_FLAGS[@]}"
         ;;
     arm64)
-        echo "[XIU] Launching QEMU (ARM64) via ISO..."
+        echo "[CHIMERA] Launching QEMU (ARM64) via ISO..."
         qemu-system-aarch64 \
             -M virt \
             -cpu cortex-a72 \
-            -cdrom "build/xiu-${ARCH}.iso" \
+            -cdrom "build/chimera-${ARCH}.iso" \
             "${QEMU_FLAGS[@]}"
         ;;
     *)
-        echo "[XIU] Error: Unsupported architecture $ARCH"
+        echo "[CHIMERA] Error: Unsupported architecture $ARCH"
         exit 1
         ;;
 esac

@@ -19,9 +19,9 @@ set(CMAKE_LINKER        ${LLVM_LLD})
 set(CMAKE_AR            ${LLVM_AR})
 set(CMAKE_OBJCOPY       ${LLVM_OBJCOPY})
 
-set(XIU_TARGET_TRIPLE "x86_64-unknown-none-elf")
-set(CMAKE_C_COMPILER_TARGET   ${XIU_TARGET_TRIPLE})
-set(CMAKE_CXX_COMPILER_TARGET ${XIU_TARGET_TRIPLE})
+set(CHIMERA_TARGET_TRIPLE "x86_64-unknown-none-elf")
+set(CMAKE_C_COMPILER_TARGET   ${CHIMERA_TARGET_TRIPLE})
+set(CMAKE_CXX_COMPILER_TARGET ${CHIMERA_TARGET_TRIPLE})
 
 set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
 set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
@@ -42,7 +42,7 @@ set(CMAKE_CXX_LINKER_WRAPPER_FLAG "" CACHE STRING "" FORCE)
 set(CMAKE_ASM_LINKER_WRAPPER_FLAG "" CACHE STRING "" FORCE)
 
 add_compile_options(
-    -target ${XIU_TARGET_TRIPLE}
+    -target ${CHIMERA_TARGET_TRIPLE}
     -march=x86-64-v2
     -mcmodel=kernel
     -mno-red-zone
@@ -56,13 +56,13 @@ add_compile_options(
 # All link options are now handled by the custom CMAKE_C_LINK_EXECUTABLE 
 # to bypass Clang driver issues on macOS.
 
-set(XIU_ARCH        "x86_64"             CACHE STRING "" FORCE)
-set(XIU_PAGE_SIZE   "4096"               CACHE STRING "" FORCE)
-set(XIU_KERNEL_BASE "0xFFFFFFFF80000000" CACHE STRING "" FORCE)
-set(XIU_PHYS_BASE   "0x0000000001000000" CACHE STRING "" FORCE)
-set(XIU_STACK_SIZE  "0x8000"             CACHE STRING "" FORCE)
+set(CHIMERA_ARCH        "x86_64"             CACHE STRING "" FORCE)
+set(CHIMERA_PAGE_SIZE   "4096"               CACHE STRING "" FORCE)
+set(CHIMERA_KERNEL_BASE "0xFFFFFFFF80000000" CACHE STRING "" FORCE)
+set(CHIMERA_PHYS_BASE   "0x0000000001000000" CACHE STRING "" FORCE)
+set(CHIMERA_STACK_SIZE  "0x8000"             CACHE STRING "" FORCE)
 
-set(CMAKE_ASM_FLAGS "-target ${XIU_TARGET_TRIPLE}")
+set(CMAKE_ASM_FLAGS "-target ${CHIMERA_TARGET_TRIPLE}")
 
 # ── Linker Bypass for macOS (force ELF LLD) ────────────────────────────────
 # We call ld.lld directly to avoid Apple-specific flags from the Clang driver.

@@ -5,7 +5,7 @@
 #include <kernel/panic.h>
 #include <kernel/spinlock.h>
 
-extern xiu_paddr_t pmm_alloc_pages(usize count);
+extern chimera_paddr_t pmm_alloc_pages(usize count);
 extern u64 g_hhdm_base;
 
 #define E1000_NUM_RX_DESC 32
@@ -59,7 +59,7 @@ extern u64 g_hhdm_base;
 #define TDESC_CMD_RS    (1u << 3)
 #define TDESC_STAT_DD   (1u << 0)
 
-typedef struct XIU_PACKED e1000_rx_desc {
+typedef struct CHIMERA_PACKED e1000_rx_desc {
     u64                 addr;
     u16                 length;
     u16                 checksum;
@@ -68,7 +68,7 @@ typedef struct XIU_PACKED e1000_rx_desc {
     u16                 special;
 } e1000_rx_desc_t;
 
-typedef struct XIU_PACKED e1000_tx_desc {
+typedef struct CHIMERA_PACKED e1000_tx_desc {
     u64                 addr;
     u16                 length;
     u8                  cso;
@@ -82,14 +82,14 @@ typedef struct e1000_softc {
     u64                 mmio_base;
     u64                 mmio_phys;
 
-    xiu_paddr_t         rx_desc_phys;
+    chimera_paddr_t         rx_desc_phys;
     e1000_rx_desc_t    *rx_descs;
-    xiu_paddr_t         rx_buf_phys;
+    chimera_paddr_t         rx_buf_phys;
     u8                 *rx_buffers[E1000_NUM_RX_DESC];
 
-    xiu_paddr_t         tx_desc_phys;
+    chimera_paddr_t         tx_desc_phys;
     e1000_tx_desc_t    *tx_descs;
-    xiu_paddr_t         tx_buf_phys;
+    chimera_paddr_t         tx_buf_phys;
     u8                 *tx_buffers[E1000_NUM_TX_DESC];
 
     u16                 rx_cur;
@@ -152,8 +152,8 @@ static void e1000_read_mac(e1000_softc_t *sc) {
     }
 }
 
-static xiu_error_t e1000_transmit_frame(const void *data, usize len) {
-    if (!g_e1000_present || len == 0 || len > E1000_RX_BUF_SIZE) return XIU_ERR_INVALID;
+static chimera_error_t e1000_transmit_frame(const void *data, usize len) {
+    if (!g_e1000_present || len == 0 || len > E1000_RX_BUF_SIZE) return CHIMERA_ERR_INVALID;
 
     e1000_softc_t *sc = &g_e1000;
     irq_flags_t flags = spinlock_lock_irqsave(&sc->lock);
@@ -185,10 +185,10 @@ static xiu_error_t e1000_transmit_frame(const void *data, usize len) {
     sc->ifnet.if_data.ifi_obytes += len;
 
     spinlock_unlock_irqrestore(&sc->lock, flags);
-    return XIU_SUCCESS;
+    return CHIMERA_SUCCESS;
 }
 
-static xiu_error_t e1000_ifnet_output(ifnet_t *ifp, mbuf_t *m, struct in_addr dest_ip);
+static chimera_error_t e1000_ifnet_output(ifnet_t *ifp, mbuf_t *m, struct in_addr dest_ip);
 
 void e1000_poll_rx(void) {
     if (!g_e1000_present) return;
@@ -227,10 +227,10 @@ void e1000_poll_rx(void) {
     spinlock_unlock_irqrestore(&sc->lock, flags);
 }
 
-static xiu_error_t e1000_ifnet_output(ifnet_t *ifp, mbuf_t *m, struct in_addr dest_ip) {
+static chimera_error_t e1000_ifnet_output(ifnet_t *ifp, mbuf_t *m, struct in_addr dest_ip) {
     (void)ifp;
     (void)dest_ip;
-    if (!m) return XIU_ERR_INVALID;
+    if (!m) return CHIMERA_ERR_INVALID;
 
     u8 packet_buf[1536];
     usize total_len = 0;
@@ -245,7 +245,7 @@ static xiu_error_t e1000_ifnet_output(ifnet_t *ifp, mbuf_t *m, struct in_addr de
     return e1000_transmit_frame(packet_buf, total_len);
 }
 
-xiu_error_t e1000_init(u64 bar0_phys) {
+chimera_error_t e1000_init(u64 bar0_phys) {
     e1000_softc_t *sc = &g_e1000;
     __builtin_memset(sc, 0, sizeof(*sc));
 
@@ -255,17 +255,17 @@ xiu_error_t e1000_init(u64 bar0_phys) {
 
     // allocate physical dma pages
     sc->rx_desc_phys = pmm_alloc_pages(1);
-    if (!sc->rx_desc_phys) return XIU_ERR_NOMEM;
+    if (!sc->rx_desc_phys) return CHIMERA_ERR_NOMEM;
     sc->rx_descs = (e1000_rx_desc_t *)(sc->rx_desc_phys + g_hhdm_base);
     __builtin_memset(sc->rx_descs, 0, 4096);
 
     sc->tx_desc_phys = pmm_alloc_pages(1);
-    if (!sc->tx_desc_phys) return XIU_ERR_NOMEM;
+    if (!sc->tx_desc_phys) return CHIMERA_ERR_NOMEM;
     sc->tx_descs = (e1000_tx_desc_t *)(sc->tx_desc_phys + g_hhdm_base);
     __builtin_memset(sc->tx_descs, 0, 4096);
 
     sc->rx_buf_phys = pmm_alloc_pages(16);
-    if (!sc->rx_buf_phys) return XIU_ERR_NOMEM;
+    if (!sc->rx_buf_phys) return CHIMERA_ERR_NOMEM;
     for (int i = 0; i < E1000_NUM_RX_DESC; i++) {
         sc->rx_buffers[i] = (u8 *)(sc->rx_buf_phys + g_hhdm_base + (i * E1000_RX_BUF_SIZE));
         sc->rx_descs[i].addr = sc->rx_buf_phys + (i * E1000_RX_BUF_SIZE);
@@ -273,7 +273,7 @@ xiu_error_t e1000_init(u64 bar0_phys) {
     }
 
     sc->tx_buf_phys = pmm_alloc_pages(16);
-    if (!sc->tx_buf_phys) return XIU_ERR_NOMEM;
+    if (!sc->tx_buf_phys) return CHIMERA_ERR_NOMEM;
     for (int i = 0; i < E1000_NUM_TX_DESC; i++) {
         sc->tx_buffers[i] = (u8 *)(sc->tx_buf_phys + g_hhdm_base + (i * E1000_RX_BUF_SIZE));
         sc->tx_descs[i].addr = sc->tx_buf_phys + (i * E1000_RX_BUF_SIZE);
@@ -333,5 +333,5 @@ xiu_error_t e1000_init(u64 bar0_phys) {
     g_e1000_present = true;
 
     kprintf("  [  OK  ]  Intel e1000 Gigabit Ethernet (en0 attached)\n");
-    return XIU_SUCCESS;
+    return CHIMERA_SUCCESS;
 }

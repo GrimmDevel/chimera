@@ -1,5 +1,5 @@
 /* =============================================================================
- * XIU Operating System — Darwin Mach Zone Allocator & Kernel Dynamic Memory
+ * Chimera Operating System — Darwin Mach Zone Allocator & Kernel Dynamic Memory
  * kernel/mm/zone.c
  *
  * Implements Darwin zinit/zalloc/zfree zone subsystem and kalloc/kfree.
@@ -9,13 +9,13 @@
 #include <kernel/zone.h>
 #include <kernel/panic.h>
 #include <kernel/spinlock.h>
-#include <kernel/xiu_types.h>
+#include <kernel/chimera_types.h>
 
 extern void kprintf(const char *fmt, ...);
-extern xiu_paddr_t pmm_alloc_page(void);
-extern xiu_paddr_t pmm_alloc_pages(usize count);
-extern void pmm_release_page(xiu_paddr_t addr);
-extern void pmm_free_contiguous(xiu_paddr_t addr, usize count);
+extern chimera_paddr_t pmm_alloc_page(void);
+extern chimera_paddr_t pmm_alloc_pages(usize count);
+extern void pmm_release_page(chimera_paddr_t addr);
+extern void pmm_free_contiguous(chimera_paddr_t addr, usize count);
 extern u64 g_hhdm_base;
 
 #define ZONE_MAGIC   0x585A4F4E45484452ULL
@@ -30,7 +30,7 @@ typedef struct {
 typedef struct {
     u64 magic;
     usize page_count;
-    xiu_paddr_t phys_base;
+    chimera_paddr_t phys_base;
 } large_header_t;
 
 typedef struct zone_link {
@@ -98,8 +98,8 @@ void *zalloc(zone_t zone) {
 
     if (!zone->z_free_list) {
         // allocate new page for zone elements
-        xiu_paddr_t phys = pmm_alloc_page();
-        if (phys == 0 || phys == (xiu_paddr_t)-1) {
+        chimera_paddr_t phys = pmm_alloc_page();
+        if (phys == 0 || phys == (chimera_paddr_t)-1) {
             spinlock_unlock_irqrestore(&zone->z_lock, irq);
             return nullptr;
         }
@@ -197,8 +197,8 @@ void *kalloc(usize size) {
     // large allocation via whole pages
     usize total = size + sizeof(large_header_t);
     usize pages = (total + 4095) / 4096;
-    xiu_paddr_t phys = pmm_alloc_pages(pages);
-    if (phys == (xiu_paddr_t)-1 || phys == 0) return nullptr;
+    chimera_paddr_t phys = pmm_alloc_pages(pages);
+    if (phys == (chimera_paddr_t)-1 || phys == 0) return nullptr;
 
     large_header_t *lhdr = (large_header_t *)(phys + g_hhdm_base);
     lhdr->magic = LARGE_MAGIC;
@@ -227,7 +227,7 @@ void kfree(void *ptr) {
     large_header_t *lh = (large_header_t *)(raw - sizeof(large_header_t));
     if (lh->magic == LARGE_MAGIC) {
         usize pages = lh->page_count;
-        xiu_paddr_t phys = lh->phys_base;
+        chimera_paddr_t phys = lh->phys_base;
         lh->magic = 0;
         pmm_free_contiguous(phys, pages);
         return;

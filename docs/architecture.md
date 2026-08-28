@@ -35,7 +35,7 @@ hybrid mach/bsd kernel for x86_64. heavily modeled after apple xnu / darwin.
    - `syscall`: syscall dispatcher via x86_64 `syscall` / `sysretq` instructions
 3. **vfs**:
    - `vnode` abstraction for rootfs, devfs, fat32, pipes, and pseudoterminals
-4. **xiukit**:
+4. **chimerakit**:
    - c++ driver layer for pci discovery, xhci usb host controllers, hid input, framebuffer
 5. **net**:
    - darwin-style socket layer (`socket_t`), `mbuf` packet chains, `ifnet` network interfaces

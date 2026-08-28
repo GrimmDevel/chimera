@@ -1,5 +1,5 @@
 /* =============================================================================
- * XIU Operating System — Internet Control Message Protocol (ICMP)
+ * Chimera Operating System — Internet Control Message Protocol (ICMP)
  * kernel/net/icmp.c
  * ============================================================================= */
 
@@ -23,7 +23,7 @@ void icmp_init(void) {
     for (int i = 0; i < 16; i++) s_ping_listeners[i].id = 0;
 }
 
-extern xiu_error_t ip_output(mbuf_t *m, struct in_addr src_ip, struct in_addr dst_ip, u8 proto);
+extern chimera_error_t ip_output(mbuf_t *m, struct in_addr src_ip, struct in_addr dst_ip, u8 proto);
 
 void icmp_input(ifnet_t *ifp, mbuf_t *m, ip_header_t *ip) {
     if (!ifp || !m || !ip || m->m_len < (i32)sizeof(icmp_header_t)) {
@@ -77,13 +77,13 @@ void icmp_input(ifnet_t *ifp, mbuf_t *m, ip_header_t *ip) {
     m_freem(m);
 }
 
-xiu_error_t icmp_send_echo(struct in_addr dst_ip, u16 id, u16 seq, const void *payload, usize payload_len) {
+chimera_error_t icmp_send_echo(struct in_addr dst_ip, u16 id, u16 seq, const void *payload, usize payload_len) {
     usize total_len = sizeof(icmp_header_t) + payload_len;
     mbuf_t *m = m_gethdr(MT_DATA);
-    if (!m) return XIU_ERR_NOMEM;
+    if (!m) return CHIMERA_ERR_NOMEM;
 
     u8 buf[512];
-    if (total_len > sizeof(buf)) return XIU_ERR_INVALID;
+    if (total_len > sizeof(buf)) return CHIMERA_ERR_INVALID;
 
     icmp_header_t *icmp = (icmp_header_t *)buf;
     icmp->icmp_type = ICMP_ECHO;

@@ -1,5 +1,5 @@
 /* =============================================================================
- * XIU Operating System — Virtual Memory Object
+ * Chimera Operating System — Virtual Memory Object
  * kernel/include/kernel/vm_object.h
  *
  * A vm_object_t is the fundamental unit of the XIU Virtual Memory Manager.
@@ -19,10 +19,10 @@
  * ============================================================================= */
 
 #pragma once
-#ifndef XIU_VM_OBJECT_H
-#define XIU_VM_OBJECT_H
+#ifndef CHIMERA_VM_OBJECT_H
+#define CHIMERA_VM_OBJECT_H
 
-#include <kernel/xiu_types.h>
+#include <kernel/chimera_types.h>
 #include <kernel/spinlock.h>
 
 // forward declarations
@@ -48,12 +48,12 @@ typedef u32 vm_page_flags_t;
 
 typedef struct vm_page {
     // physical identity
-    xiu_paddr_t         vmp_phys_addr;  // physical address of this page
+    chimera_paddr_t         vmp_phys_addr;  // physical address of this page
     vm_page_flags_t     vmp_flags;      // vm_page_* flags
 
     // object linkage
     struct vm_object   *vmp_object;     // owning vm_object
-    xiu_offset_t        vmp_offset;     // byte offset within object
+    chimera_offset_t        vmp_offset;     // byte offset within object
 
     // lru / free list linkage
     struct vm_page     *vmp_next;       // next in object page list
@@ -62,7 +62,7 @@ typedef struct vm_page {
     struct vm_page     *vmp_lru_prev;
 
     // wait queue for busy pages
-    struct xiu_thread  *vmp_waiter;
+    struct chimera_thread  *vmp_waiter;
 
     // wire count
     u32                 vmp_wire_count;
@@ -127,8 +127,8 @@ typedef u32 vm_obj_flags_t;
  * 128-byte structure aligned to cache line.
  * ═══════════════════════════════════════════════════════════════════════════ */
 
-typedef struct XIU_ALIGNED(64) vm_object {
-    u64                 vmo_signature;  // xiu_vm_object_magic
+typedef struct CHIMERA_ALIGNED(64) vm_object {
+    u64                 vmo_signature;  // chimera_vm_object_magic
     spinlock_t          vmo_lock;       // protects pages + shadow chain
 
     // reference counting
@@ -136,7 +136,7 @@ typedef struct XIU_ALIGNED(64) vm_object {
     atomic_uint         vmo_res_count;  // resident page count
 
     // size
-    xiu_size_t          vmo_size;       // object size in bytes
+    chimera_size_t          vmo_size;       // object size in bytes
 
     // page list
     vm_page_t          *vmo_pages;      // sorted linked list of resident pg
@@ -144,7 +144,7 @@ typedef struct XIU_ALIGNED(64) vm_object {
 
     // shadow chain
     struct vm_object   *vmo_shadow;
-    xiu_offset_t        vmo_shadow_offset;
+    chimera_offset_t        vmo_shadow_offset;
     u32                 vmo_shadow_count;
 
     // pager
@@ -153,9 +153,9 @@ typedef struct XIU_ALIGNED(64) vm_object {
 
     union {
         struct vnode   *vmo_vnode;
-        xiu_paddr_t     vmo_phys_base;
+        chimera_paddr_t     vmo_phys_base;
     };
-    xiu_offset_t        vmo_pager_offset;
+    chimera_offset_t        vmo_pager_offset;
 
     // protection / inheritance
     vm_prot_t           vmo_max_prot;
@@ -169,38 +169,38 @@ typedef struct XIU_ALIGNED(64) vm_object {
     u8                  _pad1[8];
 } vm_object_t;
 
-#define XIU_VM_OBJECT_MAGIC  UINT64_C(0x5849554F424A4543)
+#define CHIMERA_VM_OBJECT_MAGIC  UINT64_C(0x5849554F424A4543)
 
-XIU_WARN_UNUSED
-xiu_error_t vm_object_create(xiu_size_t size,
+CHIMERA_WARN_UNUSED
+chimera_error_t vm_object_create(chimera_size_t size,
                               vm_prot_t max_prot,
                               vm_object_t **obj_out);
 
-XIU_WARN_UNUSED
-xiu_error_t vm_object_create_vnode(struct vnode *vp,
-                                    xiu_offset_t offset,
-                                    xiu_size_t size,
+CHIMERA_WARN_UNUSED
+chimera_error_t vm_object_create_vnode(struct vnode *vp,
+                                    chimera_offset_t offset,
+                                    chimera_size_t size,
                                     vm_object_t **obj_out);
 
-XIU_WARN_UNUSED
-xiu_error_t vm_object_shadow(vm_object_t *original,
-                              xiu_offset_t offset,
-                              xiu_size_t size,
+CHIMERA_WARN_UNUSED
+chimera_error_t vm_object_shadow(vm_object_t *original,
+                              chimera_offset_t offset,
+                              chimera_size_t size,
                               vm_object_t **shadow_out);
 
 void vm_object_reference(vm_object_t *obj);
 void vm_object_deallocate(vm_object_t *obj);
 
-XIU_WARN_UNUSED
-xiu_error_t vm_object_fault(vm_object_t *obj,
-                             xiu_offset_t offset,
+CHIMERA_WARN_UNUSED
+chimera_error_t vm_object_fault(vm_object_t *obj,
+                             chimera_offset_t offset,
                              vm_prot_t fault_type,
                              vm_page_t **page_out);
 
-vm_page_t *vm_object_lookup_page(vm_object_t *obj, xiu_offset_t offset);
+vm_page_t *vm_object_lookup_page(vm_object_t *obj, chimera_offset_t offset);
 
-vm_page_t *vm_object_resolve_shadow(vm_object_t *obj, xiu_offset_t offset);
+vm_page_t *vm_object_resolve_shadow(vm_object_t *obj, chimera_offset_t offset);
 
-xiu_error_t vm_object_sync(vm_object_t *obj);
+chimera_error_t vm_object_sync(vm_object_t *obj);
 
-#endif /* XIU_VM_OBJECT_H */
+#endif /* CHIMERA_VM_OBJECT_H */

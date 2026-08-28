@@ -13,7 +13,7 @@ in-memory device filesystem mounted at `/dev`:
 - `/dev/null`: writes discarded, reads return 0 (EOF)
 - `/dev/serial`: direct com1 16550 uart access
 - `/dev/console`: canonical line discipline + raw mode text console
-- `/dev/mouse`: packet stream of `xiu_event_t` mouse move/click events
+- `/dev/mouse`: packet stream of `chimera_event_t` mouse move/click events
 - `/dev/fb0`: mmap target for linear framebuffer video memory
 - `/dev/ptmx` / `/dev/pts/N`: unix98 pseudoterminal pairs for terminal emulators
 - `/dev/disk0`: raw ata hard drive access

@@ -26,8 +26,8 @@ _start:
 1:  jmp 1b
 
 // generic syscall wrapper
-.globl _xiu_syscall
-_xiu_syscall:
+.globl _chimera_syscall
+_chimera_syscall:
     movq %rdi, %rax
     movq %rsi, %rdi
     movq %rdx, %rsi

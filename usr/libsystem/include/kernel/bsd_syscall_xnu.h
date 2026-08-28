@@ -1,7 +1,7 @@
 // Apple XNU BSD System Call Definitions
 #pragma once
-#ifndef XIU_BSD_SYSCALL_XNU_H
-#define XIU_BSD_SYSCALL_XNU_H
+#ifndef CHIMERA_BSD_SYSCALL_XNU_H
+#define CHIMERA_BSD_SYSCALL_XNU_H
 
 #ifdef __cplusplus
 extern "C" {

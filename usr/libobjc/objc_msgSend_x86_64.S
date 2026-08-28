@@ -1,5 +1,5 @@
 /*
- * XIU OS Objective-C 2.0 Message Dispatch and ABI Symbols for x86_64
+ * Chimera OS Objective-C 2.0 Message Dispatch and ABI Symbols for x86_64
  */
 
 .text

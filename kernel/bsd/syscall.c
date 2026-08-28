@@ -1,5 +1,5 @@
 /* =============================================================================
- * XIU Operating System — System Call Dispatcher
+ * Chimera Operating System — System Call Dispatcher
  * kernel/bsd/syscall.c
  * =============================================================================
  */
@@ -13,30 +13,29 @@
 #include <kernel/syscall.h>
 #include <kernel/uio.h>
 
+#include <kernel/chimera_types.h>
 #include <kernel/fb.h>
 #include <kernel/mach_o.h>
 #include <kernel/vfs_node.h>
-#include <kernel/xiu_types.h>
 #include <net/protocols.h>
 #include <net/socket.h>
 
-extern xiu_error_t copyin(const void *uaddr, void *kaddr, usize len);
-extern xiu_error_t copyout(const void *kaddr, void *uaddr, usize len);
+extern chimera_error_t copyin(const void *uaddr, void *kaddr, usize len);
+extern chimera_error_t copyout(const void *kaddr, void *uaddr, usize len);
 
 // current task helper
 
 // vfs_lookup forward declaration
-extern xiu_error_t vfs_lookup(const char *path, vnode_t **vp_out);
-extern xiu_error_t vfs_readdir_flat(vnode_t *dvp, u32 index, char *name_out,
-                                    usize name_cap, vnode_t **child_out);
+extern chimera_error_t vfs_lookup(const char *path, vnode_t **vp_out);
+extern chimera_error_t vfs_readdir_flat(vnode_t *dvp, u32 index, char *name_out,
+                                        usize name_cap, vnode_t **child_out);
 extern const char *vfs_path_for_vnode(vnode_t *vp);
 extern u64 pmap_clone_user_space(u64 src_pml4_phys);
 extern void task_switch_to_user_frame(uptr entry, uptr stack, void *frame,
                                       u64 rax);
-extern void thread_init_fork_stack(xiu_thread_t *th, void *entry, void *stack);
+extern void thread_init_fork_stack(chimera_thread_t *th, void *entry,
+                                   void *stack);
 extern void scheduler_yield(void);
-
-static u64 g_syscall_frame;
 
 typedef struct syscall_user_frame {
   u64 r15, r14, r13, r12, rbx, rbp;
@@ -45,16 +44,16 @@ typedef struct syscall_user_frame {
   u64 rsp; // user RSP - pushed FIRST in syscall_entry.S
 } syscall_user_frame_t;
 
-typedef struct xiu_user_dirent {
+typedef struct chimera_user_dirent {
   u64 d_ino;
   u64 d_seekoff;
   u16 d_reclen;
   u16 d_namlen;
   u8 d_type;
   char d_name[1024];
-} xiu_user_dirent_t;
+} chimera_user_dirent_t;
 
-typedef struct XIU_PACKED xiu_user_stat {
+typedef struct CHIMERA_PACKED chimera_user_stat {
   u32 st_dev;
   u16 st_mode;
   u16 st_nlink;
@@ -63,10 +62,22 @@ typedef struct XIU_PACKED xiu_user_stat {
   u32 st_gid;
   u32 st_rdev;
   u32 _pad;
-  struct { i64 tv_sec; i64 tv_nsec; } st_atimespec;
-  struct { i64 tv_sec; i64 tv_nsec; } st_mtimespec;
-  struct { i64 tv_sec; i64 tv_nsec; } st_ctimespec;
-  struct { i64 tv_sec; i64 tv_nsec; } st_birthtimespec;
+  struct {
+    i64 tv_sec;
+    i64 tv_nsec;
+  } st_atimespec;
+  struct {
+    i64 tv_sec;
+    i64 tv_nsec;
+  } st_mtimespec;
+  struct {
+    i64 tv_sec;
+    i64 tv_nsec;
+  } st_ctimespec;
+  struct {
+    i64 tv_sec;
+    i64 tv_nsec;
+  } st_birthtimespec;
   i64 st_size;
   i64 st_blocks;
   i32 st_blksize;
@@ -74,7 +85,7 @@ typedef struct XIU_PACKED xiu_user_stat {
   u32 st_gen;
   i32 st_lspare;
   i64 st_qspare[2];
-} xiu_user_stat_t;
+} chimera_user_stat_t;
 
 static const char *normalize_path(const char *path) {
   if (!path || path[0] == '\0' || __builtin_strcmp(path, ".") == 0)
@@ -123,7 +134,7 @@ static i64 sys_log(u64 ptr, u64 len, u64 a3, u64 a4, u64 a5, u64 a6) {
   if (!ptr)
     return -1;
   char kbuf[256];
-  if (copyin((const void *)ptr, kbuf, sizeof(kbuf) - 1) == XIU_SUCCESS) {
+  if (copyin((const void *)ptr, kbuf, sizeof(kbuf) - 1) == CHIMERA_SUCCESS) {
     kbuf[sizeof(kbuf) - 1] = '\0';
     kprintf("%s\n", kbuf);
   }
@@ -135,20 +146,30 @@ static i64 sys_log(u64 ptr, u64 len, u64 a3, u64 a4, u64 a5, u64 a6) {
  * yields.
  * ───────────────────────────────────────────────────────────────────────────
  */
-void sys_exit_direct(u64 code) {
-  xiu_task_t *task = current_task();
+CHIMERA_NORETURN void sys_exit_direct(u64 code) {
+  chimera_task_t *task = current_task();
   dprintf("[SYSCALL] exit(%llu) pid=%u\n", (unsigned long long)code,
           task && task->ta_proc ? task->ta_proc->p_pid : 0);
+
+  // Switch CPU CR3 to kernel PML4 immediately before destroying user address
+  // space
+  extern u64 pmap_kernel_pml4(void);
+  u64 kpml4 = pmap_kernel_pml4();
+  __asm__ volatile("mov %0, %%cr3" ::"r"(kpml4) : "memory");
+
   if (task && task->ta_proc)
     proc_mark_exited(task->ta_proc, (u32)code);
-  xiu_thread_t *th = current_thread();
+  chimera_thread_t *th = current_thread();
   if (th) {
     th->th_state = THREAD_STATE_HALTED;
     scheduler_remove_thread(th);
   }
   extern void scheduler_yield(void);
-  while (1)
+  while (1) {
     scheduler_yield();
+    __asm__ volatile("sti; hlt");
+  }
+  CHIMERA_UNREACHABLE();
 }
 
 static i64 sys_exit(u64 code, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
@@ -158,10 +179,10 @@ static i64 sys_exit(u64 code, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
   (void)a5;
   (void)a6;
   sys_exit_direct(code);
-  return 0;
+  CHIMERA_UNREACHABLE();
 }
 
-static void resolve_relative_path(xiu_proc_t *proc, const char *path,
+static void resolve_relative_path(chimera_proc_t *proc, const char *path,
                                   char *out_buf, usize out_max);
 
 // sys_chdir
@@ -172,13 +193,13 @@ static i64 sys_chdir(u64 path_ptr, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
   (void)a5;
   (void)a6;
 
-  xiu_task_t *task = current_task();
-  xiu_proc_t *proc = task ? task->ta_proc : nullptr;
+  chimera_task_t *task = current_task();
+  chimera_proc_t *proc = task ? task->ta_proc : nullptr;
   if (!proc)
     return -1;
 
   char path[256];
-  if (copyin((const void *)path_ptr, path, sizeof(path)) != XIU_SUCCESS)
+  if (copyin((const void *)path_ptr, path, sizeof(path)) != CHIMERA_SUCCESS)
     return -1;
   path[sizeof(path) - 1] = '\0';
 
@@ -188,7 +209,7 @@ static i64 sys_chdir(u64 path_ptr, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
   resolve_relative_path(proc, path, norm_path, sizeof(norm_path));
 
   vnode_t *new_cwd = nullptr;
-  if (vfs_lookup(norm_path, &new_cwd) != XIU_SUCCESS || !new_cwd) {
+  if (vfs_lookup(norm_path, &new_cwd) != CHIMERA_SUCCESS || !new_cwd) {
     return -1; // ENOENT
   }
 
@@ -217,17 +238,24 @@ static i64 sys_write(u64 fd, u64 buf, u64 len, u64 a4, u64 a5, u64 a6) {
   (void)a6;
   int ifd = (int)fd;
 
-  xiu_task_t *task = current_task();
-  xiu_proc_t *proc = task ? task->ta_proc : nullptr;
+  if (len > 0) {
+    if (buf == 0 || buf >= 0x0000800000000000ULL ||
+        (0x0000800000000000ULL - buf) < len) {
+      return -1;
+    }
+  }
+
+  chimera_task_t *task = current_task();
+  chimera_proc_t *proc = task ? task->ta_proc : nullptr;
 
   if (proc) {
-    xiu_fileproc_t *fp = proc_fd_lookup(proc, ifd);
+    chimera_fileproc_t *fp = proc_fd_lookup(proc, ifd);
     if (fp) {
       if (fp->fp_type == DTYPE_SOCKET && fp->fp_socket) {
-        xiu_error_t err =
+        chimera_error_t err =
             sosend(fp->fp_socket, nullptr, (const void *)buf, len, 0);
         fp_release(fp);
-        return (err == XIU_SUCCESS) ? (i64)len : -1;
+        return (err == CHIMERA_SUCCESS) ? (i64)len : -1;
       }
       vnode_t *vp = fp->fp_vnode;
       if (vp && vp->v_op && vp->v_op->vop_write) {
@@ -235,13 +263,13 @@ static i64 sys_write(u64 fd, u64 buf, u64 len, u64 a4, u64 a5, u64 a6) {
         uio.uio_buf = (void *)buf;
         uio.uio_resid = len;
         uio.uio_offset = fp->fp_offset;
-        xiu_error_t err = vp->v_op->vop_write(vp, &uio, 0, nullptr);
+        chimera_error_t err = vp->v_op->vop_write(vp, &uio, 0, nullptr);
         usize written = len - uio.uio_resid;
         irq_flags_t irq = spinlock_lock_irqsave(&fp->fp_lock);
         fp->fp_offset += written;
         spinlock_unlock_irqrestore(&fp->fp_lock, irq);
         fp_release(fp);
-        return (err == XIU_SUCCESS) ? (i64)written : -1;
+        return (err == CHIMERA_SUCCESS) ? (i64)written : -1;
       }
       fp_release(fp);
     }
@@ -250,7 +278,19 @@ static i64 sys_write(u64 fd, u64 buf, u64 len, u64 a4, u64 a5, u64 a6) {
   // fallback to direct console write
   if (fd == 1 || fd == 2) {
     extern void console_write(const char *buf, usize len);
-    console_write((const char *)buf, len);
+    extern chimera_error_t copyin(const void *uaddr, void *kaddr, usize len);
+    char tmp[256];
+    usize resid = len;
+    const char *uptr = (const char *)buf;
+    while (resid > 0) {
+      usize chunk = resid < sizeof(tmp) ? resid : sizeof(tmp);
+      if (copyin(uptr, tmp, chunk) != CHIMERA_SUCCESS) {
+        return (len - resid > 0) ? (i64)(len - resid) : -14;
+      }
+      console_write(tmp, chunk);
+      resid -= chunk;
+      uptr += chunk;
+    }
     return (i64)len;
   }
   return -1;
@@ -265,12 +305,12 @@ static i64 sys_lseek(u64 fd_u, u64 offset_u, u64 whence_u, u64 a4, u64 a5,
   i64 offset = (i64)offset_u;
   int whence = (int)whence_u;
 
-  xiu_task_t *task = current_task();
-  xiu_proc_t *proc = task ? task->ta_proc : nullptr;
-  if (!proc || fd < 0 || fd >= XIU_PROC_MAX_FDS)
+  chimera_task_t *task = current_task();
+  chimera_proc_t *proc = task ? task->ta_proc : nullptr;
+  if (!proc || fd < 0 || fd >= CHIMERA_PROC_MAX_FDS)
     return -9; // ebadf
 
-  xiu_fileproc_t *fp = proc_fd_lookup(proc, fd);
+  chimera_fileproc_t *fp = proc_fd_lookup(proc, fd);
   if (!fp)
     return -9; // ebadf
 
@@ -328,7 +368,7 @@ static i64 sys_getpid(u64 a1, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
   (void)a4;
   (void)a5;
   (void)a6;
-  xiu_task_t *t = current_task();
+  chimera_task_t *t = current_task();
   return (t && t->ta_proc) ? (i64)t->ta_proc->p_pid : 0;
 }
 
@@ -339,34 +379,34 @@ static i64 sys_fcntl(u64 fd_u, u64 cmd_u, u64 arg, u64 a4, u64 a5, u64 a6) {
   int fd = (int)fd_u;
   int cmd = (int)cmd_u;
 
-  xiu_task_t *task = current_task();
-  xiu_proc_t *proc = task ? task->ta_proc : nullptr;
-  if (!proc || fd < 0 || fd >= XIU_PROC_MAX_FDS)
+  chimera_task_t *task = current_task();
+  chimera_proc_t *proc = task ? task->ta_proc : nullptr;
+  if (!proc || fd < 0 || fd >= CHIMERA_PROC_MAX_FDS)
     return -1;
 
   enum {
-    XIU_F_DUPFD = 0,
-    XIU_F_GETFD = 1,
-    XIU_F_SETFD = 2,
-    XIU_F_GETFL = 3,
-    XIU_F_SETFL = 4,
+    CHIMERA_F_DUPFD = 0,
+    CHIMERA_F_GETFD = 1,
+    CHIMERA_F_SETFD = 2,
+    CHIMERA_F_GETFL = 3,
+    CHIMERA_F_SETFL = 4,
   };
 
-  if (cmd == XIU_F_DUPFD) {
+  if (cmd == CHIMERA_F_DUPFD) {
     int start = (int)arg;
     if (start < 0)
       start = 0;
-    if (start >= XIU_PROC_MAX_FDS)
+    if (start >= CHIMERA_PROC_MAX_FDS)
       return -1;
 
     irq_flags_t irq = spinlock_lock_irqsave(&proc->p_fdlock);
-    xiu_fileproc_t *fp = proc->p_fd_table[fd];
+    chimera_fileproc_t *fp = proc->p_fd_table[fd];
     if (!fp) {
       spinlock_unlock_irqrestore(&proc->p_fdlock, irq);
       return -1;
     }
 
-    for (int newfd = start; newfd < XIU_PROC_MAX_FDS; newfd++) {
+    for (int newfd = start; newfd < CHIMERA_PROC_MAX_FDS; newfd++) {
       if (!proc->p_fd_table[newfd]) {
         fp_retain(fp);
         proc->p_fd_table[newfd] = fp;
@@ -378,23 +418,23 @@ static i64 sys_fcntl(u64 fd_u, u64 cmd_u, u64 arg, u64 a4, u64 a5, u64 a6) {
     return -1;
   }
 
-  xiu_fileproc_t *fp = proc_fd_lookup(proc, fd);
+  chimera_fileproc_t *fp = proc_fd_lookup(proc, fd);
   if (!fp)
     return -1;
 
   i64 ret = 0;
-  if (cmd == XIU_F_GETFD) {
+  if (cmd == CHIMERA_F_GETFD) {
     ret = (fp->fp_flags & FP_CLOEXEC) ? 1 : 0;
-  } else if (cmd == XIU_F_SETFD) {
+  } else if (cmd == CHIMERA_F_SETFD) {
     irq_flags_t irq = spinlock_lock_irqsave(&fp->fp_lock);
     if (arg & 1)
       fp->fp_flags |= FP_CLOEXEC;
     else
       fp->fp_flags &= ~FP_CLOEXEC;
     spinlock_unlock_irqrestore(&fp->fp_lock, irq);
-  } else if (cmd == XIU_F_GETFL) {
+  } else if (cmd == CHIMERA_F_GETFL) {
     ret = (fp->fp_flags & FP_NONBLOCK) ? 2048 : 0;
-  } else if (cmd == XIU_F_SETFL) {
+  } else if (cmd == CHIMERA_F_SETFL) {
     irq_flags_t irq = spinlock_lock_irqsave(&fp->fp_lock);
     if (arg & 2048)
       fp->fp_flags |= FP_NONBLOCK;
@@ -410,7 +450,7 @@ static i64 sys_fcntl(u64 fd_u, u64 cmd_u, u64 arg, u64 a4, u64 a5, u64 a6) {
 }
 
 #include <kernel/input.h>
-extern size_t xiukit_hid_read_mouse(xiu_event_t *buf, size_t count);
+extern size_t chimerakit_hid_read_mouse(chimera_event_t *buf, size_t count);
 
 /* ── sys_open ────────────────────────────────────────────────────────────── *
  * Opens a file by resolving the path through VFS and allocating a fileproc.
@@ -423,11 +463,11 @@ static i64 sys_close(u64 fd_u, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
   (void)a4;
   (void)a5;
   (void)a6;
-  xiu_task_t *task = current_task();
-  xiu_proc_t *proc = task ? task->ta_proc : nullptr;
+  chimera_task_t *task = current_task();
+  chimera_proc_t *proc = task ? task->ta_proc : nullptr;
   if (!proc)
     return -1;
-  return (proc_fd_close(proc, (int)fd_u) == XIU_SUCCESS) ? 0 : -1;
+  return (proc_fd_close(proc, (int)fd_u) == CHIMERA_SUCCESS) ? 0 : -1;
 }
 
 static i64 sys_dup2(u64 oldfd_u, u64 newfd_u, u64 a3, u64 a4, u64 a5, u64 a6) {
@@ -438,16 +478,16 @@ static i64 sys_dup2(u64 oldfd_u, u64 newfd_u, u64 a3, u64 a4, u64 a5, u64 a6) {
   int oldfd = (int)oldfd_u;
   int newfd = (int)newfd_u;
 
-  xiu_task_t *task = current_task();
-  xiu_proc_t *proc = task ? task->ta_proc : nullptr;
-  if (!proc || oldfd < 0 || oldfd >= XIU_PROC_MAX_FDS || newfd < 0 ||
-      newfd >= XIU_PROC_MAX_FDS) {
+  chimera_task_t *task = current_task();
+  chimera_proc_t *proc = task ? task->ta_proc : nullptr;
+  if (!proc || oldfd < 0 || oldfd >= CHIMERA_PROC_MAX_FDS || newfd < 0 ||
+      newfd >= CHIMERA_PROC_MAX_FDS) {
     return -1;
   }
   if (oldfd == newfd)
     return newfd;
 
-  xiu_fileproc_t *old_fp = proc_fd_lookup(proc, oldfd);
+  chimera_fileproc_t *old_fp = proc_fd_lookup(proc, oldfd);
   if (!old_fp)
     return -1;
 
@@ -461,7 +501,7 @@ static i64 sys_dup2(u64 oldfd_u, u64 newfd_u, u64 a3, u64 a4, u64 a5, u64 a6) {
   return (i64)newfd;
 }
 
-static void resolve_relative_path(xiu_proc_t *proc, const char *path,
+static void resolve_relative_path(chimera_proc_t *proc, const char *path,
                                   char *out_buf, usize out_max) {
   (void)proc;
   extern void vfs_normalize_path(const char *in, char *out, usize cap);
@@ -478,8 +518,8 @@ static i64 sys_open(u64 path_ptr, u64 flags, u64 mode, u64 a4, u64 a5, u64 a6) {
   const char *path = (const char *)path_ptr;
   dprintf("[SYSCALL] open(%s)\n", path);
 
-  xiu_task_t *task = current_task();
-  xiu_proc_t *proc = task ? task->ta_proc : nullptr;
+  chimera_task_t *task = current_task();
+  chimera_proc_t *proc = task ? task->ta_proc : nullptr;
   if (!proc)
     return -1;
 
@@ -498,7 +538,8 @@ static i64 sys_open(u64 path_ptr, u64 flags, u64 mode, u64 a4, u64 a5, u64 a6) {
 
     if (!vp && (flags & 0x0200 || flags & 0x0040 || flags & 0x0100 ||
                 (flags & 1) || (flags & 2))) {
-      extern xiu_error_t fat32_create_file(const char *path, vnode_t **out_vp);
+      extern chimera_error_t fat32_create_file(const char *path,
+                                               vnode_t **out_vp);
       fat32_create_file(norm_path, &vp);
     }
   }
@@ -531,7 +572,7 @@ static i64 sys_open(u64 path_ptr, u64 flags, u64 mode, u64 a4, u64 a5, u64 a6) {
   }
 
   // allocate fileproc backed by this vnode
-  xiu_fileproc_t *fp = fp_alloc(vp, fp_flags);
+  chimera_fileproc_t *fp = fp_alloc(vp, fp_flags);
   if (!fp) {
     kprintf("[sys_open] '%s': ENOMEM (fileproc pool exhausted)\n", path);
     return -1;
@@ -560,12 +601,19 @@ static i64 sys_read(u64 fd_u, u64 buf, u64 len, u64 a4, u64 a5, u64 a6) {
   (void)a6;
   int fd = (int)fd_u;
 
-  xiu_task_t *task = current_task();
-  xiu_proc_t *proc = task ? task->ta_proc : nullptr;
+  if (len > 0) {
+    if (buf == 0 || buf >= 0x0000800000000000ULL ||
+        (0x0000800000000000ULL - buf) < len) {
+      return -1;
+    }
+  }
+
+  chimera_task_t *task = current_task();
+  chimera_proc_t *proc = task ? task->ta_proc : nullptr;
   if (!proc)
     return -1;
 
-  xiu_fileproc_t *fp = proc_fd_lookup(proc, fd);
+  chimera_fileproc_t *fp = proc_fd_lookup(proc, fd);
   if (!fp) {
     // fallback: fd 0 without FDT entry → direct console input
     if (fd == 0) {
@@ -575,7 +623,7 @@ static i64 sys_read(u64 fd_u, u64 buf, u64 len, u64 a4, u64 a5, u64 a6) {
       i64 n = console_read(tmp, to_read);
       if (n <= 0)
         return 0;
-      if (copyout(tmp, (void *)buf, n) != XIU_SUCCESS)
+      if (copyout(tmp, (void *)buf, n) != CHIMERA_SUCCESS)
         return -1;
       return n;
     }
@@ -585,10 +633,10 @@ static i64 sys_read(u64 fd_u, u64 buf, u64 len, u64 a4, u64 a5, u64 a6) {
 
   if (fp->fp_type == DTYPE_SOCKET && fp->fp_socket) {
     usize bytes_read = 0;
-    xiu_error_t err =
+    chimera_error_t err =
         soreceive(fp->fp_socket, nullptr, (void *)buf, len, &bytes_read, 0);
     fp_release(fp);
-    return (err == XIU_SUCCESS) ? (i64)bytes_read : -1;
+    return (err == CHIMERA_SUCCESS) ? (i64)bytes_read : -1;
   }
 
   vnode_t *vp = fp->fp_vnode;
@@ -603,7 +651,7 @@ static i64 sys_read(u64 fd_u, u64 buf, u64 len, u64 a4, u64 a5, u64 a6) {
   uio.uio_resid = len;
   uio.uio_offset = fp->fp_offset;
 
-  xiu_error_t err = vp->v_op->vop_read(vp, &uio, 0, nullptr);
+  chimera_error_t err = vp->v_op->vop_read(vp, &uio, 0, nullptr);
 
   // update file position
   irq_flags_t irq = spinlock_lock_irqsave(&fp->fp_lock);
@@ -612,7 +660,7 @@ static i64 sys_read(u64 fd_u, u64 buf, u64 len, u64 a4, u64 a5, u64 a6) {
   spinlock_unlock_irqrestore(&fp->fp_lock, irq);
 
   fp_release(fp);
-  return (err == XIU_SUCCESS) ? (i64)bytes_read : -1;
+  return (err == CHIMERA_SUCCESS) ? (i64)bytes_read : -1;
 }
 
 /* ── sys_pipe ────────────────────────────────────────────────────────────── *
@@ -629,23 +677,23 @@ static i64 sys_pipe(u64 pipefd_ptr, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
   if (!pipefd_ptr)
     return -22; // einval
 
-  xiu_task_t *task = current_task();
-  xiu_proc_t *proc = task ? task->ta_proc : nullptr;
+  chimera_task_t *task = current_task();
+  chimera_proc_t *proc = task ? task->ta_proc : nullptr;
   if (!proc)
     return -1;
 
-  extern xiu_error_t pipe_create(vnode_t * *read_vp_out,
-                                 vnode_t * *write_vp_out);
+  extern chimera_error_t pipe_create(vnode_t * *read_vp_out,
+                                     vnode_t * *write_vp_out);
   vnode_t *read_vp = nullptr;
   vnode_t *write_vp = nullptr;
 
-  if (pipe_create(&read_vp, &write_vp) != XIU_SUCCESS || !read_vp ||
+  if (pipe_create(&read_vp, &write_vp) != CHIMERA_SUCCESS || !read_vp ||
       !write_vp) {
     return -23; // enfile
   }
 
-  xiu_fileproc_t *rfp = fp_alloc(read_vp, FP_READABLE);
-  xiu_fileproc_t *wfp = fp_alloc(write_vp, FP_WRITABLE);
+  chimera_fileproc_t *rfp = fp_alloc(read_vp, FP_READABLE);
+  chimera_fileproc_t *wfp = fp_alloc(write_vp, FP_WRITABLE);
   if (!rfp || !wfp) {
     if (rfp)
       fp_release(rfp);
@@ -667,7 +715,7 @@ static i64 sys_pipe(u64 pipefd_ptr, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
   }
 
   int fds[2] = {rfd, wfd};
-  if (copyout(fds, (void *)pipefd_ptr, sizeof(fds)) != XIU_SUCCESS) {
+  if (copyout(fds, (void *)pipefd_ptr, sizeof(fds)) != CHIMERA_SUCCESS) {
     proc_fd_close(proc, rfd);
     proc_fd_close(proc, wfd);
     return -14; // efault
@@ -684,11 +732,11 @@ static i64 sys_pipe(u64 pipefd_ptr, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
  *   stdout_vpath — path to slave PTY ("/dev/pts/0") for child stdout (fd 1)
  * ───────────────────────────────────────────────────────────────────────────
  */
-extern void elf_load(void *module_ptr, struct xiu_task *out_task,
+extern void elf_load(void *module_ptr, struct chimera_task *out_task,
                      uintptr_t *entry_point, uintptr_t *user_stack);
-extern void scheduler_add_thread(xiu_thread_t *th);
-extern void thread_init_stack(xiu_thread_t *th, void *entry, void *stack);
-extern xiu_proc_t *proc_launchd;
+extern void scheduler_add_thread(chimera_thread_t *th);
+extern void thread_init_stack(chimera_thread_t *th, void *entry, void *stack);
+extern chimera_proc_t *proc_launchd;
 
 static i64 sys_spawn(u64 path_ptr, u64 argv_ptr, u64 envp_ptr,
                      u64 stdin_path_ptr, u64 stdout_path_ptr, u64 a6) {
@@ -698,17 +746,17 @@ static i64 sys_spawn(u64 path_ptr, u64 argv_ptr, u64 envp_ptr,
 
   // copy path strings from user space
   char path[128], stdin_path[64], stdout_path[64];
-  if (copyin((const void *)path_ptr, path, sizeof(path)) != XIU_SUCCESS)
+  if (copyin((const void *)path_ptr, path, sizeof(path)) != CHIMERA_SUCCESS)
     return -1;
   path[127] = '\0';
 
   bool has_stdio = false;
   if (stdin_path_ptr != 0 && stdout_path_ptr != 0) {
     if (copyin((const void *)stdin_path_ptr, stdin_path, sizeof(stdin_path)) !=
-        XIU_SUCCESS)
+        CHIMERA_SUCCESS)
       return -1;
     if (copyin((const void *)stdout_path_ptr, stdout_path,
-               sizeof(stdout_path)) != XIU_SUCCESS)
+               sizeof(stdout_path)) != CHIMERA_SUCCESS)
       return -1;
     stdin_path[63] = stdout_path[63] = '\0';
     has_stdio = true;
@@ -720,7 +768,7 @@ static i64 sys_spawn(u64 path_ptr, u64 argv_ptr, u64 envp_ptr,
 
   // 1. look up elf binary in vfs
   vnode_t *elf_vp = nullptr;
-  if (vfs_lookup(path, &elf_vp) != XIU_SUCCESS || !elf_vp) {
+  if (vfs_lookup(path, &elf_vp) != CHIMERA_SUCCESS || !elf_vp) {
     kprintf("[sys_spawn] ELF not found: %s\n", path);
     return -1;
   }
@@ -739,11 +787,11 @@ static i64 sys_spawn(u64 path_ptr, u64 argv_ptr, u64 envp_ptr,
   void *elf_ptr = elf_vp->v_data ? elf_vp->v_data : (void *)s_elf_buf;
 
   // 2. create child process
-  xiu_proc_t *parent = proc_launchd ? proc_launchd : proc_kernel;
-  xiu_proc_t *child = nullptr;
-  if (proc_create(parent, path, &child) != XIU_SUCCESS || !child)
+  chimera_proc_t *parent = proc_launchd ? proc_launchd : proc_kernel;
+  chimera_proc_t *child = nullptr;
+  if (proc_create(parent, path, &child) != CHIMERA_SUCCESS || !child)
     return -1;
-  xiu_task_t *ctask = child->p_task;
+  chimera_task_t *ctask = child->p_task;
 
   // 3. setup stdio if requested
   if (has_stdio) {
@@ -756,8 +804,8 @@ static i64 sys_spawn(u64 path_ptr, u64 argv_ptr, u64 envp_ptr,
       return -1;
     }
 
-    xiu_fileproc_t *fp_in = fp_alloc(svp_in, FP_READABLE);
-    xiu_fileproc_t *fp_out = fp_alloc(svp_out, FP_WRITABLE | FP_READABLE);
+    chimera_fileproc_t *fp_in = fp_alloc(svp_in, FP_READABLE);
+    chimera_fileproc_t *fp_out = fp_alloc(svp_out, FP_WRITABLE | FP_READABLE);
     if (!fp_in || !fp_out)
       return -1;
 
@@ -776,18 +824,18 @@ static i64 sys_spawn(u64 path_ptr, u64 argv_ptr, u64 envp_ptr,
 
   // 4. load mach-o into child address space
   uintptr_t entry = 0, user_stack = 0;
-  mach_load(elf_ptr, ctask, &entry, &user_stack);
-  if (entry == 0) {
-    kprintf("[sys_spawn] Mach-O load failed\n");
+  int load_rc = mach_load(elf_ptr, ctask, &entry, &user_stack);
+  if (load_rc != 0 || entry == 0) {
+    kprintf("[sys_spawn] Mach-O load failed (%d)\n", load_rc);
     return -1;
   }
 
   // 5. create and schedule child thread
-  static xiu_thread_t s_spawn_threads[64];
-  xiu_thread_t *th = nullptr;
+  static chimera_thread_t s_spawn_threads[64];
+  chimera_thread_t *th = nullptr;
 
   for (u32 i = 0; i < 64; i++) {
-    if (s_spawn_threads[i].th_signature != XIU_THREAD_MAGIC ||
+    if (s_spawn_threads[i].th_signature != CHIMERA_THREAD_MAGIC ||
         s_spawn_threads[i].th_state == THREAD_STATE_HALTED) {
       th = &s_spawn_threads[i];
       break;
@@ -799,8 +847,8 @@ static i64 sys_spawn(u64 path_ptr, u64 argv_ptr, u64 envp_ptr,
     return -1;
   }
 
-  __builtin_memset(th, 0, sizeof(xiu_thread_t));
-  th->th_signature = XIU_THREAD_MAGIC;
+  __builtin_memset(th, 0, sizeof(chimera_thread_t));
+  th->th_signature = CHIMERA_THREAD_MAGIC;
   th->th_task = ctask;
   th->th_state = THREAD_STATE_READY;
   th->th_priority = 0;
@@ -822,34 +870,23 @@ static i64 sys_fork(u64 a1, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
   (void)a4;
   (void)a5;
   (void)a6;
-  xiu_task_t *parent_task = current_task();
-  xiu_proc_t *parent = parent_task ? parent_task->ta_proc : nullptr;
-  if (!parent || !g_syscall_frame)
+  chimera_task_t *parent_task = current_task();
+  chimera_proc_t *parent = parent_task ? parent_task->ta_proc : nullptr;
+  chimera_thread_t *cur_th = current_thread();
+  if (!parent || !cur_th || !cur_th->th_syscall_frame)
     return -1;
 
-  xiu_proc_t *child = nullptr;
-  if (proc_create(parent, parent->p_comm, &child) != XIU_SUCCESS || !child)
+  chimera_proc_t *child = nullptr;
+  if (proc_create(parent, parent->p_comm, &child) != CHIMERA_SUCCESS || !child)
     return -1;
 
   if (child->p_task->ta_vm_map) {
-    extern void pmm_release_page(xiu_paddr_t addr);
-    pmm_release_page((xiu_paddr_t)child->p_task->ta_vm_map);
+    extern void pmm_release_page(chimera_paddr_t addr);
+    pmm_release_page((chimera_paddr_t)child->p_task->ta_vm_map);
   }
   child->p_task->ta_vm_map =
       (void *)pmap_clone_user_space((u64)parent_task->ta_vm_map);
   child->p_task->ta_mmap_next = parent_task->ta_mmap_next;
-
-  irq_flags_t irq = spinlock_lock_irqsave(&parent->p_fdlock);
-  irq_flags_t cirq = spinlock_lock_irqsave(&child->p_fdlock);
-  for (int i = 0; i < XIU_PROC_MAX_FDS; i++) {
-    xiu_fileproc_t *fp = parent->p_fd_table[i];
-    if (fp) {
-      fp_retain(fp);
-      child->p_fd_table[i] = fp;
-    }
-  }
-  spinlock_unlock_irqrestore(&child->p_fdlock, cirq);
-  spinlock_unlock_irqrestore(&parent->p_fdlock, irq);
 
   // clone parent's ipc_space entries into child so child threads/processes
   // inherit Mach ports
@@ -880,47 +917,57 @@ static i64 sys_fork(u64 a1, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
     spinlock_unlock_irqrestore(&parent_task->ta_ipc_space->is_lock, pf);
   }
 
-  syscall_user_frame_t *frame = (syscall_user_frame_t *)g_syscall_frame;
+  syscall_user_frame_t *frame =
+      cur_th ? (syscall_user_frame_t *)cur_th->th_syscall_frame : nullptr;
+  if (!frame) {
+    kprintf("[sys_fork] ERROR: missing thread syscall frame\n");
+    return -1;
+  }
   uptr child_rip = frame->rip;
   uptr child_rsp = frame->rsp; // user RSP from syscall frame
 
-  static xiu_thread_t s_fork_threads[64];
-  xiu_thread_t *th = nullptr;
+  static chimera_thread_t s_fork_threads[64];
+  static spinlock_t s_fork_threads_lock = SPINLOCK_INIT;
+  chimera_thread_t *th = nullptr;
 
+  irq_flags_t f_irq = spinlock_lock_irqsave(&s_fork_threads_lock);
   for (u32 i = 0; i < 64; i++) {
-    if (s_fork_threads[i].th_signature != XIU_THREAD_MAGIC ||
-        s_fork_threads[i].th_state == THREAD_STATE_HALTED) {
+    if (s_fork_threads[i].th_signature != CHIMERA_THREAD_MAGIC ||
+        (s_fork_threads[i].th_state == THREAD_STATE_HALTED &&
+         s_fork_threads[i].th_running_cpu == 0xFFFFFFFF)) {
       th = &s_fork_threads[i];
+      th->th_state = THREAD_STATE_READY;
       break;
     }
   }
+  spinlock_unlock_irqrestore(&s_fork_threads_lock, f_irq);
 
   if (!th) {
     kprintf("[sys_fork] ERROR: fork thread pool exhausted\n");
     return -1;
   }
 
+  void *kstack_base = th->th_stack_base;
+  void *kstack = th->th_kernel_stack;
+  usize kstack_sz = th->th_stack_size;
   __builtin_memset(th, 0, sizeof(*th));
-  th->th_signature = XIU_THREAD_MAGIC;
+  th->th_stack_base = kstack_base;
+  th->th_kernel_stack = kstack;
+  th->th_stack_size = kstack_sz;
+
+  th->th_signature = CHIMERA_THREAD_MAGIC;
   th->th_task = child->p_task;
   th->th_state = THREAD_STATE_READY;
   th->th_priority = current_thread() ? current_thread()->th_priority : 0;
 
-  /* CRITICAL FIX: Copy the syscall frame into the thread structure!
-   * We CANNOT just store a pointer to g_syscall_frame because that's on
-   * the parent's kernel stack and will be overwritten. We must copy all
-   * registers (r15, r14, r13, r12, rbx, rbp, rip, rflags, rsp) into
-   * th_fork_frame so the child has a stable copy. */
+  /* Copy the syscall frame into the thread structure so child has stable copy
+   */
   __builtin_memcpy(th->th_fork_frame, frame, sizeof(syscall_user_frame_t));
-  th->th_user_frame = (void *)th->th_fork_frame; // point to our copy
+  th->th_user_frame = (void *)th->th_fork_frame;
 
   child->p_task->ta_threads = th;
   thread_init_fork_stack(th, (void *)child_rip, (void *)child_rsp);
 
-  /* CRITICAL FIX: fork() must return 0 in child, PID in parent.
-   * The child thread will resume at the same RIP as parent (after syscall),
-   * but it must see RAX=0. We store this in th_fork_return_value which
-   * the context switch code will load into RAX. */
   th->th_fork_return_value = 0;
   th->th_is_fork_child = 1;
 
@@ -942,11 +989,11 @@ static i64 sys_execve(u64 path_ptr, u64 argv_ptr, u64 envp_ptr, u64 a4, u64 a5,
   if ((rsp & 0xFFFF800000000000ULL) == 0) {
     kprintf("[sys_execve] FATAL: Running on user stack! RSP=0x%llx\n",
             (unsigned long long)rsp);
-    xiu_panic("sys_execve: Running on user stack");
+    chimera_panic("sys_execve: Running on user stack");
   }
 
   char path[128];
-  if (copyin((const void *)path_ptr, path, sizeof(path)) != XIU_SUCCESS)
+  if (copyin((const void *)path_ptr, path, sizeof(path)) != CHIMERA_SUCCESS)
     return -1;
   path[sizeof(path) - 1] = '\0';
 
@@ -957,11 +1004,11 @@ static i64 sys_execve(u64 path_ptr, u64 argv_ptr, u64 envp_ptr, u64 a4, u64 a5,
     for (; argc < 15; argc++) {
       u64 uptr = 0;
       if (copyin((const void *)(argv_ptr + argc * sizeof(u64)), &uptr,
-                 sizeof(uptr)) != XIU_SUCCESS ||
+                 sizeof(uptr)) != CHIMERA_SUCCESS ||
           uptr == 0)
         break;
       if (copyin((const void *)uptr, arg_storage[argc],
-                 sizeof(arg_storage[argc])) != XIU_SUCCESS)
+                 sizeof(arg_storage[argc])) != CHIMERA_SUCCESS)
         break;
       arg_storage[argc][sizeof(arg_storage[argc]) - 1] = '\0';
       kargv[argc] = arg_storage[argc];
@@ -978,11 +1025,11 @@ static i64 sys_execve(u64 path_ptr, u64 argv_ptr, u64 envp_ptr, u64 a4, u64 a5,
     for (; envc < 15; envc++) {
       u64 uptr = 0;
       if (copyin((const void *)(envp_ptr + envc * sizeof(u64)), &uptr,
-                 sizeof(uptr)) != XIU_SUCCESS ||
+                 sizeof(uptr)) != CHIMERA_SUCCESS ||
           uptr == 0)
         break;
       if (copyin((const void *)uptr, env_storage[envc],
-                 sizeof(env_storage[envc])) != XIU_SUCCESS)
+                 sizeof(env_storage[envc])) != CHIMERA_SUCCESS)
         break;
       env_storage[envc][sizeof(env_storage[envc]) - 1] = '\0';
       kenvp[envc] = env_storage[envc];
@@ -992,12 +1039,12 @@ static i64 sys_execve(u64 path_ptr, u64 argv_ptr, u64 envp_ptr, u64 a4, u64 a5,
 
   vnode_t *elf_vp = nullptr;
   const char *npath = normalize_path(path);
-  if (vfs_lookup(npath, &elf_vp) != XIU_SUCCESS || !elf_vp) {
+  if (vfs_lookup(npath, &elf_vp) != CHIMERA_SUCCESS || !elf_vp) {
     return -2; // -ENOENT
   }
 
   void *elf_ptr = elf_vp->v_data;
-  xiu_paddr_t temp_phys = (xiu_paddr_t)-1;
+  chimera_paddr_t temp_phys = (chimera_paddr_t)-1;
   usize temp_pages = 0;
 
   if (elf_vp->v_op &&
@@ -1014,11 +1061,11 @@ static i64 sys_execve(u64 path_ptr, u64 argv_ptr, u64 envp_ptr, u64 a4, u64 a5,
       kprintf("[sys_execve] ERROR: empty FAT32 file\n");
       return -1;
     }
-    extern xiu_paddr_t pmm_alloc_pages(usize count);
-    extern void pmm_free_contiguous(xiu_paddr_t base, usize count);
+    extern chimera_paddr_t pmm_alloc_pages(usize count);
+    extern void pmm_free_contiguous(chimera_paddr_t base, usize count);
     temp_pages = (nd->file_size + 4095) / 4096;
     temp_phys = pmm_alloc_pages(temp_pages);
-    if (temp_phys == (xiu_paddr_t)-1) {
+    if (temp_phys == (chimera_paddr_t)-1) {
       kprintf("[sys_execve] ERROR: failed to alloc %zu pages for ELF\n",
               temp_pages);
       return -1;
@@ -1026,12 +1073,12 @@ static i64 sys_execve(u64 path_ptr, u64 argv_ptr, u64 envp_ptr, u64 a4, u64 a5,
     extern u64 g_hhdm_base;
     elf_ptr = (void *)(temp_phys + g_hhdm_base);
     u32 actual_read = 0;
-    extern xiu_error_t fat32_read_file(u32 start_cluster, u32 file_size,
-                                       u32 offset, void *dst, u32 len,
-                                       u32 *bytes_read);
-    xiu_error_t err = fat32_read_file(nd->start_cluster, nd->file_size, 0,
-                                      elf_ptr, nd->file_size, &actual_read);
-    if (err != XIU_SUCCESS || actual_read == 0) {
+    extern chimera_error_t fat32_read_file(u32 start_cluster, u32 file_size,
+                                           u32 offset, void *dst, u32 len,
+                                           u32 *bytes_read);
+    chimera_error_t err = fat32_read_file(nd->start_cluster, nd->file_size, 0,
+                                          elf_ptr, nd->file_size, &actual_read);
+    if (err != CHIMERA_SUCCESS || actual_read == 0) {
       kprintf("[sys_execve] ERROR: failed to read ELF from disk (err=%d)\n",
               err);
       pmm_free_contiguous(temp_phys, temp_pages);
@@ -1044,10 +1091,10 @@ static i64 sys_execve(u64 path_ptr, u64 argv_ptr, u64 envp_ptr, u64 a4, u64 a5,
     return -1;
   }
 
-  xiu_task_t *task = current_task();
+  chimera_task_t *task = current_task();
   if (!task) {
     if (temp_pages > 0) {
-      extern void pmm_free_contiguous(xiu_paddr_t base, usize count);
+      extern void pmm_free_contiguous(chimera_paddr_t base, usize count);
       pmm_free_contiguous(temp_phys, temp_pages);
     }
     return -1;
@@ -1055,7 +1102,7 @@ static i64 sys_execve(u64 path_ptr, u64 argv_ptr, u64 envp_ptr, u64 a4, u64 a5,
 
   if (!task->ta_vm_map) {
     if (temp_pages > 0) {
-      extern void pmm_free_contiguous(xiu_paddr_t base, usize count);
+      extern void pmm_free_contiguous(chimera_paddr_t base, usize count);
       pmm_free_contiguous(temp_phys, temp_pages);
     }
     return -1;
@@ -1063,7 +1110,7 @@ static i64 sys_execve(u64 path_ptr, u64 argv_ptr, u64 envp_ptr, u64 a4, u64 a5,
 
   // clean old user address space and allocate fresh PML4 for the new binary
   extern void pmap_destroy_user_space(u64 pml4_phys);
-  extern xiu_paddr_t pmm_alloc_page(void);
+  extern chimera_paddr_t pmm_alloc_page(void);
 #define get_table_ptr_exec(p) ((u64 *)((p) + g_hhdm_base))
 
   u64 old_pml4 = (u64)task->ta_vm_map;
@@ -1087,23 +1134,24 @@ static i64 sys_execve(u64 path_ptr, u64 argv_ptr, u64 envp_ptr, u64 a4, u64 a5,
   task->ta_mmap_next = 0;
 
   uptr entry = 0, user_stack = 0;
-  mach_load_args(elf_ptr, task, &entry, &user_stack, path, kargv, kenvp);
+  int load_rc =
+      mach_load_args(elf_ptr, task, &entry, &user_stack, path, kargv, kenvp);
 
   if (temp_pages > 0) {
-    extern void pmm_free_contiguous(xiu_paddr_t base, usize count);
+    extern void pmm_free_contiguous(chimera_paddr_t base, usize count);
     pmm_free_contiguous(temp_phys, temp_pages);
   }
-  if (!entry) {
-    return -1;
+  if (load_rc != 0 || !entry) {
+    return (load_rc < 0) ? load_rc : -1;
   }
 
   if (task->ta_proc) {
-    __builtin_memset(task->ta_proc->p_comm, 0, XIU_PROC_NAME_MAX);
-    __builtin_strncpy(task->ta_proc->p_comm, path, XIU_PROC_NAME_MAX - 1);
+    __builtin_memset(task->ta_proc->p_comm, 0, CHIMERA_PROC_NAME_MAX);
+    __builtin_strncpy(task->ta_proc->p_comm, path, CHIMERA_PROC_NAME_MAX - 1);
   }
 
   task_switch_to_user_frame(entry, user_stack, nullptr, 0);
-  XIU_UNREACHABLE();
+  CHIMERA_UNREACHABLE();
 }
 
 extern u64 g_fb_phys_addr;
@@ -1116,7 +1164,7 @@ static i64 sys_mmap(u64 addr, u64 len, u64 prot, u64 flags, u64 fd,
                     u64 offset) {
   (void)flags;
   (void)offset;
-  xiu_task_t *task = current_task();
+  chimera_task_t *task = current_task();
   dprintf("[SYSCALL] mmap(task=%d, addr=%p, len=%zu, fd=%llu)\n",
           task ? task->ta_id : -1, (void *)addr, (usize)len,
           (unsigned long long)fd);
@@ -1131,10 +1179,11 @@ static i64 sys_mmap(u64 addr, u64 len, u64 prot, u64 flags, u64 fd,
 
   if (!is_anon) {
     // look up the fd in the calling process's file descriptor table
-    xiu_task_t *calling_task = current_task();
-    xiu_proc_t *calling_proc = calling_task ? calling_task->ta_proc : nullptr;
+    chimera_task_t *calling_task = current_task();
+    chimera_proc_t *calling_proc =
+        calling_task ? calling_task->ta_proc : nullptr;
     if (calling_proc) {
-      xiu_fileproc_t *mmap_fp = proc_fd_lookup(calling_proc, (int)fd);
+      chimera_fileproc_t *mmap_fp = proc_fd_lookup(calling_proc, (int)fd);
       if (mmap_fp && mmap_fp->fp_vnode) {
         file_vp = mmap_fp->fp_vnode;
         // /dev/fb0 has VCHR type and provides vop_mmap
@@ -1182,18 +1231,18 @@ static i64 sys_mmap(u64 addr, u64 len, u64 prot, u64 flags, u64 fd,
   if (prot & 4)
     pg_flags |= 0;
 
-  extern xiu_paddr_t pmm_alloc_page(void);
+  extern chimera_paddr_t pmm_alloc_page(void);
   extern u64 g_hhdm_base;
 
   typedef struct {
     vnode_t *vp;
     u32 page_count;
-    xiu_paddr_t pages[2048];
-  } xiu_shm_entry_t;
-  static xiu_shm_entry_t s_shm_entries[64];
+    chimera_paddr_t pages[2048];
+  } chimera_shm_entry_t;
+  static chimera_shm_entry_t s_shm_entries[64];
   static spinlock_t s_shm_lock = {0};
 
-  xiu_shm_entry_t *shm = nullptr;
+  chimera_shm_entry_t *shm = nullptr;
   if (file_vp && !is_fb) {
     irq_flags_t sf = spinlock_lock_irqsave(&s_shm_lock);
     for (int i = 0; i < 64; i++) {
@@ -1296,7 +1345,7 @@ static i64 sys_munmap(u64 addr, u64 len, u64 a3, u64 a4, u64 a5, u64 a6) {
   if (!addr || !len)
     return -22; // einval
 
-  xiu_task_t *task = current_task();
+  chimera_task_t *task = current_task();
   if (!task || !task->ta_vm_map)
     return -1;
 
@@ -1305,48 +1354,62 @@ static i64 sys_munmap(u64 addr, u64 len, u64 a3, u64 a4, u64 a5, u64 a6) {
   return 0;
 }
 
-extern xiu_error_t ipc_port_alloc(ipc_space_t *space,
-                                  mach_port_name_t *name_out,
-                                  const char *label);
-extern xiu_error_t ipc_kmsg_copyin(ipc_kmsg_t *kmsg, u64 user_header,
-                                   ipc_space_t *space);
-extern xiu_error_t ipc_kmsg_copyout(ipc_kmsg_t *kmsg, u64 user_buf,
-                                    u32 buf_size, ipc_space_t *space);
-extern xiu_error_t ipc_mqueue_send(struct ipc_port *port, ipc_kmsg_t *kmsg,
-                                   u32 timeout);
-extern xiu_error_t ipc_mqueue_receive(struct ipc_port *port,
-                                      ipc_kmsg_t **kmsg_out, u32 timeout);
+extern chimera_error_t ipc_port_alloc(ipc_space_t *space,
+                                      mach_port_name_t *name_out,
+                                      const char *label);
+extern chimera_error_t ipc_kmsg_copyin(ipc_kmsg_t *kmsg, u64 user_header,
+                                       ipc_space_t *space);
+extern chimera_error_t ipc_kmsg_copyout(ipc_kmsg_t *kmsg, u64 user_buf,
+                                        u32 buf_size, ipc_space_t *space);
+extern chimera_error_t ipc_mqueue_send(struct ipc_port *port, ipc_kmsg_t *kmsg,
+                                       u32 timeout);
+extern chimera_error_t ipc_mqueue_receive(struct ipc_port *port,
+                                          ipc_kmsg_t **kmsg_out, u32 timeout);
 extern ipc_kmsg_t *ipc_kmsg_alloc(u32 size);
 extern void ipc_kmsg_free(ipc_kmsg_t *kmsg);
 extern void ipc_port_unlock(struct ipc_port *port);
 extern void ipc_port_reference(struct ipc_port *port);
 extern mach_port_name_t space_alloc_name(ipc_space_t *space);
-extern xiu_error_t mach_register_service(const char *name,
-                                         struct ipc_port *port);
+extern chimera_error_t mach_register_service(const char *name,
+                                             struct ipc_port *port);
 extern struct ipc_port *mach_lookup_service(const char *name);
-extern xiu_error_t copyout(const void *kaddr, void *uaddr, usize len);
-extern xiu_error_t copyin(const void *uaddr, void *kaddr, usize len);
+extern chimera_error_t copyout(const void *kaddr, void *uaddr, usize len);
+extern chimera_error_t copyin(const void *uaddr, void *kaddr, usize len);
 
 static i64 sys_mach_msg(u64 msg_ptr, u64 option, u64 send_sz, u64 rcv_sz,
                         u64 rcv_name, u64 timeout) {
-  xiu_task_t *task = current_task();
+  chimera_task_t *task = current_task();
   if (!task)
     return -1;
 
   u32 cur_pid = task->ta_proc ? task->ta_proc->p_pid : 0;
 
   if (option & 1) {
+    if (send_sz < sizeof(mach_msg_header_t) || send_sz > MACH_MSG_SIZE_MAX) {
+      return -1;
+    }
+
     mach_msg_header_t user_hdr;
     if (copyin((const void *)msg_ptr, &user_hdr, sizeof(user_hdr)) !=
-        XIU_SUCCESS) {
+        CHIMERA_SUCCESS) {
       kprintf("[IPC-ERR] sys_mach_msg SEND copyin header failed for "
               "msg_ptr=0x%llx (pid=%u)\n",
               msg_ptr, cur_pid);
       return -1;
     }
 
+    if (user_hdr.msgh_size != (mach_msg_size_t)send_sz) {
+      kprintf("[IPC-ERR] sys_mach_msg SEND size mismatch: msgh_size=%u vs "
+              "send_sz=%llu (pid=%u)\n",
+              user_hdr.msgh_size, send_sz, cur_pid);
+      return -1;
+    }
+
     ipc_kmsg_t *kmsg = ipc_kmsg_alloc(send_sz);
-    if (ipc_kmsg_copyin(kmsg, msg_ptr, task->ta_ipc_space) != XIU_SUCCESS) {
+    if (!kmsg) {
+      return -1;
+    }
+    if (ipc_kmsg_copyin(kmsg, msg_ptr, task->ta_ipc_space) != CHIMERA_SUCCESS) {
       kprintf("[IPC-ERR] sys_mach_msg SEND ipc_kmsg_copyin failed for pid=%u "
               "msg_ptr=0x%llx send_sz=%llu\n",
               cur_pid, msg_ptr, send_sz);
@@ -1357,10 +1420,10 @@ static i64 sys_mach_msg(u64 msg_ptr, u64 option, u64 send_sz, u64 rcv_sz,
     struct ipc_port *port = kmsg->ikm_remote_port;
     kprintf("[IPC] sys_mach_msg SEND: pid=%u to_port=%p msgh_id=%u\n", cur_pid,
             (void *)port, ((mach_msg_header_t *)kmsg->ikm_header)->msgh_id);
-    xiu_error_t err = ipc_mqueue_send(port, kmsg, (u32)timeout);
+    chimera_error_t err = ipc_mqueue_send(port, kmsg, (u32)timeout);
 
-    if (err != XIU_SUCCESS) {
-      if (err != XIU_ERR_PORT_FULL)
+    if (err != CHIMERA_SUCCESS) {
+      if (err != CHIMERA_ERR_PORT_FULL)
         kprintf("[IPC] Send failed for pid=%u with error %d\n", cur_pid, err);
       ipc_kmsg_free(kmsg);
       return -1;
@@ -1368,6 +1431,10 @@ static i64 sys_mach_msg(u64 msg_ptr, u64 option, u64 send_sz, u64 rcv_sz,
   }
 
   if (option & 2) {
+    if (rcv_sz < sizeof(mach_msg_header_t) || rcv_sz > MACH_MSG_SIZE_MAX) {
+      return -1;
+    }
+
     struct ipc_port *port = ipc_port_lookup(
         task->ta_ipc_space, (mach_port_name_t)rcv_name, MACH_PORT_TYPE_RECEIVE);
     if (!port) {
@@ -1377,9 +1444,9 @@ static i64 sys_mach_msg(u64 msg_ptr, u64 option, u64 send_sz, u64 rcv_sz,
     }
 
     ipc_kmsg_t *kmsg = nullptr;
-    xiu_error_t err = ipc_mqueue_receive(port, &kmsg, (u32)timeout);
+    chimera_error_t err = ipc_mqueue_receive(port, &kmsg, (u32)timeout);
 
-    if (err != XIU_SUCCESS) {
+    if (err != CHIMERA_SUCCESS) {
       if (timeout != 0) {
         kprintf(
             "[IPC] sys_mach_msg RCV: pid=%u port=%p timeout_ms=%llu err=%d\n",
@@ -1393,7 +1460,7 @@ static i64 sys_mach_msg(u64 msg_ptr, u64 option, u64 send_sz, u64 rcv_sz,
             ((mach_msg_header_t *)kmsg->ikm_header)->msgh_id);
 
     if (ipc_kmsg_copyout(kmsg, msg_ptr, (u32)rcv_sz, task->ta_ipc_space) !=
-        XIU_SUCCESS) {
+        CHIMERA_SUCCESS) {
       kprintf(
           "[IPC-ERR] sys_mach_msg RCV copyout failed for pid=%u rcv_sz=%llu\n",
           cur_pid, rcv_sz);
@@ -1413,15 +1480,15 @@ static i64 sys_mach_port_allocate(u64 space_ptr, u64 right, u64 name_out_ptr,
   (void)a4;
   (void)a5;
   (void)a6;
-  xiu_task_t *task = current_task();
+  chimera_task_t *task = current_task();
   if (!task)
     return -1;
 
   mach_port_name_t name;
-  if (ipc_port_alloc(task->ta_ipc_space, &name, "user_port") != XIU_SUCCESS)
+  if (ipc_port_alloc(task->ta_ipc_space, &name, "user_port") != CHIMERA_SUCCESS)
     return -1;
 
-  if (copyout(&name, (void *)name_out_ptr, sizeof(name)) != XIU_SUCCESS) {
+  if (copyout(&name, (void *)name_out_ptr, sizeof(name)) != CHIMERA_SUCCESS) {
     // ideally we would deallocate the port here on copyout failure
     return -1;
   }
@@ -1434,7 +1501,7 @@ static i64 sys_mach_register_service(u64 name_ptr, u64 port_name, u64 a3,
   (void)a4;
   (void)a5;
   (void)a6;
-  xiu_task_t *task = current_task();
+  chimera_task_t *task = current_task();
   if (!task)
     return -1;
 
@@ -1454,7 +1521,7 @@ static i64 sys_mach_register_service(u64 name_ptr, u64 port_name, u64 a3,
   // need to safely copy the name string from user space
   char safe_name[64];
   if (copyin((const void *)name_ptr, safe_name, sizeof(safe_name)) !=
-      XIU_SUCCESS) {
+      CHIMERA_SUCCESS) {
     // if string is shorter than 64 bytes or page fault occurs
     /* Note: copyin needs to handle short strings gracefully,
        for now we copy up to 64 bytes which is safe since we just want a
@@ -1462,12 +1529,12 @@ static i64 sys_mach_register_service(u64 name_ptr, u64 port_name, u64 a3,
   }
   safe_name[63] = '\0'; // ensure null-termination
 
-  xiu_error_t err = mach_register_service(safe_name, port);
+  chimera_error_t err = mach_register_service(safe_name, port);
   kprintf("[IPC] sys_mach_register_service: %s port=%p (err=%d)\n", safe_name,
           (void *)port, err);
 
   ipc_port_unlock(port);
-  return (err == XIU_SUCCESS) ? 0 : -1;
+  return (err == CHIMERA_SUCCESS) ? 0 : -1;
 }
 
 static i64 sys_mach_lookup_service(u64 name_ptr, u64 name_out_ptr, u64 a3,
@@ -1476,13 +1543,13 @@ static i64 sys_mach_lookup_service(u64 name_ptr, u64 name_out_ptr, u64 a3,
   (void)a4;
   (void)a5;
   (void)a6;
-  xiu_task_t *task = current_task();
+  chimera_task_t *task = current_task();
   if (!task)
     return -1;
 
   char safe_name[64];
   if (copyin((const void *)name_ptr, safe_name, sizeof(safe_name)) !=
-      XIU_SUCCESS) {
+      CHIMERA_SUCCESS) {
     // best effort for stage 5
   }
   safe_name[63] = '\0';
@@ -1502,7 +1569,7 @@ static i64 sys_mach_lookup_service(u64 name_ptr, u64 name_out_ptr, u64 a3,
 
   ipc_port_reference(port);
 
-  if (copyout(&name, (void *)name_out_ptr, sizeof(name)) != XIU_SUCCESS) {
+  if (copyout(&name, (void *)name_out_ptr, sizeof(name)) != CHIMERA_SUCCESS) {
     return -1;
   }
   kprintf("[IPC] sys_mach_lookup_service: %s -> port_name=0x%x (task %d)\n",
@@ -1517,13 +1584,13 @@ static i64 sys_mach_port_deallocate(u64 space_ptr, u64 name, u64 a3, u64 a4,
   (void)a4;
   (void)a5;
   (void)a6;
-  xiu_task_t *task = current_task();
+  chimera_task_t *task = current_task();
   if (!task || !task->ta_ipc_space)
     return -1;
-  extern xiu_error_t mach_port_deallocate_kernel(ipc_space_t * space,
-                                                 mach_port_name_t name);
-  return (mach_port_deallocate_kernel(task->ta_ipc_space,
-                                      (mach_port_name_t)name) == XIU_SUCCESS)
+  extern chimera_error_t mach_port_deallocate_kernel(ipc_space_t * space,
+                                                     mach_port_name_t name);
+  return (mach_port_deallocate_kernel(
+              task->ta_ipc_space, (mach_port_name_t)name) == CHIMERA_SUCCESS)
              ? 0
              : -1;
 }
@@ -1534,16 +1601,16 @@ static i64 sys_mach_port_type(u64 space_ptr, u64 name, u64 ptype_out, u64 a4,
   (void)a4;
   (void)a5;
   (void)a6;
-  xiu_task_t *task = current_task();
+  chimera_task_t *task = current_task();
   if (!task || !task->ta_ipc_space)
     return -1;
   mach_port_type_t ptype = 0;
-  extern xiu_error_t mach_port_type_kernel(
+  extern chimera_error_t mach_port_type_kernel(
       ipc_space_t * space, mach_port_name_t name, mach_port_type_t * ptype);
   if (mach_port_type_kernel(task->ta_ipc_space, (mach_port_name_t)name,
-                            &ptype) != XIU_SUCCESS)
+                            &ptype) != CHIMERA_SUCCESS)
     return -1;
-  if (copyout(&ptype, (void *)ptype_out, sizeof(ptype)) != XIU_SUCCESS)
+  if (copyout(&ptype, (void *)ptype_out, sizeof(ptype)) != CHIMERA_SUCCESS)
     return -1;
   return 0;
 }
@@ -1555,7 +1622,7 @@ static i64 sys_task_self(u64 a1, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
   (void)a4;
   (void)a5;
   (void)a6;
-  xiu_task_t *task = current_task();
+  chimera_task_t *task = current_task();
   if (!task || !task->ta_ipc_space)
     return MACH_PORT_NAME_NULL;
   return (i64)task->ta_task_port;
@@ -1566,12 +1633,12 @@ static i64 sys_ioctl(u64 fd_u, u64 cmd, u64 arg, u64 a4, u64 a5, u64 a6) {
   (void)a5;
   (void)a6;
   int fd = (int)fd_u;
-  xiu_task_t *task = current_task();
-  xiu_proc_t *proc = task ? task->ta_proc : nullptr;
+  chimera_task_t *task = current_task();
+  chimera_proc_t *proc = task ? task->ta_proc : nullptr;
   if (!proc)
     return -1;
 
-  xiu_fileproc_t *fp = proc_fd_lookup(proc, fd);
+  chimera_fileproc_t *fp = proc_fd_lookup(proc, fd);
   if (!fp)
     return -1;
 
@@ -1581,9 +1648,10 @@ static i64 sys_ioctl(u64 fd_u, u64 cmd, u64 arg, u64 a4, u64 a5, u64 a6) {
     return -1;
   }
 
-  xiu_error_t err = vp->v_op->vop_ioctl(vp, cmd, (xiu_vaddr_t)arg, nullptr);
+  chimera_error_t err =
+      vp->v_op->vop_ioctl(vp, cmd, (chimera_vaddr_t)arg, nullptr);
   fp_release(fp);
-  return (err == XIU_SUCCESS) ? 0 : -1;
+  return (err == CHIMERA_SUCCESS) ? 0 : -1;
 }
 
 static i64 sys_stat(u64 path, u64 statbuf, u64 a3, u64 a4, u64 a5, u64 a6) {
@@ -1592,20 +1660,20 @@ static i64 sys_stat(u64 path, u64 statbuf, u64 a3, u64 a4, u64 a5, u64 a6) {
   (void)a5;
   (void)a6;
   char kpath[256];
-  if (copyin((const void *)path, kpath, sizeof(kpath)) != XIU_SUCCESS)
+  if (copyin((const void *)path, kpath, sizeof(kpath)) != CHIMERA_SUCCESS)
     return -1;
   kpath[sizeof(kpath) - 1] = '\0';
 
-  xiu_task_t *task = current_task();
-  xiu_proc_t *proc = task ? task->ta_proc : nullptr;
+  chimera_task_t *task = current_task();
+  chimera_proc_t *proc = task ? task->ta_proc : nullptr;
   char norm_path[256];
   resolve_relative_path(proc, kpath, norm_path, sizeof(norm_path));
 
   vnode_t *vp = nullptr;
-  if (vfs_lookup(norm_path, &vp) != XIU_SUCCESS || !vp)
+  if (vfs_lookup(norm_path, &vp) != CHIMERA_SUCCESS || !vp)
     return -1;
 
-  xiu_user_stat_t st;
+  chimera_user_stat_t st;
   __builtin_memset(&st, 0, sizeof(st));
   st.st_dev = 1;
   st.st_mode = vnode_mode(vp);
@@ -1617,7 +1685,8 @@ static i64 sys_stat(u64 path, u64 statbuf, u64 a3, u64 a4, u64 a5, u64 a6) {
   st.st_size = (i64)vp->v_attr.va_size;
   st.st_blksize = 4096;
   st.st_blocks = (st.st_size + 511) / 512;
-  return (copyout(&st, (void *)statbuf, sizeof(st)) == XIU_SUCCESS) ? 0 : -1;
+  return (copyout(&st, (void *)statbuf, sizeof(st)) == CHIMERA_SUCCESS) ? 0
+                                                                        : -1;
 }
 
 static i64 sys_getcwd(u64 buf, u64 size, u64 a3, u64 a4, u64 a5, u64 a6) {
@@ -1628,11 +1697,11 @@ static i64 sys_getcwd(u64 buf, u64 size, u64 a3, u64 a4, u64 a5, u64 a6) {
   if (!buf || size < 2)
     return -1;
 
-  xiu_task_t *task = current_task();
-  xiu_proc_t *proc = task ? task->ta_proc : nullptr;
+  chimera_task_t *task = current_task();
+  chimera_proc_t *proc = task ? task->ta_proc : nullptr;
   if (!proc || !proc->p_cwd) {
     const char cwd[] = "/";
-    return (copyout(cwd, (void *)buf, sizeof(cwd)) == XIU_SUCCESS) ? 0 : -1;
+    return (copyout(cwd, (void *)buf, sizeof(cwd)) == CHIMERA_SUCCESS) ? 0 : -1;
   }
 
   extern const char *vfs_path_for_vnode(vnode_t * vp);
@@ -1662,7 +1731,7 @@ static i64 sys_getcwd(u64 buf, u64 size, u64 a3, u64 a4, u64 a5, u64 a6) {
   usize len = __builtin_strlen(path) + 1;
   if (len > size)
     return -34; // erange
-  return (copyout(path, (void *)buf, len) == XIU_SUCCESS) ? 0 : -1;
+  return (copyout(path, (void *)buf, len) == CHIMERA_SUCCESS) ? 0 : -1;
 }
 
 static i64 sys_mkdir(u64 path_ptr, u64 mode, u64 a3, u64 a4, u64 a5, u64 a6) {
@@ -1674,16 +1743,16 @@ static i64 sys_mkdir(u64 path_ptr, u64 mode, u64 a3, u64 a4, u64 a5, u64 a6) {
   if (!path_ptr)
     return -1;
   const char *path = (const char *)path_ptr;
-  xiu_task_t *task = current_task();
-  xiu_proc_t *proc = task ? task->ta_proc : nullptr;
+  chimera_task_t *task = current_task();
+  chimera_proc_t *proc = task ? task->ta_proc : nullptr;
 
   char full_path[256];
   resolve_relative_path(proc, path, full_path, sizeof(full_path));
 
   vnode_t *out_vp = nullptr;
-  extern xiu_error_t fat32_create_dir(const char *path, vnode_t **out_vp);
-  xiu_error_t err = fat32_create_dir(full_path, &out_vp);
-  return (err == XIU_SUCCESS) ? 0 : -1;
+  extern chimera_error_t fat32_create_dir(const char *path, vnode_t **out_vp);
+  chimera_error_t err = fat32_create_dir(full_path, &out_vp);
+  return (err == CHIMERA_SUCCESS) ? 0 : -1;
 }
 
 static i64 sys_rmdir(u64 path_ptr, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
@@ -1695,15 +1764,15 @@ static i64 sys_rmdir(u64 path_ptr, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
   if (!path_ptr)
     return -1;
   const char *path = (const char *)path_ptr;
-  xiu_task_t *task = current_task();
-  xiu_proc_t *proc = task ? task->ta_proc : nullptr;
+  chimera_task_t *task = current_task();
+  chimera_proc_t *proc = task ? task->ta_proc : nullptr;
 
   char full_path[256];
   resolve_relative_path(proc, path, full_path, sizeof(full_path));
 
-  extern xiu_error_t fat32_unlink_file(const char *path);
-  xiu_error_t err = fat32_unlink_file(full_path);
-  return (err == XIU_SUCCESS) ? 0 : -1;
+  extern chimera_error_t fat32_unlink_file(const char *path);
+  chimera_error_t err = fat32_unlink_file(full_path);
+  return (err == CHIMERA_SUCCESS) ? 0 : -1;
 }
 
 static i64 sys_unlink(u64 path_ptr, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
@@ -1714,17 +1783,17 @@ static i64 sys_getdents(u64 fd, u64 buf, u64 count, u64 a4, u64 a5, u64 a6) {
   (void)a4;
   (void)a5;
   (void)a6;
-  if (count < sizeof(xiu_user_dirent_t))
+  if (count < sizeof(chimera_user_dirent_t))
     return -1;
 
-  xiu_task_t *task = current_task();
-  xiu_proc_t *proc = task ? task->ta_proc : nullptr;
+  chimera_task_t *task = current_task();
+  chimera_proc_t *proc = task ? task->ta_proc : nullptr;
   if (!proc) {
     kprintf("[sys_getdents] ERROR: no proc\n");
     return -1;
   }
 
-  xiu_fileproc_t *fp = proc_fd_lookup(proc, (int)fd);
+  chimera_fileproc_t *fp = proc_fd_lookup(proc, (int)fd);
   if (!fp) {
     kprintf("[sys_getdents] ERROR: fd %d not found\n", (int)fd);
     return -1;
@@ -1732,9 +1801,9 @@ static i64 sys_getdents(u64 fd, u64 buf, u64 count, u64 a4, u64 a5, u64 a6) {
 
   vnode_t *child = nullptr;
   char name[256];
-  xiu_error_t err = vfs_readdir_flat(fp->fp_vnode, (u32)fp->fp_offset, name,
-                                     sizeof(name), &child);
-  if (err != XIU_SUCCESS) {
+  chimera_error_t err = vfs_readdir_flat(fp->fp_vnode, (u32)fp->fp_offset, name,
+                                         sizeof(name), &child);
+  if (err != CHIMERA_SUCCESS) {
     fp_release(fp);
     return 0;
   }
@@ -1742,7 +1811,7 @@ static i64 sys_getdents(u64 fd, u64 buf, u64 count, u64 a4, u64 a5, u64 a6) {
   dprintf("[sys_getdents] fd=%d offset=%llu name='%s' buf=0x%llx\n", (int)fd,
           (unsigned long long)fp->fp_offset, name, (unsigned long long)buf);
 
-  xiu_user_dirent_t de;
+  chimera_user_dirent_t de;
   __builtin_memset(&de, 0, sizeof(de));
   de.d_ino = (u64)(uptr)child;
   de.d_seekoff = fp->fp_offset + 1;
@@ -1756,8 +1825,8 @@ static i64 sys_getdents(u64 fd, u64 buf, u64 count, u64 a4, u64 a5, u64 a6) {
   spinlock_unlock_irqrestore(&fp->fp_lock, irq);
   fp_release(fp);
 
-  xiu_error_t copy_err = copyout(&de, (void *)buf, sizeof(de));
-  if (copy_err != XIU_SUCCESS) {
+  chimera_error_t copy_err = copyout(&de, (void *)buf, sizeof(de));
+  if (copy_err != CHIMERA_SUCCESS) {
     kprintf("[sys_getdents] ERROR: copyout failed, err=%d\n", copy_err);
     return -1;
   }
@@ -1769,14 +1838,14 @@ static i64 sys_wait4(u64 pid_u, u64 status_ptr, u64 options, u64 rusage, u64 a5,
                      u64 a6) {
   (void)a5;
   (void)a6;
-  xiu_task_t *task = current_task();
-  xiu_proc_t *proc = task ? task->ta_proc : nullptr;
+  chimera_task_t *task = current_task();
+  chimera_proc_t *proc = task ? task->ta_proc : nullptr;
   if (!proc)
     return -1;
 
   extern void scheduler_yield(void);
-  extern int proc_has_children(xiu_proc_t * parent);
-  xiu_pid_t pid = (xiu_pid_t)pid_u;
+  extern int proc_has_children(chimera_proc_t * parent);
+  chimera_pid_t pid = (chimera_pid_t)pid_u;
 
   /* Check if this process has ANY children at all (not just exited ones).
    * If no children exist, return -ECHILD immediately instead of blocking
@@ -1786,12 +1855,12 @@ static i64 sys_wait4(u64 pid_u, u64 status_ptr, u64 options, u64 rusage, u64 a5,
   }
 
   for (;;) {
-    xiu_proc_t *child = proc_find_waitable_child(proc, pid);
+    chimera_proc_t *child = proc_find_waitable_child(proc, pid);
     if (child) {
       int status = (int)(child->p_exit_code << 8);
-      xiu_pid_t child_pid = child->p_pid;
+      chimera_pid_t child_pid = child->p_pid;
 
-      extern void proc_reap(xiu_proc_t * proc);
+      extern void proc_reap(chimera_proc_t * proc);
       proc_reap(child);
 
       if (status_ptr)
@@ -1833,7 +1902,7 @@ static i64 sys_yield(u64 a1, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
   return 0;
 }
 
-struct xiu_timespec {
+struct chimera_timespec {
   i64 tv_sec;
   i64 tv_nsec;
 };
@@ -1848,9 +1917,9 @@ static i64 sys_nanosleep(u64 req_ptr, u64 rem_ptr, u64 a3, u64 a4, u64 a5,
   if (!req_ptr)
     return -14; // EFAULT
 
-  struct xiu_timespec ts;
-  extern xiu_error_t copyin(const void *uaddr, void *kaddr, usize len);
-  if (copyin((const void *)req_ptr, &ts, sizeof(ts)) != XIU_SUCCESS) {
+  struct chimera_timespec ts;
+  extern chimera_error_t copyin(const void *uaddr, void *kaddr, usize len);
+  if (copyin((const void *)req_ptr, &ts, sizeof(ts)) != CHIMERA_SUCCESS) {
     return -14;
   }
 
@@ -1885,11 +1954,11 @@ typedef struct {
   char kernel_name[32];
   char architecture[16];
   char hostname[64];
-} xiu_sysinfo_t;
+} chimera_sysinfo_t;
 
 extern usize pmm_total_pages(void);
 extern usize pmm_free_pages(void);
-extern u32 g_cpu_count; // from kernel/xiu_kernel_main.c
+extern u32 g_cpu_count; // from kernel/chimera_kernel_main.c
 
 static i64 sys_sysinfo(u64 buf_ptr, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
   (void)a2;
@@ -1898,14 +1967,14 @@ static i64 sys_sysinfo(u64 buf_ptr, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
   (void)a5;
   (void)a6;
 
-  xiu_sysinfo_t info;
+  chimera_sysinfo_t info;
   __builtin_memset(&info, 0, sizeof(info));
 
   // get memory info from PMM
   usize total_pages = pmm_total_pages();
   usize free_pages = pmm_free_pages();
-  info.total_memory = total_pages * XIU_PAGE_SIZE;
-  info.free_memory = free_pages * XIU_PAGE_SIZE;
+  info.total_memory = total_pages * CHIMERA_PAGE_SIZE;
+  info.free_memory = free_pages * CHIMERA_PAGE_SIZE;
 
   // cpu count - real data from Limine SMP
   extern u32 smp_get_active_cpus(void);
@@ -1916,9 +1985,9 @@ static i64 sys_sysinfo(u64 buf_ptr, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
   info.uptime_seconds = (u32)timer_get_uptime_seconds();
 
   // os information
-  const char *os_name = "XIU Operating System";
+  const char *os_name = "Chimera Operating System";
   const char *os_version = "0.1.0";
-  const char *kernel_name = "XIU Mach-BSD Hybrid";
+  const char *kernel_name = "Chimera Mach-BSD Hybrid";
   const char *architecture = "x86_64";
   const char *hostname = "xiu-system";
 
@@ -1935,8 +2004,8 @@ static i64 sys_sysinfo(u64 buf_ptr, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
     info.hostname[i] = hostname[i];
 
   // copy to user space
-  xiu_error_t err = copyout(&info, (void *)buf_ptr, sizeof(info));
-  if (err != XIU_SUCCESS) {
+  chimera_error_t err = copyout(&info, (void *)buf_ptr, sizeof(info));
+  if (err != CHIMERA_SUCCESS) {
     kprintf("[sys_sysinfo] copyout failed\n");
     return -1;
   }
@@ -1951,10 +2020,10 @@ typedef struct {
   u32 state;
   u32 thread_count;
   char name[32];
-} xiu_procinfo_t;
+} chimera_procinfo_t;
 
 #define PROC_POOL_SIZE 64
-extern xiu_proc_t *proc_kernel;
+extern chimera_proc_t *proc_kernel;
 
 static i64 sys_proclist(u64 buf_ptr, u64 max_count, u64 a3, u64 a4, u64 a5,
                         u64 a6) {
@@ -1967,16 +2036,16 @@ static i64 sys_proclist(u64 buf_ptr, u64 max_count, u64 a3, u64 a4, u64 a5,
     max_count = PROC_POOL_SIZE;
   }
 
-  xiu_procinfo_t *user_buf = (xiu_procinfo_t *)buf_ptr;
+  chimera_procinfo_t *user_buf = (chimera_procinfo_t *)buf_ptr;
   u32 count = 0;
 
   // iterate through process pool
-  extern xiu_proc_t s_proc_pool[];
-  extern xiu_proc_t s_kernel_proc_obj;
+  extern chimera_proc_t s_proc_pool[];
+  extern chimera_proc_t s_kernel_proc_obj;
 
   // add kernel process first
   if (count < max_count && proc_kernel) {
-    xiu_procinfo_t info;
+    chimera_procinfo_t info;
     __builtin_memset(&info, 0, sizeof(info));
     info.pid = proc_kernel->p_pid;
     info.ppid = 0;
@@ -1991,18 +2060,18 @@ static i64 sys_proclist(u64 buf_ptr, u64 max_count, u64 a3, u64 a4, u64 a5,
     }
     info.name[31] = '\0';
 
-    xiu_error_t err = copyout(&info, &user_buf[count], sizeof(info));
-    if (err == XIU_SUCCESS)
+    chimera_error_t err = copyout(&info, &user_buf[count], sizeof(info));
+    if (err == CHIMERA_SUCCESS)
       count++;
   }
 
   // add user processes
   for (u32 i = 0; i < PROC_POOL_SIZE && count < max_count; i++) {
-    xiu_proc_t *p = &s_proc_pool[i];
-    if (p->p_signature != XIU_PROC_MAGIC)
+    chimera_proc_t *p = &s_proc_pool[i];
+    if (p->p_signature != CHIMERA_PROC_MAGIC)
       continue;
 
-    xiu_procinfo_t info;
+    chimera_procinfo_t info;
     __builtin_memset(&info, 0, sizeof(info));
     info.pid = p->p_pid;
     info.ppid = p->p_ppid;
@@ -2016,8 +2085,8 @@ static i64 sys_proclist(u64 buf_ptr, u64 max_count, u64 a3, u64 a4, u64 a5,
     }
     info.name[31] = '\0';
 
-    xiu_error_t err = copyout(&info, &user_buf[count], sizeof(info));
-    if (err == XIU_SUCCESS)
+    chimera_error_t err = copyout(&info, &user_buf[count], sizeof(info));
+    if (err == CHIMERA_SUCCESS)
       count++;
   }
 
@@ -2029,21 +2098,39 @@ static i64 sys_kill(u64 pid_u, u64 sig_u, u64 a3, u64 a4, u64 a5, u64 a6) {
   (void)a4;
   (void)a5;
   (void)a6;
-  xiu_pid_t pid = (xiu_pid_t)pid_u;
+  chimera_pid_t pid = (chimera_pid_t)pid_u;
   int sig = (int)sig_u;
   if (sig <= 0 || sig >= 32)
     return -22; // einval
 
-  xiu_proc_t *target = proc_find_by_pid(pid);
+  chimera_task_t *cur_t = current_task();
+  chimera_proc_t *cur_p = cur_t ? cur_t->ta_proc : nullptr;
+  if (!cur_p)
+    return -1;
+
+  if (pid == 0)
+    return -1; // Cannot signal kernel proc (PID 0)
+
+  chimera_proc_t *target = proc_find_by_pid(pid);
   if (!target)
     return -3; // esrch
 
-  extern xiu_error_t proc_signal(xiu_proc_t * proc, int sig);
+  if (pid == 1 && (sig == 9 || sig == 15 || sig == 19)) {
+    return -1; // launchd cannot be killed
+  }
+
+  // Privilege check: caller must be root (euid==0) or share real/effective UID
+  if (cur_p->p_euid != 0 && cur_p->p_euid != target->p_euid &&
+      cur_p->p_uid != target->p_uid) {
+    return -1; // EPERM
+  }
+
+  extern chimera_error_t proc_signal(chimera_proc_t * proc, int sig);
   proc_signal(target, sig);
   return 0;
 }
 
-struct xiu_sigaction_layout {
+struct chimera_sigaction_layout {
   void (*sa_handler)(int);
   u32 sa_mask;
   int sa_flags;
@@ -2059,15 +2146,15 @@ static i64 sys_sigaction(u64 signum_u, u64 act_ptr, u64 oldact_ptr, u64 a4,
     return -22;
   }
 
-  xiu_task_t *task = current_task();
-  xiu_proc_t *proc = task ? task->ta_proc : nullptr;
+  chimera_task_t *task = current_task();
+  chimera_proc_t *proc = task ? task->ta_proc : nullptr;
   if (!proc)
     return -1;
 
   irq_flags_t irq = spinlock_lock_irqsave(&proc->p_lock);
 
   if (oldact_ptr) {
-    struct xiu_sigaction_layout old;
+    struct chimera_sigaction_layout old;
     old.sa_handler = (void (*)(int))proc->p_sigacts[sig];
     old.sa_flags = (int)proc->p_sigact_flags[sig];
     old.sa_mask = proc->p_sigact_mask[sig];
@@ -2077,9 +2164,9 @@ static i64 sys_sigaction(u64 signum_u, u64 act_ptr, u64 oldact_ptr, u64 a4,
   }
 
   if (act_ptr) {
-    struct xiu_sigaction_layout act;
+    struct chimera_sigaction_layout act;
     spinlock_unlock_irqrestore(&proc->p_lock, irq);
-    if (copyin((const void *)act_ptr, &act, sizeof(act)) == XIU_SUCCESS) {
+    if (copyin((const void *)act_ptr, &act, sizeof(act)) == CHIMERA_SUCCESS) {
       irq = spinlock_lock_irqsave(&proc->p_lock);
       proc->p_sigacts[sig] = (u64)act.sa_handler;
       proc->p_sigact_flags[sig] = (u32)act.sa_flags;
@@ -2098,8 +2185,8 @@ static i64 sys_sigprocmask(u64 how_u, u64 set_ptr, u64 oldset_ptr, u64 a4,
   (void)a4;
   (void)a5;
   (void)a6;
-  xiu_task_t *task = current_task();
-  xiu_proc_t *proc = task ? task->ta_proc : nullptr;
+  chimera_task_t *task = current_task();
+  chimera_proc_t *proc = task ? task->ta_proc : nullptr;
   if (!proc)
     return -1;
 
@@ -2114,7 +2201,7 @@ static i64 sys_sigprocmask(u64 how_u, u64 set_ptr, u64 oldset_ptr, u64 a4,
   if (set_ptr) {
     u32 set = 0;
     spinlock_unlock_irqrestore(&proc->p_lock, irq);
-    if (copyin((const void *)set_ptr, &set, sizeof(u32)) == XIU_SUCCESS) {
+    if (copyin((const void *)set_ptr, &set, sizeof(u32)) == CHIMERA_SUCCESS) {
       set &= ~((1U << 9) | (1U << 19)); // cannot mask SIGKILL or SIGSTOP
       irq = spinlock_lock_irqsave(&proc->p_lock);
       int how = (int)how_u;
@@ -2138,17 +2225,17 @@ static i64 sys_socket(u64 dom, u64 type, u64 proto, u64 a4, u64 a5, u64 a6) {
   (void)a4;
   (void)a5;
   (void)a6;
-  xiu_task_t *task = current_task();
-  xiu_proc_t *proc = task ? task->ta_proc : nullptr;
+  chimera_task_t *task = current_task();
+  chimera_proc_t *proc = task ? task->ta_proc : nullptr;
   if (!proc)
     return -1;
 
   socket_t *so = nullptr;
-  xiu_error_t err = socreate((int)dom, &so, (int)type, (int)proto);
-  if (err != XIU_SUCCESS || !so)
+  chimera_error_t err = socreate((int)dom, &so, (int)type, (int)proto);
+  if (err != CHIMERA_SUCCESS || !so)
     return -1;
 
-  xiu_fileproc_t *fp = fp_alloc_socket(so, FP_READABLE | FP_WRITABLE);
+  chimera_fileproc_t *fp = fp_alloc_socket(so, FP_READABLE | FP_WRITABLE);
   if (!fp) {
     soclose(so);
     return -1;
@@ -2167,12 +2254,12 @@ static i64 sys_bind(u64 fd_u, u64 addr_ptr, u64 addrlen, u64 a4, u64 a5,
   (void)a4;
   (void)a5;
   (void)a6;
-  xiu_task_t *task = current_task();
-  xiu_proc_t *proc = task ? task->ta_proc : nullptr;
+  chimera_task_t *task = current_task();
+  chimera_proc_t *proc = task ? task->ta_proc : nullptr;
   if (!proc)
     return -1;
 
-  xiu_fileproc_t *fp = proc_fd_lookup(proc, (int)fd_u);
+  chimera_fileproc_t *fp = proc_fd_lookup(proc, (int)fd_u);
   if (!fp)
     return -1;
   if (fp->fp_type != DTYPE_SOCKET || !fp->fp_socket) {
@@ -2182,14 +2269,14 @@ static i64 sys_bind(u64 fd_u, u64 addr_ptr, u64 addrlen, u64 a4, u64 a5,
 
   struct sockaddr_in sin;
   if (addrlen < sizeof(struct sockaddr_in) ||
-      copyin((const void *)addr_ptr, &sin, sizeof(sin)) != XIU_SUCCESS) {
+      copyin((const void *)addr_ptr, &sin, sizeof(sin)) != CHIMERA_SUCCESS) {
     fp_release(fp);
     return -1;
   }
 
-  xiu_error_t err = sobind(fp->fp_socket, (struct sockaddr *)&sin);
+  chimera_error_t err = sobind(fp->fp_socket, (struct sockaddr *)&sin);
   fp_release(fp);
-  return (err == XIU_SUCCESS) ? 0 : -1;
+  return (err == CHIMERA_SUCCESS) ? 0 : -1;
 }
 
 static i64 sys_connect(u64 fd_u, u64 addr_ptr, u64 addrlen, u64 a4, u64 a5,
@@ -2197,12 +2284,12 @@ static i64 sys_connect(u64 fd_u, u64 addr_ptr, u64 addrlen, u64 a4, u64 a5,
   (void)a4;
   (void)a5;
   (void)a6;
-  xiu_task_t *task = current_task();
-  xiu_proc_t *proc = task ? task->ta_proc : nullptr;
+  chimera_task_t *task = current_task();
+  chimera_proc_t *proc = task ? task->ta_proc : nullptr;
   if (!proc)
     return -1;
 
-  xiu_fileproc_t *fp = proc_fd_lookup(proc, (int)fd_u);
+  chimera_fileproc_t *fp = proc_fd_lookup(proc, (int)fd_u);
   if (!fp)
     return -1;
   if (fp->fp_type != DTYPE_SOCKET || !fp->fp_socket) {
@@ -2212,14 +2299,14 @@ static i64 sys_connect(u64 fd_u, u64 addr_ptr, u64 addrlen, u64 a4, u64 a5,
 
   struct sockaddr_in sin;
   if (addrlen < sizeof(struct sockaddr_in) ||
-      copyin((const void *)addr_ptr, &sin, sizeof(sin)) != XIU_SUCCESS) {
+      copyin((const void *)addr_ptr, &sin, sizeof(sin)) != CHIMERA_SUCCESS) {
     fp_release(fp);
     return -1;
   }
 
-  xiu_error_t err = soconnect(fp->fp_socket, (struct sockaddr *)&sin);
+  chimera_error_t err = soconnect(fp->fp_socket, (struct sockaddr *)&sin);
   fp_release(fp);
-  return (err == XIU_SUCCESS) ? 0 : -1;
+  return (err == CHIMERA_SUCCESS) ? 0 : -1;
 }
 
 static i64 sys_listen(u64 fd_u, u64 backlog, u64 a3, u64 a4, u64 a5, u64 a6) {
@@ -2227,12 +2314,12 @@ static i64 sys_listen(u64 fd_u, u64 backlog, u64 a3, u64 a4, u64 a5, u64 a6) {
   (void)a4;
   (void)a5;
   (void)a6;
-  xiu_task_t *task = current_task();
-  xiu_proc_t *proc = task ? task->ta_proc : nullptr;
+  chimera_task_t *task = current_task();
+  chimera_proc_t *proc = task ? task->ta_proc : nullptr;
   if (!proc)
     return -1;
 
-  xiu_fileproc_t *fp = proc_fd_lookup(proc, (int)fd_u);
+  chimera_fileproc_t *fp = proc_fd_lookup(proc, (int)fd_u);
   if (!fp)
     return -1;
   if (fp->fp_type != DTYPE_SOCKET || !fp->fp_socket) {
@@ -2240,9 +2327,9 @@ static i64 sys_listen(u64 fd_u, u64 backlog, u64 a3, u64 a4, u64 a5, u64 a6) {
     return -1;
   }
 
-  xiu_error_t err = solisten(fp->fp_socket, (int)backlog);
+  chimera_error_t err = solisten(fp->fp_socket, (int)backlog);
   fp_release(fp);
-  return (err == XIU_SUCCESS) ? 0 : -1;
+  return (err == CHIMERA_SUCCESS) ? 0 : -1;
 }
 
 static i64 sys_accept(u64 fd_u, u64 addr_out, u64 addrlen_out, u64 a4, u64 a5,
@@ -2252,12 +2339,12 @@ static i64 sys_accept(u64 fd_u, u64 addr_out, u64 addrlen_out, u64 a4, u64 a5,
   (void)a4;
   (void)a5;
   (void)a6;
-  xiu_task_t *task = current_task();
-  xiu_proc_t *proc = task ? task->ta_proc : nullptr;
+  chimera_task_t *task = current_task();
+  chimera_proc_t *proc = task ? task->ta_proc : nullptr;
   if (!proc)
     return -1;
 
-  xiu_fileproc_t *fp = proc_fd_lookup(proc, (int)fd_u);
+  chimera_fileproc_t *fp = proc_fd_lookup(proc, (int)fd_u);
   if (!fp)
     return -1;
   fp_release(fp);
@@ -2266,12 +2353,12 @@ static i64 sys_accept(u64 fd_u, u64 addr_out, u64 addrlen_out, u64 a4, u64 a5,
 
 static i64 sys_sendto(u64 fd_u, u64 buf_ptr, u64 len, u64 flags_u, u64 dest_ptr,
                       u64 addrlen) {
-  xiu_task_t *task = current_task();
-  xiu_proc_t *proc = task ? task->ta_proc : nullptr;
+  chimera_task_t *task = current_task();
+  chimera_proc_t *proc = task ? task->ta_proc : nullptr;
   if (!proc)
     return -1;
 
-  xiu_fileproc_t *fp = proc_fd_lookup(proc, (int)fd_u);
+  chimera_fileproc_t *fp = proc_fd_lookup(proc, (int)fd_u);
   if (!fp)
     return -1;
   if (fp->fp_type != DTYPE_SOCKET || !fp->fp_socket) {
@@ -2281,7 +2368,7 @@ static i64 sys_sendto(u64 fd_u, u64 buf_ptr, u64 len, u64 flags_u, u64 dest_ptr,
 
   char kbuf[1500];
   usize clen = (len > sizeof(kbuf)) ? sizeof(kbuf) : len;
-  if (copyin((const void *)buf_ptr, kbuf, clen) != XIU_SUCCESS) {
+  if (copyin((const void *)buf_ptr, kbuf, clen) != CHIMERA_SUCCESS) {
     fp_release(fp);
     return -1;
   }
@@ -2289,26 +2376,27 @@ static i64 sys_sendto(u64 fd_u, u64 buf_ptr, u64 len, u64 flags_u, u64 dest_ptr,
   struct sockaddr_in sin;
   struct sockaddr *saddr_ptr = nullptr;
   if (dest_ptr && addrlen >= sizeof(sin)) {
-    if (copyin((const void *)dest_ptr, &sin, sizeof(sin)) == XIU_SUCCESS) {
+    if (copyin((const void *)dest_ptr, &sin, sizeof(sin)) == CHIMERA_SUCCESS) {
       saddr_ptr = (struct sockaddr *)&sin;
     }
   }
 
-  xiu_error_t err = sosend(fp->fp_socket, saddr_ptr, kbuf, clen, (int)flags_u);
+  chimera_error_t err =
+      sosend(fp->fp_socket, saddr_ptr, kbuf, clen, (int)flags_u);
   fp_release(fp);
-  return (err == XIU_SUCCESS) ? (i64)clen : -1;
+  return (err == CHIMERA_SUCCESS) ? (i64)clen : -1;
 }
 
 static i64 sys_recvfrom(u64 fd_u, u64 buf_ptr, u64 len, u64 flags_u,
                         u64 src_ptr, u64 addrlen_ptr) {
   (void)src_ptr;
   (void)addrlen_ptr;
-  xiu_task_t *task = current_task();
-  xiu_proc_t *proc = task ? task->ta_proc : nullptr;
+  chimera_task_t *task = current_task();
+  chimera_proc_t *proc = task ? task->ta_proc : nullptr;
   if (!proc)
     return -1;
 
-  xiu_fileproc_t *fp = proc_fd_lookup(proc, (int)fd_u);
+  chimera_fileproc_t *fp = proc_fd_lookup(proc, (int)fd_u);
   if (!fp)
     return -1;
   if (fp->fp_type != DTYPE_SOCKET || !fp->fp_socket) {
@@ -2319,13 +2407,13 @@ static i64 sys_recvfrom(u64 fd_u, u64 buf_ptr, u64 len, u64 flags_u,
   char kbuf[1500];
   usize clen = (len > sizeof(kbuf)) ? sizeof(kbuf) : len;
   usize bytes_read = 0;
-  xiu_error_t err =
+  chimera_error_t err =
       soreceive(fp->fp_socket, nullptr, kbuf, clen, &bytes_read, (int)flags_u);
-  if (err == XIU_SUCCESS && bytes_read > 0) {
+  if (err == CHIMERA_SUCCESS && bytes_read > 0) {
     copyout(kbuf, (void *)buf_ptr, bytes_read);
   }
   fp_release(fp);
-  return (err == XIU_SUCCESS) ? (i64)bytes_read : -1;
+  return (err == CHIMERA_SUCCESS) ? (i64)bytes_read : -1;
 }
 
 static i64 sys_shutdown(u64 fd_u, u64 how, u64 a3, u64 a4, u64 a5, u64 a6) {
@@ -2333,12 +2421,12 @@ static i64 sys_shutdown(u64 fd_u, u64 how, u64 a3, u64 a4, u64 a5, u64 a6) {
   (void)a4;
   (void)a5;
   (void)a6;
-  xiu_task_t *task = current_task();
-  xiu_proc_t *proc = task ? task->ta_proc : nullptr;
+  chimera_task_t *task = current_task();
+  chimera_proc_t *proc = task ? task->ta_proc : nullptr;
   if (!proc)
     return -1;
 
-  xiu_fileproc_t *fp = proc_fd_lookup(proc, (int)fd_u);
+  chimera_fileproc_t *fp = proc_fd_lookup(proc, (int)fd_u);
   if (!fp)
     return -1;
   if (fp->fp_type != DTYPE_SOCKET || !fp->fp_socket) {
@@ -2346,20 +2434,20 @@ static i64 sys_shutdown(u64 fd_u, u64 how, u64 a3, u64 a4, u64 a5, u64 a6) {
     return -1;
   }
 
-  xiu_error_t err = soshutdown(fp->fp_socket, (int)how);
+  chimera_error_t err = soshutdown(fp->fp_socket, (int)how);
   fp_release(fp);
-  return (err == XIU_SUCCESS) ? 0 : -1;
+  return (err == CHIMERA_SUCCESS) ? 0 : -1;
 }
 
 static i64 sys_setsockopt(u64 fd_u, u64 level, u64 optname, u64 optval,
                           u64 optlen, u64 a6) {
   (void)a6;
-  xiu_task_t *task = current_task();
-  xiu_proc_t *proc = task ? task->ta_proc : nullptr;
+  chimera_task_t *task = current_task();
+  chimera_proc_t *proc = task ? task->ta_proc : nullptr;
   if (!proc)
     return -1;
 
-  xiu_fileproc_t *fp = proc_fd_lookup(proc, (int)fd_u);
+  chimera_fileproc_t *fp = proc_fd_lookup(proc, (int)fd_u);
   if (!fp)
     return -9; // EBADF
   if (fp->fp_type != DTYPE_SOCKET || !fp->fp_socket) {
@@ -2373,20 +2461,20 @@ static i64 sys_setsockopt(u64 fd_u, u64 level, u64 optname, u64 optval,
   }
 
   u8 koptbuf[256];
-  if (copyin((const void *)optval, koptbuf, (usize)optlen) != XIU_SUCCESS) {
+  if (copyin((const void *)optval, koptbuf, (usize)optlen) != CHIMERA_SUCCESS) {
     fp_release(fp);
     return -14; // EFAULT
   }
 
-  extern xiu_error_t sosetopt(socket_t * so, int level, int optname,
-                              const void *optval, usize optlen);
-  xiu_error_t err =
+  extern chimera_error_t sosetopt(socket_t * so, int level, int optname,
+                                  const void *optval, usize optlen);
+  chimera_error_t err =
       sosetopt(fp->fp_socket, (int)level, (int)optname, koptbuf, (usize)optlen);
   fp_release(fp);
 
-  if (err == XIU_SUCCESS)
+  if (err == CHIMERA_SUCCESS)
     return 0;
-  if (err == XIU_ERR_NOTSUP)
+  if (err == CHIMERA_ERR_NOTSUP)
     return -92; // ENOPROTOOPT
   return -22;   // EINVAL
 }
@@ -2394,12 +2482,12 @@ static i64 sys_setsockopt(u64 fd_u, u64 level, u64 optname, u64 optval,
 static i64 sys_getsockopt(u64 fd_u, u64 level, u64 optname, u64 optval,
                           u64 optlen_ptr, u64 a6) {
   (void)a6;
-  xiu_task_t *task = current_task();
-  xiu_proc_t *proc = task ? task->ta_proc : nullptr;
+  chimera_task_t *task = current_task();
+  chimera_proc_t *proc = task ? task->ta_proc : nullptr;
   if (!proc)
     return -1;
 
-  xiu_fileproc_t *fp = proc_fd_lookup(proc, (int)fd_u);
+  chimera_fileproc_t *fp = proc_fd_lookup(proc, (int)fd_u);
   if (!fp)
     return -9; // EBADF
   if (fp->fp_type != DTYPE_SOCKET || !fp->fp_socket) {
@@ -2413,7 +2501,7 @@ static i64 sys_getsockopt(u64 fd_u, u64 level, u64 optname, u64 optval,
   }
 
   u32 ulen = 0;
-  if (copyin((const void *)optlen_ptr, &ulen, sizeof(u32)) != XIU_SUCCESS) {
+  if (copyin((const void *)optlen_ptr, &ulen, sizeof(u32)) != CHIMERA_SUCCESS) {
     fp_release(fp);
     return -14; // EFAULT
   }
@@ -2425,22 +2513,22 @@ static i64 sys_getsockopt(u64 fd_u, u64 level, u64 optname, u64 optval,
 
   u8 koptbuf[256];
   usize optlen = (usize)ulen;
-  extern xiu_error_t sogetopt(socket_t * so, int level, int optname,
-                              void *optval, usize *optlen);
-  xiu_error_t err =
+  extern chimera_error_t sogetopt(socket_t * so, int level, int optname,
+                                  void *optval, usize *optlen);
+  chimera_error_t err =
       sogetopt(fp->fp_socket, (int)level, (int)optname, koptbuf, &optlen);
   fp_release(fp);
 
-  if (err != XIU_SUCCESS) {
-    if (err == XIU_ERR_NOTSUP)
+  if (err != CHIMERA_SUCCESS) {
+    if (err == CHIMERA_ERR_NOTSUP)
       return -92; // ENOPROTOOPT
     return -22;   // EINVAL
   }
 
-  if (copyout(koptbuf, (void *)optval, optlen) != XIU_SUCCESS)
+  if (copyout(koptbuf, (void *)optval, optlen) != CHIMERA_SUCCESS)
     return -14;
   u32 final_len = (u32)optlen;
-  if (copyout(&final_len, (void *)optlen_ptr, sizeof(u32)) != XIU_SUCCESS)
+  if (copyout(&final_len, (void *)optlen_ptr, sizeof(u32)) != CHIMERA_SUCCESS)
     return -14;
 
   return 0;
@@ -2453,13 +2541,13 @@ static i64 sys_access(u64 path_ptr, u64 mode, u64 a3, u64 a4, u64 a5, u64 a6) {
   (void)a4;
   (void)a5;
   (void)a6;
-  xiu_task_t *task = current_task();
-  xiu_proc_t *proc = task ? task->ta_proc : nullptr;
+  chimera_task_t *task = current_task();
+  chimera_proc_t *proc = task ? task->ta_proc : nullptr;
   if (!proc || !path_ptr)
     return -14; // EFAULT
 
   char path[256];
-  if (copyin((const void *)path_ptr, path, sizeof(path)) != XIU_SUCCESS)
+  if (copyin((const void *)path_ptr, path, sizeof(path)) != CHIMERA_SUCCESS)
     return -14;
   path[sizeof(path) - 1] = '\0';
 
@@ -2467,7 +2555,7 @@ static i64 sys_access(u64 path_ptr, u64 mode, u64 a3, u64 a4, u64 a5, u64 a6) {
   resolve_relative_path(proc, path, norm_path, sizeof(norm_path));
 
   vnode_t *vp = nullptr;
-  if (vfs_lookup(norm_path, &vp) != XIU_SUCCESS || !vp) {
+  if (vfs_lookup(norm_path, &vp) != CHIMERA_SUCCESS || !vp) {
     return -2; // ENOENT
   }
 
@@ -2521,12 +2609,12 @@ static i64 sys_dup(u64 fd_u, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
   (void)a5;
   (void)a6;
   int fd = (int)fd_u;
-  xiu_task_t *task = current_task();
-  xiu_proc_t *proc = task ? task->ta_proc : nullptr;
-  if (!proc || fd < 0 || fd >= XIU_PROC_MAX_FDS)
+  chimera_task_t *task = current_task();
+  chimera_proc_t *proc = task ? task->ta_proc : nullptr;
+  if (!proc || fd < 0 || fd >= CHIMERA_PROC_MAX_FDS)
     return -9; // EBADF
 
-  xiu_fileproc_t *fp = proc_fd_lookup(proc, fd);
+  chimera_fileproc_t *fp = proc_fd_lookup(proc, fd);
   if (!fp)
     return -9;
 
@@ -2535,7 +2623,7 @@ static i64 sys_dup(u64 fd_u, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
   return (newfd >= 0) ? (i64)newfd : -24; // EMFILE
 }
 
-struct xiu_iovec {
+struct chimera_iovec {
   u64 iov_base;
   u64 iov_len;
 };
@@ -2548,10 +2636,10 @@ static i64 sys_readv(u64 fd_u, u64 iov_ptr, u64 iovcnt_u, u64 a4, u64 a5,
   if (!iov_ptr || iovcnt_u == 0 || iovcnt_u > 1024)
     return -22; // EINVAL
 
-  struct xiu_iovec iov[16];
+  struct chimera_iovec iov[16];
   usize cnt = (iovcnt_u > 16) ? 16 : (usize)iovcnt_u;
-  if (copyin((const void *)iov_ptr, iov, cnt * sizeof(struct xiu_iovec)) !=
-      XIU_SUCCESS)
+  if (copyin((const void *)iov_ptr, iov, cnt * sizeof(struct chimera_iovec)) !=
+      CHIMERA_SUCCESS)
     return -14;
 
   i64 total = 0;
@@ -2579,10 +2667,10 @@ static i64 sys_writev(u64 fd_u, u64 iov_ptr, u64 iovcnt_u, u64 a4, u64 a5,
   if (!iov_ptr || iovcnt_u == 0 || iovcnt_u > 1024)
     return -22; // EINVAL
 
-  struct xiu_iovec iov[16];
+  struct chimera_iovec iov[16];
   usize cnt = (iovcnt_u > 16) ? 16 : (usize)iovcnt_u;
-  if (copyin((const void *)iov_ptr, iov, cnt * sizeof(struct xiu_iovec)) !=
-      XIU_SUCCESS)
+  if (copyin((const void *)iov_ptr, iov, cnt * sizeof(struct chimera_iovec)) !=
+      CHIMERA_SUCCESS)
     return -14;
 
   i64 total = 0;
@@ -2606,12 +2694,20 @@ static i64 sys_pread(u64 fd_u, u64 buf, u64 len, u64 offset_u, u64 a5, u64 a6) {
   (void)a5;
   (void)a6;
   int fd = (int)fd_u;
-  xiu_task_t *task = current_task();
-  xiu_proc_t *proc = task ? task->ta_proc : nullptr;
-  if (!proc || fd < 0 || fd >= XIU_PROC_MAX_FDS)
+
+  if (len > 0) {
+    if (buf == 0 || buf >= 0x0000800000000000ULL ||
+        (0x0000800000000000ULL - buf) < len) {
+      return -1;
+    }
+  }
+
+  chimera_task_t *task = current_task();
+  chimera_proc_t *proc = task ? task->ta_proc : nullptr;
+  if (!proc || fd < 0 || fd >= CHIMERA_PROC_MAX_FDS)
     return -9;
 
-  xiu_fileproc_t *fp = proc_fd_lookup(proc, fd);
+  chimera_fileproc_t *fp = proc_fd_lookup(proc, fd);
   if (!fp)
     return -9;
   vnode_t *vp = fp->fp_vnode;
@@ -2624,9 +2720,9 @@ static i64 sys_pread(u64 fd_u, u64 buf, u64 len, u64 offset_u, u64 a5, u64 a6) {
   uio.uio_buf = (void *)buf;
   uio.uio_resid = len;
   uio.uio_offset = offset_u;
-  xiu_error_t err = vp->v_op->vop_read(vp, &uio, 0, nullptr);
+  chimera_error_t err = vp->v_op->vop_read(vp, &uio, 0, nullptr);
   fp_release(fp);
-  return (err == XIU_SUCCESS) ? (i64)(len - uio.uio_resid) : -1;
+  return (err == CHIMERA_SUCCESS) ? (i64)(len - uio.uio_resid) : -1;
 }
 
 static i64 sys_pwrite(u64 fd_u, u64 buf, u64 len, u64 offset_u, u64 a5,
@@ -2634,12 +2730,20 @@ static i64 sys_pwrite(u64 fd_u, u64 buf, u64 len, u64 offset_u, u64 a5,
   (void)a5;
   (void)a6;
   int fd = (int)fd_u;
-  xiu_task_t *task = current_task();
-  xiu_proc_t *proc = task ? task->ta_proc : nullptr;
-  if (!proc || fd < 0 || fd >= XIU_PROC_MAX_FDS)
+
+  if (len > 0) {
+    if (buf == 0 || buf >= 0x0000800000000000ULL ||
+        (0x0000800000000000ULL - buf) < len) {
+      return -1;
+    }
+  }
+
+  chimera_task_t *task = current_task();
+  chimera_proc_t *proc = task ? task->ta_proc : nullptr;
+  if (!proc || fd < 0 || fd >= CHIMERA_PROC_MAX_FDS)
     return -9;
 
-  xiu_fileproc_t *fp = proc_fd_lookup(proc, fd);
+  chimera_fileproc_t *fp = proc_fd_lookup(proc, fd);
   if (!fp)
     return -9;
   vnode_t *vp = fp->fp_vnode;
@@ -2652,9 +2756,9 @@ static i64 sys_pwrite(u64 fd_u, u64 buf, u64 len, u64 offset_u, u64 a5,
   uio.uio_buf = (void *)buf;
   uio.uio_resid = len;
   uio.uio_offset = offset_u;
-  xiu_error_t err = vp->v_op->vop_write(vp, &uio, 0, nullptr);
+  chimera_error_t err = vp->v_op->vop_write(vp, &uio, 0, nullptr);
   fp_release(fp);
-  return (err == XIU_SUCCESS) ? (i64)(len - uio.uio_resid) : -1;
+  return (err == CHIMERA_SUCCESS) ? (i64)(len - uio.uio_resid) : -1;
 }
 
 static i64 sys_fstat(u64 fd_u, u64 statbuf, u64 a3, u64 a4, u64 a5, u64 a6) {
@@ -2663,16 +2767,16 @@ static i64 sys_fstat(u64 fd_u, u64 statbuf, u64 a3, u64 a4, u64 a5, u64 a6) {
   (void)a5;
   (void)a6;
   int fd = (int)fd_u;
-  xiu_task_t *task = current_task();
-  xiu_proc_t *proc = task ? task->ta_proc : nullptr;
-  if (!proc || fd < 0 || fd >= XIU_PROC_MAX_FDS || !statbuf)
+  chimera_task_t *task = current_task();
+  chimera_proc_t *proc = task ? task->ta_proc : nullptr;
+  if (!proc || fd < 0 || fd >= CHIMERA_PROC_MAX_FDS || !statbuf)
     return -9;
 
-  xiu_fileproc_t *fp = proc_fd_lookup(proc, fd);
+  chimera_fileproc_t *fp = proc_fd_lookup(proc, fd);
   if (!fp)
     return -9;
 
-  xiu_user_stat_t st;
+  chimera_user_stat_t st;
   __builtin_memset(&st, 0, sizeof(st));
   st.st_dev = 1;
   st.st_ino = (u64)((uptr)fp & 0xFFFFFFFFu);
@@ -2694,7 +2798,8 @@ static i64 sys_fstat(u64 fd_u, u64 statbuf, u64 a3, u64 a4, u64 a5, u64 a6) {
   }
 
   fp_release(fp);
-  return (copyout(&st, (void *)statbuf, sizeof(st)) == XIU_SUCCESS) ? 0 : -14;
+  return (copyout(&st, (void *)statbuf, sizeof(st)) == CHIMERA_SUCCESS) ? 0
+                                                                        : -14;
 }
 
 static i64 sys_chmod(u64 path_ptr, u64 mode, u64 a3, u64 a4, u64 a5, u64 a6) {
@@ -2702,17 +2807,17 @@ static i64 sys_chmod(u64 path_ptr, u64 mode, u64 a3, u64 a4, u64 a5, u64 a6) {
   (void)a4;
   (void)a5;
   (void)a6;
-  xiu_task_t *task = current_task();
-  xiu_proc_t *proc = task ? task->ta_proc : nullptr;
+  chimera_task_t *task = current_task();
+  chimera_proc_t *proc = task ? task->ta_proc : nullptr;
   if (!proc || !path_ptr)
     return -14;
   char path[256], norm[256];
-  if (copyin((const void *)path_ptr, path, sizeof(path)) != XIU_SUCCESS)
+  if (copyin((const void *)path_ptr, path, sizeof(path)) != CHIMERA_SUCCESS)
     return -14;
   path[sizeof(path) - 1] = '\0';
   resolve_relative_path(proc, path, norm, sizeof(norm));
   vnode_t *vp = nullptr;
-  if (vfs_lookup(norm, &vp) != XIU_SUCCESS || !vp)
+  if (vfs_lookup(norm, &vp) != CHIMERA_SUCCESS || !vp)
     return -2;
   vp->v_attr.va_mode = (u16)(mode & 0777);
   return 0;
@@ -2724,11 +2829,11 @@ static i64 sys_fchmod(u64 fd_u, u64 mode, u64 a3, u64 a4, u64 a5, u64 a6) {
   (void)a5;
   (void)a6;
   int fd = (int)fd_u;
-  xiu_task_t *task = current_task();
-  xiu_proc_t *proc = task ? task->ta_proc : nullptr;
-  if (!proc || fd < 0 || fd >= XIU_PROC_MAX_FDS)
+  chimera_task_t *task = current_task();
+  chimera_proc_t *proc = task ? task->ta_proc : nullptr;
+  if (!proc || fd < 0 || fd >= CHIMERA_PROC_MAX_FDS)
     return -9;
-  xiu_fileproc_t *fp = proc_fd_lookup(proc, fd);
+  chimera_fileproc_t *fp = proc_fd_lookup(proc, fd);
   if (!fp)
     return -9;
   if (fp->fp_vnode)
@@ -2741,20 +2846,20 @@ static i64 sys_chown(u64 path_ptr, u64 uid, u64 gid, u64 a4, u64 a5, u64 a6) {
   (void)a4;
   (void)a5;
   (void)a6;
-  xiu_task_t *task = current_task();
-  xiu_proc_t *proc = task ? task->ta_proc : nullptr;
+  chimera_task_t *task = current_task();
+  chimera_proc_t *proc = task ? task->ta_proc : nullptr;
   if (!proc || !path_ptr)
     return -14;
   char path[256], norm[256];
-  if (copyin((const void *)path_ptr, path, sizeof(path)) != XIU_SUCCESS)
+  if (copyin((const void *)path_ptr, path, sizeof(path)) != CHIMERA_SUCCESS)
     return -14;
   path[sizeof(path) - 1] = '\0';
   resolve_relative_path(proc, path, norm, sizeof(norm));
   vnode_t *vp = nullptr;
-  if (vfs_lookup(norm, &vp) != XIU_SUCCESS || !vp)
+  if (vfs_lookup(norm, &vp) != CHIMERA_SUCCESS || !vp)
     return -2;
-  vp->v_attr.va_uid = (xiu_uid_t)uid;
-  vp->v_attr.va_gid = (xiu_gid_t)gid;
+  vp->v_attr.va_uid = (chimera_uid_t)uid;
+  vp->v_attr.va_gid = (chimera_gid_t)gid;
   return 0;
 }
 
@@ -2763,16 +2868,16 @@ static i64 sys_fchown(u64 fd_u, u64 uid, u64 gid, u64 a4, u64 a5, u64 a6) {
   (void)a5;
   (void)a6;
   int fd = (int)fd_u;
-  xiu_task_t *task = current_task();
-  xiu_proc_t *proc = task ? task->ta_proc : nullptr;
-  if (!proc || fd < 0 || fd >= XIU_PROC_MAX_FDS)
+  chimera_task_t *task = current_task();
+  chimera_proc_t *proc = task ? task->ta_proc : nullptr;
+  if (!proc || fd < 0 || fd >= CHIMERA_PROC_MAX_FDS)
     return -9;
-  xiu_fileproc_t *fp = proc_fd_lookup(proc, fd);
+  chimera_fileproc_t *fp = proc_fd_lookup(proc, fd);
   if (!fp)
     return -9;
   if (fp->fp_vnode) {
-    fp->fp_vnode->v_attr.va_uid = (xiu_uid_t)uid;
-    fp->fp_vnode->v_attr.va_gid = (xiu_gid_t)gid;
+    fp->fp_vnode->v_attr.va_uid = (chimera_uid_t)uid;
+    fp->fp_vnode->v_attr.va_gid = (chimera_gid_t)gid;
   }
   fp_release(fp);
   return 0;
@@ -2784,13 +2889,13 @@ static i64 sys_truncate(u64 path_ptr, u64 length, u64 a3, u64 a4, u64 a5,
   (void)a4;
   (void)a5;
   (void)a6;
-  xiu_task_t *task = current_task();
-  xiu_proc_t *proc = task ? task->ta_proc : nullptr;
+  chimera_task_t *task = current_task();
+  chimera_proc_t *proc = task ? task->ta_proc : nullptr;
   if (!proc || !path_ptr)
     return -14;
 
   char path[256];
-  if (copyin((const void *)path_ptr, path, sizeof(path)) != XIU_SUCCESS)
+  if (copyin((const void *)path_ptr, path, sizeof(path)) != CHIMERA_SUCCESS)
     return -14;
   path[sizeof(path) - 1] = '\0';
 
@@ -2798,7 +2903,7 @@ static i64 sys_truncate(u64 path_ptr, u64 length, u64 a3, u64 a4, u64 a5,
   resolve_relative_path(proc, path, norm_path, sizeof(norm_path));
 
   vnode_t *vp = nullptr;
-  if (vfs_lookup(norm_path, &vp) != XIU_SUCCESS || !vp)
+  if (vfs_lookup(norm_path, &vp) != CHIMERA_SUCCESS || !vp)
     return -2;
 
   vp->v_attr.va_size = length;
@@ -2811,12 +2916,12 @@ static i64 sys_ftruncate(u64 fd_u, u64 length, u64 a3, u64 a4, u64 a5, u64 a6) {
   (void)a5;
   (void)a6;
   int fd = (int)fd_u;
-  xiu_task_t *task = current_task();
-  xiu_proc_t *proc = task ? task->ta_proc : nullptr;
-  if (!proc || fd < 0 || fd >= XIU_PROC_MAX_FDS)
+  chimera_task_t *task = current_task();
+  chimera_proc_t *proc = task ? task->ta_proc : nullptr;
+  if (!proc || fd < 0 || fd >= CHIMERA_PROC_MAX_FDS)
     return -9;
 
-  xiu_fileproc_t *fp = proc_fd_lookup(proc, fd);
+  chimera_fileproc_t *fp = proc_fd_lookup(proc, fd);
   if (!fp)
     return -9;
   if (fp->fp_vnode) {
@@ -2832,14 +2937,16 @@ static i64 sys_rename(u64 old_ptr, u64 new_ptr, u64 a3, u64 a4, u64 a5,
   (void)a4;
   (void)a5;
   (void)a6;
-  xiu_task_t *task = current_task();
-  xiu_proc_t *proc = task ? task->ta_proc : nullptr;
+  chimera_task_t *task = current_task();
+  chimera_proc_t *proc = task ? task->ta_proc : nullptr;
   if (!proc || !old_ptr || !new_ptr)
     return -14;
 
   char oldpath[256], newpath[256];
-  if (copyin((const void *)old_ptr, oldpath, sizeof(oldpath)) != XIU_SUCCESS ||
-      copyin((const void *)new_ptr, newpath, sizeof(newpath)) != XIU_SUCCESS)
+  if (copyin((const void *)old_ptr, oldpath, sizeof(oldpath)) !=
+          CHIMERA_SUCCESS ||
+      copyin((const void *)new_ptr, newpath, sizeof(newpath)) !=
+          CHIMERA_SUCCESS)
     return -14;
   oldpath[sizeof(oldpath) - 1] = '\0';
   newpath[sizeof(newpath) - 1] = '\0';
@@ -2848,9 +2955,10 @@ static i64 sys_rename(u64 old_ptr, u64 new_ptr, u64 a3, u64 a4, u64 a5,
   resolve_relative_path(proc, oldpath, norm_old, sizeof(norm_old));
   resolve_relative_path(proc, newpath, norm_new, sizeof(norm_new));
 
-  extern xiu_error_t vfs_rename_node(const char *oldpath, const char *newpath);
-  xiu_error_t err = vfs_rename_node(norm_old, norm_new);
-  if (err != XIU_SUCCESS)
+  extern chimera_error_t vfs_rename_node(const char *oldpath,
+                                         const char *newpath);
+  chimera_error_t err = vfs_rename_node(norm_old, norm_new);
+  if (err != CHIMERA_SUCCESS)
     return -2; // ENOENT
   return 0;
 }
@@ -2863,21 +2971,23 @@ static i64 sys_link(u64 old_ptr, u64 new_ptr, u64 a3, u64 a4, u64 a5, u64 a6) {
   if (!old_ptr || !new_ptr)
     return -14; // EFAULT
   char oldpath[256], newpath[256];
-  if (copyin((const void *)old_ptr, oldpath, sizeof(oldpath)) != XIU_SUCCESS ||
-      copyin((const void *)new_ptr, newpath, sizeof(newpath)) != XIU_SUCCESS)
+  if (copyin((const void *)old_ptr, oldpath, sizeof(oldpath)) !=
+          CHIMERA_SUCCESS ||
+      copyin((const void *)new_ptr, newpath, sizeof(newpath)) !=
+          CHIMERA_SUCCESS)
     return -14;
   oldpath[sizeof(oldpath) - 1] = '\0';
   newpath[sizeof(newpath) - 1] = '\0';
 
-  xiu_task_t *task = current_task();
-  xiu_proc_t *proc = task ? task->ta_proc : nullptr;
+  chimera_task_t *task = current_task();
+  chimera_proc_t *proc = task ? task->ta_proc : nullptr;
   if (!proc)
     return -1;
 
   char norm_old[256];
   resolve_relative_path(proc, oldpath, norm_old, sizeof(norm_old));
   vnode_t *vp = nullptr;
-  if (vfs_lookup(norm_old, &vp) != XIU_SUCCESS || !vp)
+  if (vfs_lookup(norm_old, &vp) != CHIMERA_SUCCESS || !vp)
     return -2; // ENOENT
 
   // FAT32 does not support hard links -> POSIX requires -EPERM or -ENOTSUP
@@ -2892,12 +3002,12 @@ static i64 sys_mknod(u64 path_ptr, u64 mode, u64 dev, u64 a4, u64 a5, u64 a6) {
   if (!path_ptr)
     return -14; // EFAULT
   char path[256];
-  if (copyin((const void *)path_ptr, path, sizeof(path)) != XIU_SUCCESS)
+  if (copyin((const void *)path_ptr, path, sizeof(path)) != CHIMERA_SUCCESS)
     return -14;
   path[sizeof(path) - 1] = '\0';
 
-  xiu_task_t *task = current_task();
-  xiu_proc_t *proc = task ? task->ta_proc : nullptr;
+  chimera_task_t *task = current_task();
+  chimera_proc_t *proc = task ? task->ta_proc : nullptr;
   if (!proc)
     return -1;
 
@@ -2918,12 +3028,12 @@ static i64 sys_fsync(u64 fd_u, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
   (void)a5;
   (void)a6;
   int fd = (int)fd_u;
-  xiu_task_t *task = current_task();
-  xiu_proc_t *proc = task ? task->ta_proc : nullptr;
-  if (!proc || fd < 0 || fd >= XIU_PROC_MAX_FDS)
+  chimera_task_t *task = current_task();
+  chimera_proc_t *proc = task ? task->ta_proc : nullptr;
+  if (!proc || fd < 0 || fd >= CHIMERA_PROC_MAX_FDS)
     return -9; // EBADF
 
-  xiu_fileproc_t *fp = proc_fd_lookup(proc, fd);
+  chimera_fileproc_t *fp = proc_fd_lookup(proc, fd);
   if (!fp)
     return -9;
 
@@ -2944,7 +3054,7 @@ static i64 sys_umask(u64 newmask, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
   (void)a4;
   (void)a5;
   (void)a6;
-  xiu_task_t *t = current_task();
+  chimera_task_t *t = current_task();
   if (!t || !t->ta_proc)
     return 022;
   u32 old = t->ta_proc->p_umask;
@@ -2959,7 +3069,7 @@ static i64 sys_getuid(u64 a1, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
   (void)a4;
   (void)a5;
   (void)a6;
-  xiu_task_t *t = current_task();
+  chimera_task_t *t = current_task();
   return (t && t->ta_proc) ? (i64)t->ta_proc->p_uid : 0;
 }
 static i64 sys_geteuid(u64 a1, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
@@ -2969,7 +3079,7 @@ static i64 sys_geteuid(u64 a1, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
   (void)a4;
   (void)a5;
   (void)a6;
-  xiu_task_t *t = current_task();
+  chimera_task_t *t = current_task();
   return (t && t->ta_proc) ? (i64)t->ta_proc->p_euid : 0;
 }
 static i64 sys_setuid(u64 uid, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
@@ -2978,27 +3088,44 @@ static i64 sys_setuid(u64 uid, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
   (void)a4;
   (void)a5;
   (void)a6;
-  xiu_task_t *t = current_task();
-  if (t && t->ta_proc) {
-    t->ta_proc->p_uid = (xiu_uid_t)uid;
-    t->ta_proc->p_euid = (xiu_uid_t)uid;
+  chimera_task_t *t = current_task();
+  if (!t || !t->ta_proc)
+    return -1;
+  chimera_proc_t *p = t->ta_proc;
+  chimera_uid_t new_uid = (chimera_uid_t)uid;
+
+  if (p->p_euid == 0) {
+    p->p_uid = new_uid;
+    p->p_euid = new_uid;
+    p->p_svuid = new_uid;
     return 0;
   }
-  return -1;
+  if (new_uid == p->p_uid || new_uid == p->p_svuid) {
+    p->p_euid = new_uid;
+    return 0;
+  }
+  return -1; // EPERM
 }
+
 static i64 sys_seteuid(u64 euid, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
   (void)a2;
   (void)a3;
   (void)a4;
   (void)a5;
   (void)a6;
-  xiu_task_t *t = current_task();
-  if (t && t->ta_proc) {
-    t->ta_proc->p_euid = (xiu_uid_t)euid;
+  chimera_task_t *t = current_task();
+  if (!t || !t->ta_proc)
+    return -1;
+  chimera_proc_t *p = t->ta_proc;
+  chimera_uid_t new_euid = (chimera_uid_t)euid;
+
+  if (p->p_euid == 0 || new_euid == p->p_uid || new_euid == p->p_svuid) {
+    p->p_euid = new_euid;
     return 0;
   }
-  return -1;
+  return -1; // EPERM
 }
+
 static i64 sys_getgid(u64 a1, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
   (void)a1;
   (void)a2;
@@ -3006,9 +3133,10 @@ static i64 sys_getgid(u64 a1, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
   (void)a4;
   (void)a5;
   (void)a6;
-  xiu_task_t *t = current_task();
+  chimera_task_t *t = current_task();
   return (t && t->ta_proc) ? (i64)t->ta_proc->p_gid : 0;
 }
+
 static i64 sys_getegid(u64 a1, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
   (void)a1;
   (void)a2;
@@ -3016,35 +3144,52 @@ static i64 sys_getegid(u64 a1, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
   (void)a4;
   (void)a5;
   (void)a6;
-  xiu_task_t *t = current_task();
+  chimera_task_t *t = current_task();
   return (t && t->ta_proc) ? (i64)t->ta_proc->p_egid : 0;
 }
+
 static i64 sys_setgid(u64 gid, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
   (void)a2;
   (void)a3;
   (void)a4;
   (void)a5;
   (void)a6;
-  xiu_task_t *t = current_task();
-  if (t && t->ta_proc) {
-    t->ta_proc->p_gid = (xiu_gid_t)gid;
-    t->ta_proc->p_egid = (xiu_gid_t)gid;
+  chimera_task_t *t = current_task();
+  if (!t || !t->ta_proc)
+    return -1;
+  chimera_proc_t *p = t->ta_proc;
+  chimera_gid_t new_gid = (chimera_gid_t)gid;
+
+  if (p->p_euid == 0) {
+    p->p_gid = new_gid;
+    p->p_egid = new_gid;
+    p->p_svgid = new_gid;
     return 0;
   }
-  return -1;
+  if (new_gid == p->p_gid || new_gid == p->p_svgid) {
+    p->p_egid = new_gid;
+    return 0;
+  }
+  return -1; // EPERM
 }
+
 static i64 sys_setegid(u64 egid, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
   (void)a2;
   (void)a3;
   (void)a4;
   (void)a5;
   (void)a6;
-  xiu_task_t *t = current_task();
-  if (t && t->ta_proc) {
-    t->ta_proc->p_egid = (xiu_gid_t)egid;
+  chimera_task_t *t = current_task();
+  if (!t || !t->ta_proc)
+    return -1;
+  chimera_proc_t *p = t->ta_proc;
+  chimera_gid_t new_egid = (chimera_gid_t)egid;
+
+  if (p->p_euid == 0 || new_egid == p->p_gid || new_egid == p->p_svgid) {
+    p->p_egid = new_egid;
     return 0;
   }
-  return -1;
+  return -1; // EPERM
 }
 static i64 sys_getlogin(u64 name_ptr, u64 namelen, u64 a3, u64 a4, u64 a5,
                         u64 a6) {
@@ -3052,10 +3197,10 @@ static i64 sys_getlogin(u64 name_ptr, u64 namelen, u64 a3, u64 a4, u64 a5,
   (void)a4;
   (void)a5;
   (void)a6;
-  xiu_task_t *t = current_task();
+  chimera_task_t *t = current_task();
   if (!t || !t->ta_proc || !name_ptr || namelen == 0)
     return -1;
-  xiu_proc_t *p = t->ta_proc;
+  chimera_proc_t *p = t->ta_proc;
   usize len = 0;
   while (len < 31 && len < namelen - 1 && p->p_login[len]) {
     len++;
@@ -3063,7 +3208,7 @@ static i64 sys_getlogin(u64 name_ptr, u64 namelen, u64 a3, u64 a4, u64 a5,
   char buf[32];
   __builtin_memcpy(buf, p->p_login, len);
   buf[len] = '\0';
-  if (copyout(buf, (void *)name_ptr, len + 1) != XIU_SUCCESS) {
+  if (copyout(buf, (void *)name_ptr, len + 1) != CHIMERA_SUCCESS) {
     return -1;
   }
   return 0;
@@ -3075,16 +3220,16 @@ static i64 sys_setlogin(u64 name_ptr, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
   (void)a4;
   (void)a5;
   (void)a6;
-  xiu_task_t *t = current_task();
+  chimera_task_t *t = current_task();
   if (!t || !t->ta_proc || !name_ptr)
     return -1;
-  xiu_proc_t *p = t->ta_proc;
+  chimera_proc_t *p = t->ta_proc;
   if (p->p_uid != 0 && p->p_euid != 0)
     return -1;
   char buf[32];
   usize copied = 0;
   if (copyinstr((const void *)name_ptr, buf, sizeof(buf), &copied) !=
-      XIU_SUCCESS) {
+      CHIMERA_SUCCESS) {
     return -1;
   }
   buf[31] = '\0';
@@ -3098,17 +3243,17 @@ static i64 sys_getgroups(u64 size, u64 list_ptr, u64 a3, u64 a4, u64 a5,
   (void)a4;
   (void)a5;
   (void)a6;
-  xiu_task_t *t = current_task();
+  chimera_task_t *t = current_task();
   if (!t || !t->ta_proc)
     return -1;
-  xiu_proc_t *p = t->ta_proc;
+  chimera_proc_t *p = t->ta_proc;
   if (size == 0)
     return (i64)p->p_ngroups;
   if (!list_ptr)
     return -14;
   u32 to_copy = (p->p_ngroups < (u32)size) ? p->p_ngroups : (u32)size;
-  if (copyout(p->p_groups, (void *)list_ptr, to_copy * sizeof(xiu_gid_t)) !=
-      XIU_SUCCESS)
+  if (copyout(p->p_groups, (void *)list_ptr, to_copy * sizeof(chimera_gid_t)) !=
+      CHIMERA_SUCCESS)
     return -14;
   return (i64)to_copy;
 }
@@ -3118,18 +3263,18 @@ static i64 sys_setgroups(u64 size, u64 list_ptr, u64 a3, u64 a4, u64 a5,
   (void)a4;
   (void)a5;
   (void)a6;
-  xiu_task_t *t = current_task();
+  chimera_task_t *t = current_task();
   if (!t || !t->ta_proc)
     return -1;
   if (size > 16)
     return -22;
   if (size > 0 && !list_ptr)
     return -14;
-  xiu_proc_t *p = t->ta_proc;
+  chimera_proc_t *p = t->ta_proc;
   p->p_ngroups = (u32)size;
   if (size > 0) {
-    if (copyin((const void *)list_ptr, p->p_groups, size * sizeof(xiu_gid_t)) !=
-        XIU_SUCCESS)
+    if (copyin((const void *)list_ptr, p->p_groups,
+               size * sizeof(chimera_gid_t)) != CHIMERA_SUCCESS)
       return -14;
   }
   return 0;
@@ -3141,7 +3286,7 @@ static i64 sys_getppid(u64 a1, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
   (void)a4;
   (void)a5;
   (void)a6;
-  xiu_task_t *t = current_task();
+  chimera_task_t *t = current_task();
   return (t && t->ta_proc) ? (i64)t->ta_proc->p_ppid : 0;
 }
 static i64 sys_getpgrp(u64 a1, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
@@ -3151,7 +3296,7 @@ static i64 sys_getpgrp(u64 a1, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
   (void)a4;
   (void)a5;
   (void)a6;
-  xiu_task_t *t = current_task();
+  chimera_task_t *t = current_task();
   return (t && t->ta_proc) ? (i64)t->ta_proc->p_pgrp : 0;
 }
 static i64 sys_setpgid(u64 pid_u, u64 pgrp_u, u64 a3, u64 a4, u64 a5, u64 a6) {
@@ -3159,15 +3304,15 @@ static i64 sys_setpgid(u64 pid_u, u64 pgrp_u, u64 a3, u64 a4, u64 a5, u64 a6) {
   (void)a4;
   (void)a5;
   (void)a6;
-  xiu_task_t *t = current_task();
+  chimera_task_t *t = current_task();
   if (!t || !t->ta_proc)
     return -1;
-  xiu_proc_t *target = (pid_u == 0 || pid_u == t->ta_proc->p_pid)
-                           ? t->ta_proc
-                           : proc_find_by_pid((xiu_pid_t)pid_u);
+  chimera_proc_t *target = (pid_u == 0 || pid_u == t->ta_proc->p_pid)
+                               ? t->ta_proc
+                               : proc_find_by_pid((chimera_pid_t)pid_u);
   if (!target)
     return -3;
-  target->p_pgrp = (pgrp_u == 0) ? target->p_pid : (xiu_pid_t)pgrp_u;
+  target->p_pgrp = (pgrp_u == 0) ? target->p_pid : (chimera_pid_t)pgrp_u;
   return 0;
 }
 static i64 sys_setsid(u64 a1, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
@@ -3177,7 +3322,7 @@ static i64 sys_setsid(u64 a1, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
   (void)a4;
   (void)a5;
   (void)a6;
-  xiu_task_t *t = current_task();
+  chimera_task_t *t = current_task();
   if (!t || !t->ta_proc)
     return -1;
   t->ta_proc->p_sid = t->ta_proc->p_pid;
@@ -3185,7 +3330,7 @@ static i64 sys_setsid(u64 a1, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
   return (i64)t->ta_proc->p_pid;
 }
 
-struct xiu_timeval {
+struct chimera_timeval {
   i64 tv_sec;
   i64 tv_usec;
 };
@@ -3210,12 +3355,13 @@ static i64 sys_gettimeofday(u64 tv_ptr, u64 tz_ptr, u64 a3, u64 a4, u64 a5,
   u64 uptime_ns = timer_get_uptime_ns();
   u64 uptime_usec = (uptime_ns % 1000000000ULL) / 1000ULL;
 
-  struct xiu_timeval tv;
+  struct chimera_timeval tv;
   i64 total_usec = s_time_base_usec + (i64)uptime_usec;
   tv.tv_sec = s_time_base_sec + (i64)uptime_sec + (total_usec / 1000000);
   tv.tv_usec = total_usec % 1000000;
 
-  return (copyout(&tv, (void *)tv_ptr, sizeof(tv)) == XIU_SUCCESS) ? 0 : -14;
+  return (copyout(&tv, (void *)tv_ptr, sizeof(tv)) == CHIMERA_SUCCESS) ? 0
+                                                                       : -14;
 }
 
 static i64 sys_settimeofday(u64 tv_ptr, u64 tz_ptr, u64 a3, u64 a4, u64 a5,
@@ -3225,14 +3371,14 @@ static i64 sys_settimeofday(u64 tv_ptr, u64 tz_ptr, u64 a3, u64 a4, u64 a5,
   (void)a4;
   (void)a5;
   (void)a6;
-  xiu_task_t *task = current_task();
-  xiu_proc_t *proc = task ? task->ta_proc : nullptr;
+  chimera_task_t *task = current_task();
+  chimera_proc_t *proc = task ? task->ta_proc : nullptr;
   if (!proc || proc->p_uid != 0)
     return -1; // -EPERM
 
   if (tv_ptr) {
-    struct xiu_timeval tv;
-    if (copyin((const void *)tv_ptr, &tv, sizeof(tv)) != XIU_SUCCESS)
+    struct chimera_timeval tv;
+    if (copyin((const void *)tv_ptr, &tv, sizeof(tv)) != CHIMERA_SUCCESS)
       return -14;
     extern u64 timer_get_uptime_seconds(void);
     extern u64 timer_get_uptime_ns(void);
@@ -3248,21 +3394,21 @@ static i64 sys_settimeofday(u64 tv_ptr, u64 tz_ptr, u64 a3, u64 a4, u64 a5,
   return 0;
 }
 
-struct xiu_pollfd {
+struct chimera_pollfd {
   i32 fd;
   i16 events;
   i16 revents;
 };
 
-#define XIU_POLLIN 0x0001
-#define XIU_POLLPRI 0x0002
-#define XIU_POLLOUT 0x0004
-#define XIU_POLLERR 0x0008
-#define XIU_POLLHUP 0x0010
-#define XIU_POLLNVAL 0x0020
+#define CHIMERA_POLLIN 0x0001
+#define CHIMERA_POLLPRI 0x0002
+#define CHIMERA_POLLOUT 0x0004
+#define CHIMERA_POLLERR 0x0008
+#define CHIMERA_POLLHUP 0x0010
+#define CHIMERA_POLLNVAL 0x0020
 
-extern i16 fileproc_poll(xiu_fileproc_t *fp, i16 events);
-extern void xiukit_hid_poll(void);
+extern i16 fileproc_poll(chimera_fileproc_t *fp, i16 events);
+extern void chimerakit_hid_poll(void);
 
 static i64 sys_poll(u64 fds_ptr, u64 nfds_u, u64 timeout_ms_u, u64 a4, u64 a5,
                     u64 a6) {
@@ -3275,16 +3421,16 @@ static i64 sys_poll(u64 fds_ptr, u64 nfds_u, u64 timeout_ms_u, u64 a4, u64 a5,
   if (nfds > 256)
     return -22; // EINVAL
 
-  struct xiu_pollfd fds[32];
+  struct chimera_pollfd fds[32];
   u32 count = (nfds > 32) ? 32 : nfds;
   if (count > 0) {
-    if (copyin((const void *)fds_ptr, fds, count * sizeof(struct xiu_pollfd)) !=
-        XIU_SUCCESS)
+    if (copyin((const void *)fds_ptr, fds,
+               count * sizeof(struct chimera_pollfd)) != CHIMERA_SUCCESS)
       return -14;
   }
 
-  xiu_task_t *task = current_task();
-  xiu_proc_t *proc = task ? task->ta_proc : nullptr;
+  chimera_task_t *task = current_task();
+  chimera_proc_t *proc = task ? task->ta_proc : nullptr;
   if (!proc)
     return -1;
 
@@ -3302,15 +3448,15 @@ static i64 sys_poll(u64 fds_ptr, u64 nfds_u, u64 timeout_ms_u, u64 a4, u64 a5,
       fds[i].revents = 0;
       if (fds[i].fd < 0)
         continue;
-      if (fds[i].fd >= XIU_PROC_MAX_FDS) {
-        fds[i].revents = XIU_POLLNVAL;
+      if (fds[i].fd >= CHIMERA_PROC_MAX_FDS) {
+        fds[i].revents = CHIMERA_POLLNVAL;
         ready_count++;
         continue;
       }
 
-      xiu_fileproc_t *fp = proc_fd_lookup(proc, fds[i].fd);
+      chimera_fileproc_t *fp = proc_fd_lookup(proc, fds[i].fd);
       if (!fp) {
-        fds[i].revents = XIU_POLLNVAL;
+        fds[i].revents = CHIMERA_POLLNVAL;
         ready_count++;
         continue;
       }
@@ -3326,7 +3472,7 @@ static i64 sys_poll(u64 fds_ptr, u64 nfds_u, u64 timeout_ms_u, u64 a4, u64 a5,
 
     if (ready_count > 0 || timeout_ms == 0) {
       if (count > 0) {
-        copyout(fds, (void *)fds_ptr, count * sizeof(struct xiu_pollfd));
+        copyout(fds, (void *)fds_ptr, count * sizeof(struct chimera_pollfd));
       }
       return ready_count;
     }
@@ -3334,52 +3480,52 @@ static i64 sys_poll(u64 fds_ptr, u64 nfds_u, u64 timeout_ms_u, u64 a4, u64 a5,
     if (timeout_ms > 0 &&
         (timer_get_uptime_ms() - start_ms) >= (u64)timeout_ms) {
       if (count > 0) {
-        copyout(fds, (void *)fds_ptr, count * sizeof(struct xiu_pollfd));
+        copyout(fds, (void *)fds_ptr, count * sizeof(struct chimera_pollfd));
       }
       return 0;
     }
 
-    xiukit_hid_poll();
+    chimerakit_hid_poll();
     scheduler_yield();
   }
 }
 
 typedef struct {
   u32 fds_bits[8];
-} xiu_fd_set;
+} chimera_fd_set;
 
 static i64 sys_select(u64 nfds_u, u64 readfds_ptr, u64 writefds_ptr,
                       u64 exceptfds_ptr, u64 timeout_ptr, u64 a6) {
   (void)a6;
   int nfds = (int)nfds_u;
-  if (nfds < 0 || nfds > XIU_PROC_MAX_FDS)
+  if (nfds < 0 || nfds > CHIMERA_PROC_MAX_FDS)
     return -22; // EINVAL
 
-  xiu_fd_set rfds, wfds, efds;
+  chimera_fd_set rfds, wfds, efds;
   __builtin_memset(&rfds, 0, sizeof(rfds));
   __builtin_memset(&wfds, 0, sizeof(wfds));
   __builtin_memset(&efds, 0, sizeof(efds));
 
   if (readfds_ptr &&
-      copyin((const void *)readfds_ptr, &rfds, sizeof(rfds)) != XIU_SUCCESS)
+      copyin((const void *)readfds_ptr, &rfds, sizeof(rfds)) != CHIMERA_SUCCESS)
     return -14;
-  if (writefds_ptr &&
-      copyin((const void *)writefds_ptr, &wfds, sizeof(wfds)) != XIU_SUCCESS)
+  if (writefds_ptr && copyin((const void *)writefds_ptr, &wfds, sizeof(wfds)) !=
+                          CHIMERA_SUCCESS)
     return -14;
-  if (exceptfds_ptr &&
-      copyin((const void *)exceptfds_ptr, &efds, sizeof(efds)) != XIU_SUCCESS)
+  if (exceptfds_ptr && copyin((const void *)exceptfds_ptr, &efds,
+                              sizeof(efds)) != CHIMERA_SUCCESS)
     return -14;
 
-  struct xiu_timeval tv;
+  struct chimera_timeval tv;
   i32 timeout_ms = -1;
   if (timeout_ptr) {
-    if (copyin((const void *)timeout_ptr, &tv, sizeof(tv)) != XIU_SUCCESS)
+    if (copyin((const void *)timeout_ptr, &tv, sizeof(tv)) != CHIMERA_SUCCESS)
       return -14;
     timeout_ms = (i32)(tv.tv_sec * 1000 + tv.tv_usec / 1000);
   }
 
-  xiu_task_t *task = current_task();
-  xiu_proc_t *proc = task ? task->ta_proc : nullptr;
+  chimera_task_t *task = current_task();
+  chimera_proc_t *proc = task ? task->ta_proc : nullptr;
   if (!proc)
     return -1;
 
@@ -3391,7 +3537,7 @@ static i64 sys_select(u64 nfds_u, u64 readfds_ptr, u64 writefds_ptr,
       return -4; // -EINTR
     }
 
-    xiu_fd_set out_rfds, out_wfds, out_efds;
+    chimera_fd_set out_rfds, out_wfds, out_efds;
     __builtin_memset(&out_rfds, 0, sizeof(out_rfds));
     __builtin_memset(&out_wfds, 0, sizeof(out_wfds));
     __builtin_memset(&out_efds, 0, sizeof(out_efds));
@@ -3403,16 +3549,16 @@ static i64 sys_select(u64 nfds_u, u64 readfds_ptr, u64 writefds_ptr,
 
       i16 events = 0;
       if (readfds_ptr && (rfds.fds_bits[idx] & (1U << bit)))
-        events |= XIU_POLLIN;
+        events |= CHIMERA_POLLIN;
       if (writefds_ptr && (wfds.fds_bits[idx] & (1U << bit)))
-        events |= XIU_POLLOUT;
+        events |= CHIMERA_POLLOUT;
       if (exceptfds_ptr && (efds.fds_bits[idx] & (1U << bit)))
-        events |= XIU_POLLPRI;
+        events |= CHIMERA_POLLPRI;
 
       if (!events)
         continue;
 
-      xiu_fileproc_t *fp = proc_fd_lookup(proc, fd);
+      chimera_fileproc_t *fp = proc_fd_lookup(proc, fd);
       if (!fp) {
         return -9; // EBADF
       }
@@ -3420,16 +3566,18 @@ static i64 sys_select(u64 nfds_u, u64 readfds_ptr, u64 writefds_ptr,
       i16 rev = fileproc_poll(fp, events);
       fp_release(fp);
 
-      if ((events & XIU_POLLIN) &&
-          (rev & (XIU_POLLIN | XIU_POLLHUP | XIU_POLLERR))) {
+      if ((events & CHIMERA_POLLIN) &&
+          (rev & (CHIMERA_POLLIN | CHIMERA_POLLHUP | CHIMERA_POLLERR))) {
         out_rfds.fds_bits[idx] |= (1U << bit);
         ready_count++;
       }
-      if ((events & XIU_POLLOUT) && (rev & (XIU_POLLOUT | XIU_POLLERR))) {
+      if ((events & CHIMERA_POLLOUT) &&
+          (rev & (CHIMERA_POLLOUT | CHIMERA_POLLERR))) {
         out_wfds.fds_bits[idx] |= (1U << bit);
         ready_count++;
       }
-      if ((events & XIU_POLLPRI) && (rev & (XIU_POLLPRI | XIU_POLLERR))) {
+      if ((events & CHIMERA_POLLPRI) &&
+          (rev & (CHIMERA_POLLPRI | CHIMERA_POLLERR))) {
         out_efds.fds_bits[idx] |= (1U << bit);
         ready_count++;
       }
@@ -3456,7 +3604,7 @@ static i64 sys_select(u64 nfds_u, u64 readfds_ptr, u64 writefds_ptr,
       return 0;
     }
 
-    xiukit_hid_poll();
+    chimerakit_hid_poll();
     scheduler_yield();
   }
 }
@@ -3501,7 +3649,7 @@ static i64 sys_mprotect(u64 addr, u64 len, u64 prot, u64 a4, u64 a5, u64 a6) {
   (void)a4;
   (void)a5;
   (void)a6;
-  xiu_task_t *task = current_task();
+  chimera_task_t *task = current_task();
   if (!task || !task->ta_vm_map || len == 0)
     return -22;
   extern int pmap_protect_user_range(u64 pml4_phys, u64 virt_start, usize len,
@@ -3517,12 +3665,12 @@ static i64 sys_getpgid(u64 pid_u, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
   (void)a4;
   (void)a5;
   (void)a6;
-  xiu_task_t *t = current_task();
+  chimera_task_t *t = current_task();
   if (!t || !t->ta_proc)
     return -1;
-  xiu_proc_t *target = (pid_u == 0 || pid_u == t->ta_proc->p_pid)
-                           ? t->ta_proc
-                           : proc_find_by_pid((xiu_pid_t)pid_u);
+  chimera_proc_t *target = (pid_u == 0 || pid_u == t->ta_proc->p_pid)
+                               ? t->ta_proc
+                               : proc_find_by_pid((chimera_pid_t)pid_u);
   if (!target)
     return -3;
   return (i64)target->p_pgrp;
@@ -3534,12 +3682,12 @@ static i64 sys_getsid(u64 pid_u, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
   (void)a4;
   (void)a5;
   (void)a6;
-  xiu_task_t *t = current_task();
+  chimera_task_t *t = current_task();
   if (!t || !t->ta_proc)
     return -1;
-  xiu_proc_t *target = (pid_u == 0 || pid_u == t->ta_proc->p_pid)
-                           ? t->ta_proc
-                           : proc_find_by_pid((xiu_pid_t)pid_u);
+  chimera_proc_t *target = (pid_u == 0 || pid_u == t->ta_proc->p_pid)
+                               ? t->ta_proc
+                               : proc_find_by_pid((chimera_pid_t)pid_u);
   if (!target)
     return -3;
   return (i64)target->p_sid;
@@ -3552,12 +3700,14 @@ static i64 sys_sysctl(u64 name_ptr, u64 namelen, u64 oldp, u64 oldlenp,
 
   int mib[8];
   usize mib_len = (namelen > 8) ? 8 : (usize)namelen;
-  if (copyin((const void *)name_ptr, mib, mib_len * sizeof(int)) != XIU_SUCCESS)
+  if (copyin((const void *)name_ptr, mib, mib_len * sizeof(int)) !=
+      CHIMERA_SUCCESS)
     return -14;
 
   usize oldlen = 0;
   if (oldlenp) {
-    if (copyin((const void *)oldlenp, &oldlen, sizeof(usize)) != XIU_SUCCESS)
+    if (copyin((const void *)oldlenp, &oldlen, sizeof(usize)) !=
+        CHIMERA_SUCCESS)
       return -14;
   }
 
@@ -3566,7 +3716,7 @@ static i64 sys_sysctl(u64 name_ptr, u64 namelen, u64 oldp, u64 oldlenp,
 
   // handle write requests (e.g. sethostname)
   if (newp && newlen > 0) {
-    xiu_task_t *t = current_task();
+    chimera_task_t *t = current_task();
     if (!t || !t->ta_proc || t->ta_proc->p_uid != 0)
       return -1; // -EPERM
     if (ctl == CTL_KERN && sub == KERN_HOSTNAME) {
@@ -3574,7 +3724,7 @@ static i64 sys_sysctl(u64 name_ptr, u64 namelen, u64 oldp, u64 oldlenp,
                            ? newlen
                            : (sizeof(s_kernel_hostname) - 1);
       if (copyin((const void *)newp, s_kernel_hostname, copy_len) !=
-          XIU_SUCCESS)
+          CHIMERA_SUCCESS)
         return -14;
       s_kernel_hostname[copy_len] = '\0';
       return 0;
@@ -3648,11 +3798,11 @@ static i64 sys_sysctl(u64 name_ptr, u64 namelen, u64 oldp, u64 oldlenp,
 
   if (oldp && oldlen > 0) {
     usize to_copy = (oldlen < res_sz) ? oldlen : res_sz;
-    if (copyout(res_ptr, (void *)oldp, to_copy) != XIU_SUCCESS)
+    if (copyout(res_ptr, (void *)oldp, to_copy) != CHIMERA_SUCCESS)
       return -14;
   }
   if (oldlenp) {
-    if (copyout(&res_sz, (void *)oldlenp, sizeof(usize)) != XIU_SUCCESS)
+    if (copyout(&res_sz, (void *)oldlenp, sizeof(usize)) != CHIMERA_SUCCESS)
       return -14;
   }
   return 0;
@@ -3666,21 +3816,22 @@ static i64 sys_sigpending(u64 set_ptr, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
   (void)a6;
   if (!set_ptr)
     return -14;
-  xiu_task_t *task = current_task();
-  xiu_proc_t *proc = task ? task->ta_proc : nullptr;
+  chimera_task_t *task = current_task();
+  chimera_proc_t *proc = task ? task->ta_proc : nullptr;
   if (!proc)
     return -1;
 
   u32 pending = proc->p_sigpending;
-  return (copyout(&pending, (void *)set_ptr, sizeof(u32)) == XIU_SUCCESS) ? 0
-                                                                          : -14;
+  return (copyout(&pending, (void *)set_ptr, sizeof(u32)) == CHIMERA_SUCCESS)
+             ? 0
+             : -14;
 }
 
-typedef struct xiu_stack {
+typedef struct chimera_stack {
   u64 ss_sp;
   u64 ss_size;
   i32 ss_flags;
-} xiu_stack_t;
+} chimera_stack_t;
 
 static i64 sys_sigaltstack(u64 ss_ptr, u64 oss_ptr, u64 a3, u64 a4, u64 a5,
                            u64 a6) {
@@ -3689,15 +3840,15 @@ static i64 sys_sigaltstack(u64 ss_ptr, u64 oss_ptr, u64 a3, u64 a4, u64 a5,
   (void)a5;
   (void)a6;
   if (oss_ptr) {
-    xiu_stack_t oss;
+    chimera_stack_t oss;
     __builtin_memset(&oss, 0, sizeof(oss));
     oss.ss_flags = 2; // SS_DISABLE
-    if (copyout(&oss, (void *)oss_ptr, sizeof(oss)) != XIU_SUCCESS)
+    if (copyout(&oss, (void *)oss_ptr, sizeof(oss)) != CHIMERA_SUCCESS)
       return -14;
   }
   if (ss_ptr) {
-    xiu_stack_t ss;
-    if (copyin((const void *)ss_ptr, &ss, sizeof(ss)) != XIU_SUCCESS)
+    chimera_stack_t ss;
+    if (copyin((const void *)ss_ptr, &ss, sizeof(ss)) != CHIMERA_SUCCESS)
       return -14;
     if (!(ss.ss_flags & 2) && ss.ss_size < 2048)
       return -22; // EINVAL (MINSIGSTKSZ)
@@ -3818,16 +3969,18 @@ const u32 g_syscall_count = 512;
 
 i64 syscall_dispatch(u64 num, u64 arg1, u64 arg2, u64 arg3, u64 arg4, u64 arg5,
                      u64 arg6, u64 frame) {
-  g_syscall_frame = frame;
+  chimera_thread_t *cur_th = current_thread();
+  if (cur_th) {
+    cur_th->th_syscall_frame = frame;
+  }
 
-  xiu_task_t *task = current_task();
-  xiu_proc_t *proc = task ? task->ta_proc : nullptr;
+  chimera_task_t *task = current_task();
+  chimera_proc_t *proc = task ? task->ta_proc : nullptr;
 
   if (num >= g_syscall_count || g_syscall_table[num] == nullptr) {
     kprintf("[SYSCALL] Invalid syscall %llu from '%s' (PID %d)\n",
             (unsigned long long)num, proc ? proc->p_comm : "?",
             proc ? proc->p_pid : 0);
-    g_syscall_frame = 0;
     return -78; // ENOSYS
   }
 
@@ -3838,6 +3991,5 @@ i64 syscall_dispatch(u64 num, u64 arg1, u64 arg2, u64 arg3, u64 arg4, u64 arg5,
     proc_deliver_signals((void *)frame);
   }
 
-  g_syscall_frame = 0;
   return ret;
 }

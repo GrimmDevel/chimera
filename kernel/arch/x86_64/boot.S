@@ -24,7 +24,7 @@ _start:
     push %rbx
     push %rax
 
-    call xiu_kernel_main
+    call chimera_kernel_main
 
 1:
     hlt

@@ -1,5 +1,5 @@
 #pragma once
-#include <kernel/xiu_types.h>
+#include <kernel/chimera_types.h>
 
 struct idt_entry {
     u16 base_low;
@@ -9,12 +9,12 @@ struct idt_entry {
     u16 base_mid;
     u32 base_high;
     u32 reserved;
-} XIU_PACKED;
+} CHIMERA_PACKED;
 
 struct idtr {
     u16 limit;
     u64 base;
-} XIU_PACKED;
+} CHIMERA_PACKED;
 
 #ifdef __cplusplus
 extern "C" {

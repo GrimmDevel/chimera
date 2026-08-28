@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-XIU Operating System — FAT32 Disk Image Generator & In-Place Binary Updater
+Chimera Operating System — FAT32 Disk Image Generator & In-Place Binary Updater
 scripts/make_disk.py
 Generates a 64MB FAT32 disk image containing system directories,
 configurations, and userland ELF binaries matching macOS/Darwin hierarchy.
@@ -74,7 +74,7 @@ class FAT32Disk:
 
     def write_bpb(self):
         self.image[0:3] = b"\xEB\x58\x90"
-        self.image[3:11] = b"XIU_OS  "
+        self.image[3:11] = b"CHIMERA_OS  "
         struct.pack_into("<H", self.image, 11, SECTOR_SIZE)
         self.image[13] = SECTORS_PER_CLUSTER
         struct.pack_into("<H", self.image, 14, RESERVED_SECTORS)
@@ -96,7 +96,7 @@ class FAT32Disk:
         self.image[64] = 0x80
         self.image[66] = 0x29
         struct.pack_into("<I", self.image, 67, 0x12345678)
-        self.image[71:82] = b"XIU SYSTEM "
+        self.image[71:82] = b"CHIMERA SYS"
         self.image[82:90] = b"FAT32   "
         self.image[510:512] = b"\x55\xAA"
 
@@ -402,12 +402,12 @@ def install_system_files(disk):
         return default
 
     etc_files = {
-        "motd": b"Welcome to XIU Operating System!\nHybrid Mach/BSD Architecture (Darwin/XNU compatible).\n",
-        "version": b"XIU OS v1.0.0 (x86_64)\n",
+        "motd": b"Welcome to Chimera Operating System!\nHybrid Mach/BSD Architecture (Darwin/XNU compatible).\n",
+        "version": b"Chimera OS v1.0.0 (x86_64)\n",
         "hosts": b"127.0.0.1\tlocalhost\n10.0.2.15\tMac\n",
         "resolv.conf": b"nameserver 10.0.2.3\n",
         "passwd": read_etc_file("passwd", b"root:*:0:0:System Administrator:/Users/root:/bin/zsh\nfvr:*:501:20:fvr:/Users/fvr:/bin/zsh\nuser:*:502:20:Default User:/Users/user:/bin/zsh\n"),
-        "master.passwd": read_etc_file("master.passwd", b"root::0:0::0:0:System Administrator:/Users/root:/bin/zsh\nfvr::501:20::0:0:fvr:/Users/fvr:/bin/zsh\nuser::502:20::0:0:Default User:/Users/user:/bin/zsh\n"),
+        "master.passwd": read_etc_file("master.passwd", b"root:*:0:0::0:0:System Administrator:/Users/root:/bin/zsh\nfvr::501:20::0:0:fvr:/Users/fvr:/bin/zsh\nuser::502:20::0:0:Default User:/Users/user:/bin/zsh\n"),
         "group": read_etc_file("group", b"wheel:*:0:root\nadmin:*:80:root,fvr,user\nstaff:*:20:fvr,user\n"),
         "shells": read_etc_file("shells", b"/bin/zsh\n/bin/sh\n"),
         "adduser.conf": read_etc_file("adduser.conf", b""),
@@ -427,13 +427,13 @@ def install_system_files(disk):
 <plist version="1.0">
 <dict>
 	<key>BuildID</key>
-	<string>7B930DF0-XIU-2026</string>
+	<string>7B930DF0-CHIMERA-2026</string>
 	<key>ProductBuildVersion</key>
 	<string>24A348</string>
 	<key>ProductCopyright</key>
-	<string>2026 XIU Project</string>
+	<string>2026 Chimera Project</string>
 	<key>ProductName</key>
-	<string>XIU OS</string>
+	<string>Chimera OS</string>
 	<key>ProductUserVisibleVersion</key>
 	<string>1.0</string>
 	<key>ProductVersion</key>
@@ -446,7 +446,7 @@ def install_system_files(disk):
 <plist version="1.0">
 <dict>
 	<key>ProductName</key>
-	<string>XIU Server</string>
+	<string>Chimera Server</string>
 	<key>ProductVersion</key>
 	<string>1.0.0</string>
 	<key>ProductBuildVersion</key>
@@ -461,7 +461,7 @@ def install_system_files(disk):
     disk.update_dir_files("System/Library/CoreServices", coreservices_files)
 
     pref_files = {
-        "com.xiu.system.plist": b'''<?xml version="1.0" encoding="UTF-8"?>
+        "com.chimera.system.plist": b'''<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
@@ -488,7 +488,7 @@ def install_system_files(disk):
 	<key>CFBundleExecutable</key>
 	<string>calc</string>
 	<key>CFBundleIdentifier</key>
-	<string>org.xiu.calculator</string>
+	<string>org.chimera.calculator</string>
 	<key>CFBundleName</key>
 	<string>Calculator</string>
 	<key>CFBundlePackageType</key>
@@ -509,7 +509,7 @@ def install_system_files(disk):
 	<key>CFBundleExecutable</key>
 	<string>zsh</string>
 	<key>CFBundleIdentifier</key>
-	<string>org.xiu.terminal</string>
+	<string>org.chimera.terminal</string>
 	<key>CFBundleName</key>
 	<string>Terminal</string>
 	<key>CFBundlePackageType</key>
@@ -545,7 +545,7 @@ alias zsh='/bin/zsh'
 alias sh='/bin/sh'
 ''',
         ".profile": b'export HOME=/Users/root\nexport USER=root\nexport LOGNAME=root\nexport PATH=/bin:/usr/bin:/sbin:/usr/sbin:/usr/local/bin\nexport TERM=xterm-256color\nexport PROMPT="%n@%m %~ %# "\n',
-        "hello.c": b'#include <stdio.h>\n\nint main() {\n    printf("Hello from self-hosted XIU C compiler!\\n");\n    return 0;\n}\n'
+        "hello.c": b'#include <stdio.h>\n\nint main() {\n    printf("Hello from self-hosted Chimera C compiler!\\n");\n    return 0;\n}\n'
     }
     disk.update_dir_files("Users/root", root_files)
 
@@ -572,7 +572,7 @@ alias zsh='/bin/zsh'
 alias sh='/bin/sh'
 ''',
         ".profile": b'export HOME=/Users/fvr\nexport USER=fvr\nexport LOGNAME=fvr\nexport PATH=/bin:/usr/bin:/sbin:/usr/sbin:/usr/local/bin\nexport TERM=xterm-256color\nexport PROMPT="%n@%m %~ %# "\n',
-        "hello.c": b'#include <stdio.h>\n\nint main() {\n    printf("Hello from self-hosted XIU C compiler!\\n");\n    return 0;\n}\n'
+        "hello.c": b'#include <stdio.h>\n\nint main() {\n    printf("Hello from self-hosted Chimera C compiler!\\n");\n    return 0;\n}\n'
     }
     disk.update_dir_files("Users/fvr", fvr_files)
 
@@ -805,14 +805,14 @@ def main():
     disk.find_or_create_dir("cores")
     disk.find_or_create_dir("opt")
 
-    motd_content = b"Welcome to XIU Operating System!\nApple Darwin / Mach-BSD Hybrid Architecture.\n"
+    motd_content = b"Welcome to Chimera Operating System!\nApple Darwin / Mach-BSD Hybrid Architecture.\n"
     disk.add_file(etc_cluster, "motd", motd_content)
-    version_content = b"XIU OS v0.1.0 (Darwin 24.0.0 x86_64)\n"
+    version_content = b"Chimera OS v0.1.0 (Darwin 24.0.0 x86_64)\n"
     disk.add_file(etc_cluster, "version", version_content)
-    hosts_content = b"127.0.0.1\tlocalhost\n10.0.2.15\txiu-mac\n"
+    hosts_content = b"127.0.0.1\tlocalhost\n10.0.2.15\tchimera-mac\n"
     disk.add_file(etc_cluster, "hosts", hosts_content)
 
-    sysversion_content = b'<?xml version="1.0" encoding="UTF-8"?>\n<dict>\n  <key>ProductBuildVersion</key>\n  <string>24A348</string>\n  <key>ProductName</key>\n  <string>XIU OS</string>\n  <key>ProductVersion</key>\n  <string>15.0</string>\n</dict>\n'
+    sysversion_content = b'<?xml version="1.0" encoding="UTF-8"?>\n<dict>\n  <key>ProductBuildVersion</key>\n  <string>24A348</string>\n  <key>ProductName</key>\n  <string>Chimera OS</string>\n  <key>ProductVersion</key>\n  <string>15.0</string>\n</dict>\n'
     disk.add_file(coreservices_cluster, "SysVer.plist", sysversion_content)
     disk.add_file(coreservices_cluster, "SystemVersion.plist", sysversion_content)
 
@@ -823,8 +823,8 @@ def main():
     disk.add_file(root_home_cluster, "hello.c", hello_content)
 
     # Copy Mach-O runtime objects and libraries into /usr/lib
-    crt0_path = os.path.join(bin_dir, "CMakeFiles", "xiu_crt0.dir", "libsystem", "crt0.S.obj")
-    libsystem_path = os.path.join(bin_dir, "libsystem_xiu.a")
+    crt0_path = os.path.join(bin_dir, "CMakeFiles", "chimera_crt0.dir", "libsystem", "crt0.S.obj")
+    libsystem_path = os.path.join(bin_dir, "libsystem_chimera.a")
     if os.path.isfile(crt0_path):
         with open(crt0_path, "rb") as f:
             crt0_data = f.read()
@@ -833,7 +833,7 @@ def main():
         with open(libsystem_path, "rb") as f:
             libc_data = f.read()
         disk.add_file(usr_lib_cluster, "libc.a", libc_data)
-        disk.add_file(usr_lib_cluster, "libsystem_xiu.a", libc_data)
+        disk.add_file(usr_lib_cluster, "libsystem_chimera.a", libc_data)
 
     # Copy C header trees into /usr/include
     copy_include_tree(disk, "usr/include", os.path.join(workspace, "usr", "libsystem", "include"))

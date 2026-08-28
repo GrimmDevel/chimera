@@ -1,9 +1,9 @@
 // memory buffer (mbuf) subsystem
 #pragma once
-#ifndef XIU_NET_MBUF_H
-#define XIU_NET_MBUF_H
+#ifndef CHIMERA_NET_MBUF_H
+#define CHIMERA_NET_MBUF_H
 
-#include <kernel/xiu_types.h>
+#include <kernel/chimera_types.h>
 #include <kernel/spinlock.h>
 
 #define MLEN            256
@@ -72,7 +72,7 @@ void    m_free(mbuf_t *m);
 void    m_freem(mbuf_t *m);
 mbuf_t *m_copym(mbuf_t *m, i32 off, i32 len);
 void    m_copydata(const mbuf_t *m, i32 off, i32 len, void *cp);
-xiu_error_t m_append(mbuf_t *m, i32 len, const void *cp);
+chimera_error_t m_append(mbuf_t *m, i32 len, const void *cp);
 mbuf_t *m_pullup(mbuf_t *m, i32 len);
 
 #ifdef __cplusplus

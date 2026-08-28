@@ -1,5 +1,5 @@
 /* =============================================================================
- * XIU Operating System — Internet Protocol Version 4 (IPv4)
+ * Chimera Operating System — Internet Protocol Version 4 (IPv4)
  * kernel/net/ip.c
  * ============================================================================= */
 
@@ -98,8 +98,8 @@ void ip_input(ifnet_t *ifp, mbuf_t *m) {
     }
 }
 
-xiu_error_t ip_output(mbuf_t *m, struct in_addr src_ip, struct in_addr dst_ip, u8 proto) {
-    if (!m) return XIU_ERR_INVALID;
+chimera_error_t ip_output(mbuf_t *m, struct in_addr src_ip, struct in_addr dst_ip, u8 proto) {
+    if (!m) return CHIMERA_ERR_INVALID;
 
     ifnet_t *ifp = nullptr;
     if (dst_ip.s_addr == htonl(INADDR_LOOPBACK)) {
@@ -110,7 +110,7 @@ xiu_error_t ip_output(mbuf_t *m, struct in_addr src_ip, struct in_addr dst_ip, u
 
     if (!ifp) {
         m_freem(m);
-        return XIU_ERR_NOT_FOUND;
+        return CHIMERA_ERR_NOT_FOUND;
     }
 
     if (src_ip.s_addr == 0) {
@@ -121,7 +121,7 @@ xiu_error_t ip_output(mbuf_t *m, struct in_addr src_ip, struct in_addr dst_ip, u
     mbuf_t *hdr = m_gethdr(MT_HEADER);
     if (!hdr) {
         m_freem(m);
-        return XIU_ERR_NOMEM;
+        return CHIMERA_ERR_NOMEM;
     }
 
     ip_header_t *ip = (ip_header_t *)hdr->m_data;
@@ -145,6 +145,6 @@ xiu_error_t ip_output(mbuf_t *m, struct in_addr src_ip, struct in_addr dst_ip, u
         return ifp->if_output(ifp, hdr, dst_ip);
     }
 
-    extern xiu_error_t ethernet_output(ifnet_t *ifp, mbuf_t *m, struct in_addr dest_ip, u16 ethertype);
+    extern chimera_error_t ethernet_output(ifnet_t *ifp, mbuf_t *m, struct in_addr dest_ip, u16 ethertype);
     return ethernet_output(ifp, hdr, dst_ip, ETHERTYPE_IP);
 }

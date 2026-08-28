@@ -58,7 +58,7 @@
 #endif
 
 #import <CoreFoundation/CoreFoundation.h>
-#if __has_include(<CoreServices/CoreServices.h>) && !defined(__XIU__)
+#if __has_include(<CoreServices/CoreServices.h>) && !defined(__CHIMERA__)
 #import <CoreServices/CoreServices.h>
 #endif
 

@@ -1,5 +1,5 @@
 /* =============================================================================
- * XIU Operating System — User Space C Library
+ * Chimera Operating System — User Space C Library
  * usr/libsystem/locale/mbrtowc.c
  *
  * Real UTF-8 and multibyte to wide character decoder.

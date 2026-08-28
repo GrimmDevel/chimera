@@ -1,5 +1,5 @@
 # =============================================================================
-# XIU Operating System — Root Makefile (CMake Wrapper)
+# Chimera Operating System — Root Makefile (CMake Wrapper)
 # =============================================================================
 
 # Ensure Homebrew LLVM is first in PATH for cross-compilation tools
@@ -42,16 +42,16 @@ all: build
 # ── Build Target ─────────────────────────────────────────────────────────────
 # Configures and builds the kernel using CMake
 build:
-	@echo "[XIU] Building for $(ARCH) ($(BUILD_TYPE), VERBOSE=$(VERBOSE))..."
+	@echo "[CHIMERA] Building for $(ARCH) ($(BUILD_TYPE), VERBOSE=$(VERBOSE))..."
 	@mkdir -p $(BUILD_DIR)
 	@cd $(BUILD_DIR) && cmake -DCMAKE_TOOLCHAIN_FILE=../../$(TOOLCHAIN) \
 		-DCMAKE_BUILD_TYPE=$(BUILD_TYPE) $(CMAKE_VERBOSE_FLAG) ../..
 	@cmake --build $(BUILD_DIR) --parallel $$(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 1)
-	@echo "[XIU] Build complete: $(BUILD_DIR)/kernel/xiu_kernel.elf"
+	@echo "[CHIMERA] Build complete: $(BUILD_DIR)/kernel/chimera_kernel.elf"
 
 # ── Clean Target ─────────────────────────────────────────────────────────────
 clean:
-	@echo "[XIU] Cleaning $(BUILD_DIR)..."
+	@echo "[CHIMERA] Cleaning $(BUILD_DIR)..."
 	@rm -rf $(BUILD_DIR)
 
 # ── Disk Target ─────────────────────────────────────────────────────────────
@@ -89,7 +89,7 @@ iso: build
 
 # ── Help Target ──────────────────────────────────────────────────────────────
 help:
-	@echo "XIU OS Build System"
+	@echo "Chimera OS Build System"
 	@echo "Usage:"
 	@echo "  make build          Build the kernel (default ARCH=x86_64)"
 	@echo "  make ARCH=arm64     Build for ARM64"

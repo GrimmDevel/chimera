@@ -1,5 +1,5 @@
 // hexdump - canonical hex+ascii display
-#include <kernel/xiu_types.h>
+#include <kernel/chimera_types.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <unistd.h>

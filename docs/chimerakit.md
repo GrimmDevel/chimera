@@ -1,9 +1,9 @@
-# xiukit driver framework
+# chimerakit driver framework
 
 modular c++ driver subsystem for bus enumeration, usb 3.0, input devices, and graphics.
 
 ## pci bus enumeration
-`xiukit_pci` scans 256 buses, 32 devices, 8 functions:
+`chimerakit_pci` scans 256 buses, 32 devices, 8 functions:
 - reads vendor id / device id / class code
 - enables bus mastering, memory space, and io space in command register (`0x04`)
 - extracts BAR0 mmio base addresses for e1000 nic and xhci controller
@@ -25,7 +25,7 @@ implements xhci 1.1 specification for full-speed, high-speed, and superspeed dev
    - mouse: 3/4/8-byte reports parsed for button masks and relative dx/dy/dz movement.
 
 ## hid input layer
-`kernel/xiukit/hid.cpp` provides unified input abstraction:
+`kernel/chimerakit/hid.cpp` provides unified input abstraction:
 - maintains circular ringbuffers for keyboard events and mouse motion.
 - decodes scancodes to unicode with shift, caps lock, ctrl, alt, and cmd modifiers.
 - feeds canonical line buffer in `console_in_push()`.

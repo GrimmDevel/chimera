@@ -1,5 +1,5 @@
 /*
- * XIU Operating System — BSD User and Group Database Reader
+ * Chimera Operating System — BSD User and Group Database Reader
  * usr/libsystem/pwd_grp.c
  *
  * Implements standard BSD POSIX interfaces:

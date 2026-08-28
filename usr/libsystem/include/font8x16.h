@@ -1,5 +1,5 @@
 /* =============================================================================
- * XIU Operating System — 8x16 Bitmap Font Data (Complete 128 ASCII Glyphs)
+ * Chimera Operating System — 8x16 Bitmap Font Data (Complete 128 ASCII Glyphs)
  * usr/libsystem/include/font8x16.h
  * ============================================================================= */
 

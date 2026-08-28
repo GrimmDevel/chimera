@@ -1,5 +1,5 @@
 // yes - output string repeatedly
-#include <kernel/xiu_types.h>
+#include <kernel/chimera_types.h>
 #include <stdio.h>
 #include <unistd.h>
 

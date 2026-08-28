@@ -1,36 +1,36 @@
 // input event definitions
-#ifndef XIU_INPUT_H
-#define XIU_INPUT_H
+#ifndef CHIMERA_INPUT_H
+#define CHIMERA_INPUT_H
 
-#include <kernel/xiu_types.h>
+#include <kernel/chimera_types.h>
 
-#define XIU_MOD_SHIFT       (1 << 0)
-#define XIU_MOD_CTRL        (1 << 1)
-#define XIU_MOD_ALT         (1 << 2)
-#define XIU_MOD_CMD         (1 << 3)
-#define XIU_MOD_CAPSLOCK    (1 << 4)
-#define XIU_MOD_NUMLOCK     (1 << 5)
-#define XIU_MOD_LSHIFT      (1 << 6)
-#define XIU_MOD_RSHIFT      (1 << 7)
-#define XIU_MOD_LCTRL       (1 << 8)
-#define XIU_MOD_RCTRL       (1 << 9)
-#define XIU_MOD_LALT        (1 << 10)
-#define XIU_MOD_RALT        (1 << 11)
-#define XIU_MOD_LCMD        (1 << 12)
-#define XIU_MOD_RCMD        (1 << 13)
+#define CHIMERA_MOD_SHIFT       (1 << 0)
+#define CHIMERA_MOD_CTRL        (1 << 1)
+#define CHIMERA_MOD_ALT         (1 << 2)
+#define CHIMERA_MOD_CMD         (1 << 3)
+#define CHIMERA_MOD_CAPSLOCK    (1 << 4)
+#define CHIMERA_MOD_NUMLOCK     (1 << 5)
+#define CHIMERA_MOD_LSHIFT      (1 << 6)
+#define CHIMERA_MOD_RSHIFT      (1 << 7)
+#define CHIMERA_MOD_LCTRL       (1 << 8)
+#define CHIMERA_MOD_RCTRL       (1 << 9)
+#define CHIMERA_MOD_LALT        (1 << 10)
+#define CHIMERA_MOD_RALT        (1 << 11)
+#define CHIMERA_MOD_LCMD        (1 << 12)
+#define CHIMERA_MOD_RCMD        (1 << 13)
 
 typedef enum {
-  XIU_EVENT_MOUSE_MOVED = 0,
-  XIU_EVENT_MOUSE_DOWN = 1,
-  XIU_EVENT_MOUSE_UP = 2,
-  XIU_EVENT_MOUSE_CLICKED = 3,
-  XIU_EVENT_KEY_PRESSED = 4,
-  XIU_EVENT_KEY_RELEASED = 5,
-  XIU_EVENT_MOUSE_SCROLLED = 6,
-} xiu_event_type_t;
+  CHIMERA_EVENT_MOUSE_MOVED = 0,
+  CHIMERA_EVENT_MOUSE_DOWN = 1,
+  CHIMERA_EVENT_MOUSE_UP = 2,
+  CHIMERA_EVENT_MOUSE_CLICKED = 3,
+  CHIMERA_EVENT_KEY_PRESSED = 4,
+  CHIMERA_EVENT_KEY_RELEASED = 5,
+  CHIMERA_EVENT_MOUSE_SCROLLED = 6,
+} chimera_event_type_t;
 
-typedef struct xiu_event {
-  xiu_event_type_t type;
+typedef struct chimera_event {
+  chimera_event_type_t type;
   union {
     struct {
       i32 delta_x;
@@ -44,6 +44,6 @@ typedef struct xiu_event {
       u32 modifiers;
     } keyboard;
   } data;
-} xiu_event_t;
+} chimera_event_t;
 
 #endif

@@ -1,5 +1,5 @@
 /* =============================================================================
- * XIU Operating System — Network Interface Registry & Dispatch
+ * Chimera Operating System — Network Interface Registry & Dispatch
  * kernel/net/if.c
  * ============================================================================= */
 
@@ -16,8 +16,8 @@ void if_init(void) {
     s_if_list = nullptr;
 }
 
-xiu_error_t if_attach(ifnet_t *ifp) {
-    if (!ifp) return XIU_ERR_INVALID;
+chimera_error_t if_attach(ifnet_t *ifp) {
+    if (!ifp) return CHIMERA_ERR_INVALID;
 
     spinlock_init(&ifp->if_lock);
     irq_flags_t flags = spinlock_lock_irqsave(&s_if_lock);
@@ -27,7 +27,7 @@ xiu_error_t if_attach(ifnet_t *ifp) {
 
     kprintf("[net] Interface attached: %s (flags=0x%04x, mtu=%u)\n",
             ifp->if_name, ifp->if_flags, ifp->if_mtu);
-    return XIU_SUCCESS;
+    return CHIMERA_SUCCESS;
 }
 
 void if_detach(ifnet_t *ifp) {

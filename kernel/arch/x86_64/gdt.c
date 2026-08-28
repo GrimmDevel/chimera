@@ -1,5 +1,5 @@
 /* =============================================================================
- * XIU Operating System — Global Descriptor Table Implementation
+ * Chimera Operating System — Global Descriptor Table Implementation
  * kernel/arch/x86_64/gdt.c
  * ============================================================================= */
 
@@ -12,15 +12,15 @@ static struct tss_entry tss;
 static u8 s_bsp_df_stack[4096] __attribute__((aligned(16)));
 static u8 s_bsp_nmi_stack[4096] __attribute__((aligned(16)));
 
-static u8 s_ap_df_stacks[XIU_MAX_CPUS][4096] __attribute__((aligned(16)));
-static u8 s_ap_nmi_stacks[XIU_MAX_CPUS][4096] __attribute__((aligned(16)));
+static u8 s_ap_df_stacks[CHIMERA_MAX_CPUS][4096] __attribute__((aligned(16)));
+static u8 s_ap_nmi_stacks[CHIMERA_MAX_CPUS][4096] __attribute__((aligned(16)));
 
-extern cpu_local_t g_cpu_data[XIU_MAX_CPUS];
+extern cpu_local_t g_cpu_data[CHIMERA_MAX_CPUS];
 
 struct gdtr {
     u16 limit;
     u64 base;
-} XIU_PACKED;
+} CHIMERA_PACKED;
 
 static struct gdtr gdtr;
 
@@ -28,6 +28,40 @@ static void gdt_set_entry(int index, u32 base, u32 limit, u8 access, u8 flags) {
     gdt[index] = (limit & 0xFFFF) | ((base & 0xFFFFFF) << 16) |
                  ((u64)access << 40) | (((u64)limit & 0xF0000) << 32) |
                  ((u64)flags << 52) | (((u64)base & 0xFF000000) << 32);
+}
+
+static inline void cpuid(u32 leaf, u32 subleaf, u32 *eax, u32 *ebx, u32 *ecx, u32 *edx) {
+    __asm__ volatile("cpuid"
+                     : "=a"(*eax), "=b"(*ebx), "=c"(*ecx), "=d"(*edx)
+                     : "a"(leaf), "c"(subleaf));
+}
+
+static void cpu_enable_features(void) {
+    u64 cr0, cr4;
+    __asm__ volatile("mov %%cr0, %0" : "=r"(cr0));
+    cr0 &= ~(1ULL << 2); // clear EM
+    cr0 |= (1ULL << 1);  // set MP
+    __asm__ volatile("mov %0, %%cr0" :: "r"(cr0));
+
+    __asm__ volatile("mov %%cr4, %0" : "=r"(cr4));
+    cr4 |= (1ULL << 9);  // OSFXSR
+    cr4 |= (1ULL << 10); // OSXMMEXCPT
+
+    // query CPUID for SMEP and SMAP support
+    u32 eax = 0, ebx = 0, ecx = 0, edx = 0;
+    cpuid(0, 0, &eax, &ebx, &ecx, &edx);
+    if (eax >= 7) {
+        cpuid(7, 0, &eax, &ebx, &ecx, &edx);
+        if (ebx & (1 << 7)) {
+            cr4 |= (1ULL << 20); // SMEP
+        }
+        if (ebx & (1 << 20)) {
+            cr4 |= (1ULL << 21); // SMAP
+        }
+    }
+    __asm__ volatile("mov %0, %%cr4" :: "r"(cr4));
+
+    __asm__ volatile("fninit");
 }
 
 void gdt_init(void) {
@@ -82,19 +116,7 @@ void gdt_init(void) {
         : "rax", "memory"
     );
 
-    // enable fpu and sse
-    u64 cr0, cr4;
-    __asm__ volatile("mov %%cr0, %0" : "=r"(cr0));
-    cr0 &= ~(1ULL << 2);
-    cr0 |= (1ULL << 1);
-    __asm__ volatile("mov %0, %%cr0" :: "r"(cr0));
-
-    __asm__ volatile("mov %%cr4, %0" : "=r"(cr4));
-    cr4 |= (1ULL << 9);
-    cr4 |= (1ULL << 10);
-    __asm__ volatile("mov %0, %%cr4" :: "r"(cr4));
-
-    __asm__ volatile("fninit");
+    cpu_enable_features();
 }
 
 void tss_set_rsp0(u64 rsp0) {
@@ -104,7 +126,7 @@ void tss_set_rsp0(u64 rsp0) {
 void tss_set_rsp0_cpu(u32 cpu_id, u64 rsp0) {
     if (cpu_id == 0) {
         tss.rsp0 = rsp0;
-    } else if (cpu_id < XIU_MAX_CPUS && g_cpu_data[cpu_id].cpu_tss_ptr) {
+    } else if (cpu_id < CHIMERA_MAX_CPUS && g_cpu_data[cpu_id].cpu_tss_ptr) {
         ((struct tss_entry *)g_cpu_data[cpu_id].cpu_tss_ptr)->rsp0 = rsp0;
     }
 }
@@ -129,7 +151,7 @@ void gdt_init_ap(u64 *ap_gdt, struct tss_entry *ap_tss, u32 cpu_id) {
     __builtin_memset(ap_tss, 0, sizeof(*ap_tss));
     ap_tss->iopb_offset = sizeof(*ap_tss);
 
-    if (cpu_id < XIU_MAX_CPUS) {
+    if (cpu_id < CHIMERA_MAX_CPUS) {
         ap_tss->ist1 = (u64)(s_ap_df_stacks[cpu_id] + sizeof(s_ap_df_stacks[cpu_id]));
         ap_tss->ist2 = (u64)(s_ap_nmi_stacks[cpu_id] + sizeof(s_ap_nmi_stacks[cpu_id]));
     }
@@ -166,17 +188,5 @@ void gdt_init_ap(u64 *ap_gdt, struct tss_entry *ap_tss, u32 cpu_id) {
         : "rax", "memory"
     );
 
-    // enable FPU and SSE on this AP core
-    u64 cr0, cr4;
-    __asm__ volatile("mov %%cr0, %0" : "=r"(cr0));
-    cr0 &= ~(1ULL << 2); // clear EM
-    cr0 |= (1ULL << 1);  // set MP
-    __asm__ volatile("mov %0, %%cr0" :: "r"(cr0));
-
-    __asm__ volatile("mov %%cr4, %0" : "=r"(cr4));
-    cr4 |= (1ULL << 9);  // set OSFXSR
-    cr4 |= (1ULL << 10); // set OSXMMEXCPT
-    __asm__ volatile("mov %0, %%cr4" :: "r"(cr4));
-
-    __asm__ volatile("fninit");
+    cpu_enable_features();
 }

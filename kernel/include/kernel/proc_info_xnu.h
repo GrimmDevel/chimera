@@ -1,13 +1,13 @@
 /* =============================================================================
- * XIU Operating System — Apple XNU Process Information Subsystem
+ * Chimera Operating System — Apple XNU Process Information Subsystem
  * kernel/include/kernel/proc_info_xnu.h
  * Derived from XNU bsd/sys/proc_info.h
  * ============================================================================= */
 
-#ifndef XIU_PROC_INFO_XNU_H
-#define XIU_PROC_INFO_XNU_H
+#ifndef CHIMERA_PROC_INFO_XNU_H
+#define CHIMERA_PROC_INFO_XNU_H
 
-#include <kernel/xiu_types.h>
+#include <kernel/chimera_types.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -47,4 +47,4 @@ struct proc_taskinfo {
 }
 #endif
 
-#endif /* XIU_PROC_INFO_XNU_H */
+#endif /* CHIMERA_PROC_INFO_XNU_H */

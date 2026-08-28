@@ -1,5 +1,5 @@
 /*
- * XIU Operating System — PAM Interface Header
+ * Chimera Operating System — PAM Interface Header
  * Compatible with OpenPAM and Linux-PAM
  */
 

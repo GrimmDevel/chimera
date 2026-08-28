@@ -1,12 +1,12 @@
 /* =============================================================================
- * XIU Operating System — x86_64 Local APIC (LAPIC) Driver
+ * Chimera Operating System — x86_64 Local APIC (LAPIC) Driver
  * kernel/arch/x86_64/lapic.c
  *
  * Implements Local APIC initialization, EOI, and Inter-Processor Interrupts (IPI)
  * ============================================================================= */
 
 #include <kernel/lapic.h>
-#include <kernel/xiu_types.h>
+#include <kernel/chimera_types.h>
 
 extern void kprintf(const char *fmt, ...);
 

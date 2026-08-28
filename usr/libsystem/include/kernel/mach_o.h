@@ -1,16 +1,16 @@
 /* =============================================================================
- * XIU Operating System — Mach-O 64-bit Format Definitions (XNU Aligned)
+ * Chimera Operating System — Mach-O 64-bit Format Definitions (XNU Aligned)
  * kernel/include/kernel/mach_o.h
  * ============================================================================= */
 
 #pragma once
-#ifndef XIU_MACH_O_H
-#define XIU_MACH_O_H
+#ifndef CHIMERA_MACH_O_H
+#define CHIMERA_MACH_O_H
 
-#include <kernel/xiu_types.h>
+#include <kernel/chimera_types.h>
 
 // forward declarations
-struct xiu_task;
+struct chimera_task;
 
 // mach-O Magic constants
 #define MH_MAGIC_64         0xfeedfacfU
@@ -138,8 +138,8 @@ typedef struct thread_command {
 extern "C" {
 #endif
 
-void mach_load(void *module_ptr, struct xiu_task *out_task, uintptr_t *entry_point, uintptr_t *user_stack);
-void mach_load_args(void *module_ptr, struct xiu_task *out_task,
+void mach_load(void *module_ptr, struct chimera_task *out_task, uintptr_t *entry_point, uintptr_t *user_stack);
+void mach_load_args(void *module_ptr, struct chimera_task *out_task,
                     uintptr_t *entry_point, uintptr_t *user_stack,
                     const char *arg0, char *const argv[], char *const envp[]);
 
@@ -147,4 +147,4 @@ void mach_load_args(void *module_ptr, struct xiu_task *out_task,
 }
 #endif
 
-#endif /* XIU_MACH_O_H */
+#endif /* CHIMERA_MACH_O_H */

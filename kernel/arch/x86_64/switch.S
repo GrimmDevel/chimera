@@ -3,7 +3,7 @@
 
 .global context_switch
 context_switch:
-    // rdi = old_stack_ptr (void**), rsi = new_stack_ptr (void*), rdx = new_cr3, rcx = old_fp (void*), r8 = new_fp (void*)
+    // rdi = old_stack_ptr (void**), rsi = new_stack_ptr (void*), rdx = new_cr3, rcx = old_fp (void*), r8 = new_fp (void*), r9 = old_running_cpu (u32*)
     pushfq
     cli
     push rbp
@@ -19,19 +19,24 @@ context_switch:
     fxsave64 [rcx]
 1:
     mov [rdi], rsp
+
+    test r9, r9
+    jz 2f
+    mov DWORD PTR [r9], 0xFFFFFFFF
+2:
     mov rsp, rsi
 
     // restore new FP/SSE state if pointer provided
     test r8, r8
-    jz 2f
+    jz 3f
     fxrstor64 [r8]
-2:
+3:
     // switch cr3 if needed
     mov rax, cr3
     cmp rax, rdx
-    je 3f
+    je 4f
     mov cr3, rdx
-3:
+4:
     pop r15
     pop r14
     pop r13

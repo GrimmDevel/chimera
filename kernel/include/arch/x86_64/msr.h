@@ -1,11 +1,11 @@
 /* =============================================================================
- * XIU Operating System — x86_64 Model Specific Registers (MSRs)
+ * Chimera Operating System — x86_64 Model Specific Registers (MSRs)
  * kernel/include/arch/x86_64/msr.h
  * ============================================================================= */
 
 #pragma once
 
-#include <kernel/xiu_types.h>
+#include <kernel/chimera_types.h>
 
 #define MSR_EFER        0xC0000080
 #define MSR_STAR        0xC0000081

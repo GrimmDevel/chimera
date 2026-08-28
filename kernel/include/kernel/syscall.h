@@ -1,9 +1,9 @@
 // XIU System Call Interface
 #pragma once
-#ifndef XIU_SYSCALL_H
-#define XIU_SYSCALL_H
+#ifndef CHIMERA_SYSCALL_H
+#define CHIMERA_SYSCALL_H
 
-#include <kernel/xiu_types.h>
+#include <kernel/chimera_types.h>
 #include <kernel/bsd_syscall_xnu.h>
 
 #define MAX_SYSCALL_NUM 512

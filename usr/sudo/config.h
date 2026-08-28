@@ -111,7 +111,7 @@
 
 #define SUDO_STATIC 1
 #define __MACH__ 1
-#define __XIU__ 1
+#define __CHIMERA__ 1
 #define __APPLE__ 1
 
 #ifndef sudo_dso_public

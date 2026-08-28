@@ -1,5 +1,5 @@
 /* =============================================================================
- * XIU Operating System — Memory Buffer (mbuf) Implementation
+ * Chimera Operating System — Memory Buffer (mbuf) Implementation
  * kernel/net/mbuf.c
  * ============================================================================= */
 
@@ -112,8 +112,8 @@ void m_copydata(const mbuf_t *m, i32 off, i32 len, void *cp) {
     }
 }
 
-xiu_error_t m_append(mbuf_t *m, i32 len, const void *cp) {
-    if (!m || len <= 0 || !cp) return XIU_ERR_INVALID;
+chimera_error_t m_append(mbuf_t *m, i32 len, const void *cp) {
+    if (!m || len <= 0 || !cp) return CHIMERA_ERR_INVALID;
 
     // navigate to last mbuf
     while (m->m_next) m = m->m_next;
@@ -127,15 +127,15 @@ xiu_error_t m_append(mbuf_t *m, i32 len, const void *cp) {
     if (current_offset + (usize)m->m_len + (usize)len <= max_capacity) {
         __builtin_memcpy(m->m_data + m->m_len, cp, (usize)len);
         m->m_len += len;
-        return XIU_SUCCESS;
+        return CHIMERA_SUCCESS;
     }
 
     // allocate next chained mbuf
     mbuf_t *n = (len > (i32)sizeof(m->m_dat)) ? m_getcl(m->m_type) : m_get(m->m_type);
-    if (!n) return XIU_ERR_NOMEM;
+    if (!n) return CHIMERA_ERR_NOMEM;
 
     __builtin_memcpy(n->m_data, cp, (usize)len);
     n->m_len = len;
     m->m_next = n;
-    return XIU_SUCCESS;
+    return CHIMERA_SUCCESS;
 }

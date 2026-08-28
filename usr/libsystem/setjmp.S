@@ -1,5 +1,5 @@
 /* =============================================================================
- * XIU Operating System — setjmp/longjmp (Mach-O Darwin ABI)
+ * Chimera Operating System — setjmp/longjmp (Mach-O Darwin ABI)
  * usr/libsystem/setjmp.S
  * ============================================================================= */
 

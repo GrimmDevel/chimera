@@ -1,15 +1,15 @@
 // file descriptor and file procedure (fileproc)
 #pragma once
-#ifndef XIU_FILEPROC_H
-#define XIU_FILEPROC_H
+#ifndef CHIMERA_FILEPROC_H
+#define CHIMERA_FILEPROC_H
 
-#include <kernel/xiu_types.h>
+#include <kernel/chimera_types.h>
 #include <kernel/spinlock.h>
 
 struct vnode;
 struct vfs_context;
 struct socket;
-struct xiu_proc;
+struct chimera_proc;
 
 #define FP_CLOEXEC      (1u << 0)
 #define FP_NONBLOCK     (1u << 1)
@@ -23,7 +23,7 @@ struct xiu_proc;
 #define DTYPE_SOCKET    2
 #define DTYPE_PIPE      3
 
-typedef struct xiu_fileproc {
+typedef struct chimera_fileproc {
     u64              fp_signature;
     u32              fp_flags;
     u32              fp_type;
@@ -34,12 +34,12 @@ typedef struct xiu_fileproc {
         struct socket   *fp_socket;
         void            *fp_data;
     };
-    xiu_offset_t     fp_offset;
+    chimera_offset_t     fp_offset;
 
     spinlock_t       fp_lock;
-} xiu_fileproc_t;
+} chimera_fileproc_t;
 
-#define XIU_FILEPROC_MAGIC  0x4644455343522121ULL
+#define CHIMERA_FILEPROC_MAGIC  0x4644455343522121ULL
 
 // Standard fcntl commands (Darwin/XNU compatible)
 #define F_DUPFD         0
@@ -70,22 +70,22 @@ typedef struct xiu_fileproc {
 #define O_NOCTTY        0x20000
 #define O_CLOEXEC       0x1000000
 
-xiu_fileproc_t *fp_alloc(struct vnode *vp, u32 flags);
-xiu_fileproc_t *fp_alloc_socket(struct socket *so, u32 flags);
-void fp_release(xiu_fileproc_t *fp);
+chimera_fileproc_t *fp_alloc(struct vnode *vp, u32 flags);
+chimera_fileproc_t *fp_alloc_socket(struct socket *so, u32 flags);
+void fp_release(chimera_fileproc_t *fp);
 
-static inline void fp_retain(xiu_fileproc_t *fp) {
+static inline void fp_retain(chimera_fileproc_t *fp) {
     atomic_fetch_add_explicit(&fp->fp_refcount, 1, memory_order_relaxed);
 }
 
-int  proc_fd_install(struct xiu_proc *p, xiu_fileproc_t *fp);
-int  proc_fd_alloc_from(struct xiu_proc *p, xiu_fileproc_t *fp, int min_fd);
-xiu_fileproc_t *proc_fd_lookup(struct xiu_proc *p, int fd);
-u8   proc_fd_get_flags(struct xiu_proc *p, int fd);
-void proc_fd_set_flags(struct xiu_proc *p, int fd, u8 flags);
-xiu_error_t proc_fd_close(struct xiu_proc *p, int fd);
-void proc_fd_close_cloexec(struct xiu_proc *p);
-i16  fileproc_poll(xiu_fileproc_t *fp, i16 events);
+int  proc_fd_install(struct chimera_proc *p, chimera_fileproc_t *fp);
+int  proc_fd_alloc_from(struct chimera_proc *p, chimera_fileproc_t *fp, int min_fd);
+chimera_fileproc_t *proc_fd_lookup(struct chimera_proc *p, int fd);
+u8   proc_fd_get_flags(struct chimera_proc *p, int fd);
+void proc_fd_set_flags(struct chimera_proc *p, int fd, u8 flags);
+chimera_error_t proc_fd_close(struct chimera_proc *p, int fd);
+void proc_fd_close_cloexec(struct chimera_proc *p);
+i16  fileproc_poll(chimera_fileproc_t *fp, i16 events);
 
 #endif
 

@@ -1,11 +1,11 @@
 #!/bin/bash
 # scripts/gen_zsh_files.sh
-# Generates Zsh source and prototype files for XIU OS
+# Generates Zsh source and prototype files for Chimera OS
 
 WORKSPACE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ZSH_SRC="$WORKSPACE/zsh/Src"
 
-echo "[XIU] Generating Zsh headers and prototypes..."
+echo "[CHIMERA] Generating Zsh headers and prototypes..."
 
 cd "$ZSH_SRC"
 
@@ -55,4 +55,4 @@ if [ -d "Builtins" ]; then
 fi
 
 cd "$WORKSPACE"
-echo "[XIU] Zsh generation complete."
+echo "[CHIMERA] Zsh generation complete."

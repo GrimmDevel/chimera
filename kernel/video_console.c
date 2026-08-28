@@ -1,6 +1,6 @@
 #include <kernel/spinlock.h>
 #include <kernel/video_console.h>
-#include <kernel/xiu_types.h>
+#include <kernel/chimera_types.h>
 
 #ifndef boolean_t
 typedef bool boolean_t;
@@ -708,10 +708,10 @@ void video_console_init(unsigned long baseaddr, uint64_t physaddr,
 
   usize total_bytes = vinfo.v_height * vinfo.v_rowbytes;
   usize pages = (total_bytes + 4095) / 4096;
-  extern xiu_paddr_t pmm_alloc_pages(usize count);
+  extern chimera_paddr_t pmm_alloc_pages(usize count);
   extern u64 g_hhdm_base;
-  xiu_paddr_t phys = pmm_alloc_pages(pages);
-  if (phys && phys != (xiu_paddr_t)-1) {
+  chimera_paddr_t phys = pmm_alloc_pages(pages);
+  if (phys && phys != (chimera_paddr_t)-1) {
     s_vc_backbuffer = (uint32_t *)(phys + g_hhdm_base);
   } else {
     s_vc_backbuffer = NULL;
@@ -731,10 +731,10 @@ void video_console_init_backbuffer(void) {
 
   usize total_bytes = vinfo.v_height * vinfo.v_rowbytes;
   usize pages = (total_bytes + 4095) / 4096;
-  extern xiu_paddr_t pmm_alloc_pages(usize count);
+  extern chimera_paddr_t pmm_alloc_pages(usize count);
   extern u64 g_hhdm_base;
-  xiu_paddr_t phys = pmm_alloc_pages(pages);
-  if (phys && phys != (xiu_paddr_t)-1) {
+  chimera_paddr_t phys = pmm_alloc_pages(pages);
+  if (phys && phys != (chimera_paddr_t)-1) {
     s_vc_backbuffer = (uint32_t *)(phys + g_hhdm_base);
 
     uint32_t stride = vinfo.v_rowbytes / 4;

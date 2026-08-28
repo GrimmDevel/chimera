@@ -4,7 +4,7 @@
 #include <kernel/ipc_message.h>
 #include <kernel/ipc_port.h>
 #include <kernel/panic.h>
-#include <kernel/xiu_types.h>
+#include <kernel/chimera_types.h>
 
 extern "C" void console_in_push(char c);
 extern "C" void console_scroll_viewport(int delta);
@@ -63,8 +63,8 @@ private:
   bool capslock_active = false;
   bool is_extended = false;
 
-  RingBuffer<xiu_event_t, 1024> event_queue;
-  RingBuffer<xiu_event_t, 1024> mouse_queue;
+  RingBuffer<chimera_event_t, 1024> event_queue;
+  RingBuffer<chimera_event_t, 1024> mouse_queue;
 
   void ps2_wait(bool data) {
     u32 timeout = 100000;
@@ -95,31 +95,31 @@ private:
   u32 get_modifiers() const {
     u32 mods = 0;
     if (lshift_down || rshift_down)
-      mods |= XIU_MOD_SHIFT;
+      mods |= CHIMERA_MOD_SHIFT;
     if (lctrl_down || rctrl_down)
-      mods |= XIU_MOD_CTRL;
+      mods |= CHIMERA_MOD_CTRL;
     if (lalt_down || ralt_down)
-      mods |= XIU_MOD_ALT;
+      mods |= CHIMERA_MOD_ALT;
     if (lcmd_down || rcmd_down)
-      mods |= XIU_MOD_CMD;
+      mods |= CHIMERA_MOD_CMD;
     if (capslock_active)
-      mods |= XIU_MOD_CAPSLOCK;
+      mods |= CHIMERA_MOD_CAPSLOCK;
     if (lshift_down)
-      mods |= XIU_MOD_LSHIFT;
+      mods |= CHIMERA_MOD_LSHIFT;
     if (rshift_down)
-      mods |= XIU_MOD_RSHIFT;
+      mods |= CHIMERA_MOD_RSHIFT;
     if (lctrl_down)
-      mods |= XIU_MOD_LCTRL;
+      mods |= CHIMERA_MOD_LCTRL;
     if (rctrl_down)
-      mods |= XIU_MOD_RCTRL;
+      mods |= CHIMERA_MOD_RCTRL;
     if (lalt_down)
-      mods |= XIU_MOD_LALT;
+      mods |= CHIMERA_MOD_LALT;
     if (ralt_down)
-      mods |= XIU_MOD_RALT;
+      mods |= CHIMERA_MOD_RALT;
     if (lcmd_down)
-      mods |= XIU_MOD_LCMD;
+      mods |= CHIMERA_MOD_LCMD;
     if (rcmd_down)
-      mods |= XIU_MOD_RCMD;
+      mods |= CHIMERA_MOD_RCMD;
     return mods;
   }
 
@@ -165,8 +165,8 @@ private:
         'J', 'K', 'L',  ':',  '"',  '~', 0,   '|', 'Z', 'X', 'C', 'V',
         'B', 'N', 'M',  '<',  '>',  '?', 0,   '*', 0,   ' ', 0};
 
-    bool shift = (mods & XIU_MOD_SHIFT) != 0;
-    bool caps = (mods & XIU_MOD_CAPSLOCK) != 0;
+    bool shift = (mods & CHIMERA_MOD_SHIFT) != 0;
+    bool caps = (mods & CHIMERA_MOD_CAPSLOCK) != 0;
     char ch_normal = normal[scancode];
     char ch_shifted = shifted[scancode];
 
@@ -178,7 +178,7 @@ private:
     }
 
     // ctrl shortcuts
-    if (mods & XIU_MOD_CTRL) {
+    if (mods & CHIMERA_MOD_CTRL) {
       if (ch >= 'a' && ch <= 'z')
         return (u32)(ch - 'a' + 1);
       if (ch >= 'A' && ch <= 'Z')
@@ -198,7 +198,7 @@ private:
     }
 
     // gui / cmd shortcuts
-    if (mods & XIU_MOD_CMD) {
+    if (mods & CHIMERA_MOD_CMD) {
       if (ch == 's' || ch == 'S')
         return 19;
       if (ch == 'q' || ch == 'Q')
@@ -223,7 +223,7 @@ private:
         return 21;
     }
 
-    if (mods & XIU_MOD_ALT) {
+    if (mods & CHIMERA_MOD_ALT) {
       if (ch == '\b')
         return 23;
     }
@@ -235,11 +235,11 @@ public:
   void init() {
     u8 probe = inb(PS2_STATUS);
     if (probe == 0xFF) {
-      kprintf("[XIU-Kit] HID: No PS/2 controller on port 0x64\n");
+      kprintf("[ChimeraKit] HID: No PS/2 controller on port 0x64\n");
       return;
     }
 
-    kprintf("[XIU-Kit] HID: Initializing input subsystem (PS/2 & SMM USB "
+    kprintf("[ChimeraKit] HID: Initializing input subsystem (PS/2 & SMM USB "
             "Emulation)\n");
 
     u32 guard = 256;
@@ -288,8 +288,8 @@ public:
             if (state & 0x20)
               dy |= ~0xFF;
 
-            xiu_event_t ev;
-            ev.type = XIU_EVENT_MOUSE_MOVED;
+            chimera_event_t ev;
+            ev.type = CHIMERA_EVENT_MOUSE_MOVED;
             ev.data.mouse.delta_x = dx;
             ev.data.mouse.delta_y = -dy; // ps2 hardware y is inverted
             ev.data.mouse.delta_z = 0;
@@ -352,8 +352,8 @@ public:
         u32 mods = get_modifiers();
         u32 unicode = decode_scancode(scancode, extended, mods);
 
-        xiu_event_t ev;
-        ev.type = release ? XIU_EVENT_KEY_RELEASED : XIU_EVENT_KEY_PRESSED;
+        chimera_event_t ev;
+        ev.type = release ? CHIMERA_EVENT_KEY_RELEASED : CHIMERA_EVENT_KEY_PRESSED;
         ev.data.keyboard.keycode = scancode | (extended ? 0x8000 : 0);
         ev.data.keyboard.unicode = release ? 0 : unicode;
         ev.data.keyboard.modifiers = mods;
@@ -361,14 +361,14 @@ public:
 
         if (!release && unicode != 0) {
           if (unicode == 0x1007 ||
-              ((mods & XIU_MOD_SHIFT) && unicode == 0x1001)) {
+              ((mods & CHIMERA_MOD_SHIFT) && unicode == 0x1001)) {
             console_scroll_viewport(unicode == 0x1007 ? 10 : 1);
           } else if (unicode == 0x1008 ||
-                     ((mods & XIU_MOD_SHIFT) && unicode == 0x1002)) {
+                     ((mods & CHIMERA_MOD_SHIFT) && unicode == 0x1002)) {
             console_scroll_viewport(unicode == 0x1008 ? -10 : -1);
-          } else if ((mods & XIU_MOD_SHIFT) && unicode == 0x1005) {
+          } else if ((mods & CHIMERA_MOD_SHIFT) && unicode == 0x1005) {
             console_scroll_viewport(10000);
-          } else if ((mods & XIU_MOD_SHIFT) && unicode == 0x1006) {
+          } else if ((mods & CHIMERA_MOD_SHIFT) && unicode == 0x1006) {
             console_scroll_to_bottom();
           } else {
             console_scroll_to_bottom();
@@ -407,8 +407,8 @@ public:
   }
 
   void push_key_event(u32 scancode, u32 unicode, u32 mods, bool release) {
-    xiu_event_t ev;
-    ev.type = release ? XIU_EVENT_KEY_RELEASED : XIU_EVENT_KEY_PRESSED;
+    chimera_event_t ev;
+    ev.type = release ? CHIMERA_EVENT_KEY_RELEASED : CHIMERA_EVENT_KEY_PRESSED;
     ev.data.keyboard.keycode = scancode;
     ev.data.keyboard.unicode = release ? 0 : unicode;
     ev.data.keyboard.modifiers = mods;
@@ -446,8 +446,8 @@ public:
   }
 
   void push_mouse_event(i32 dx, i32 dy, i32 dz, u32 buttons) {
-    xiu_event_t ev;
-    ev.type = XIU_EVENT_MOUSE_MOVED;
+    chimera_event_t ev;
+    ev.type = CHIMERA_EVENT_MOUSE_MOVED;
     ev.data.mouse.delta_x = dx;
     ev.data.mouse.delta_y = dy;
     ev.data.mouse.delta_z = dz;
@@ -455,7 +455,7 @@ public:
     mouse_queue.push(ev);
   }
 
-  size_t read_events(xiu_event_t *buf, size_t max_count) {
+  size_t read_events(chimera_event_t *buf, size_t max_count) {
     size_t read_count = 0;
     while (read_count < max_count && event_queue.pop(&buf[read_count])) {
       read_count++;
@@ -463,7 +463,7 @@ public:
     return read_count;
   }
 
-  size_t read_mouse_events(xiu_event_t *buf, size_t max_count) {
+  size_t read_mouse_events(chimera_event_t *buf, size_t max_count) {
     handle_irq();
     size_t read_count = 0;
     while (read_count < max_count && mouse_queue.pop(&buf[read_count])) {
@@ -487,46 +487,46 @@ static HIDDriver s_hid;
 
 } // namespace XIUKit
 
-extern "C" void xiukit_xhci_poll(void);
+extern "C" void chimerakit_xhci_poll(void);
 
-extern "C" void xiukit_hid_irq_handler(void) {
+extern "C" void chimerakit_hid_irq_handler(void) {
   XIUKit::s_hid.handle_irq();
-  xiukit_xhci_poll();
+  chimerakit_xhci_poll();
 }
 
-extern "C" void xiukit_hid_poll(void) {
+extern "C" void chimerakit_hid_poll(void) {
   XIUKit::s_hid.handle_irq();
-  xiukit_xhci_poll();
+  chimerakit_xhci_poll();
 }
 
-extern "C" void xiukit_hid_init() { XIUKit::s_hid.init(); }
+extern "C" void chimerakit_hid_init() { XIUKit::s_hid.init(); }
 
-extern "C" void xiukit_hid_push_key_event(u32 scancode, u32 unicode, u32 mods,
+extern "C" void chimerakit_hid_push_key_event(u32 scancode, u32 unicode, u32 mods,
                                           bool release) {
   XIUKit::s_hid.push_key_event(scancode, unicode, mods, release);
 }
 
-extern "C" void xiukit_hid_push_mouse_event(i32 dx, i32 dy, i32 dz,
+extern "C" void chimerakit_hid_push_mouse_event(i32 dx, i32 dy, i32 dz,
                                             u32 buttons) {
   XIUKit::s_hid.push_mouse_event(dx, dy, dz, buttons);
 }
 
-extern "C" size_t xiukit_hid_read_mouse(xiu_event_t *buf, size_t count) {
-  xiukit_xhci_poll();
+extern "C" size_t chimerakit_hid_read_mouse(chimera_event_t *buf, size_t count) {
+  chimerakit_xhci_poll();
   return XIUKit::s_hid.read_mouse_events(buf, count);
 }
 
-extern "C" size_t xiukit_hid_read_kbd(xiu_event_t *buf, size_t count) {
-  xiukit_xhci_poll();
+extern "C" size_t chimerakit_hid_read_kbd(chimera_event_t *buf, size_t count) {
+  chimerakit_xhci_poll();
   return XIUKit::s_hid.read_events(buf, count);
 }
 
-extern "C" bool xiukit_hid_has_mouse(void) {
-  xiukit_xhci_poll();
+extern "C" bool chimerakit_hid_has_mouse(void) {
+  chimerakit_xhci_poll();
   return XIUKit::s_hid.has_mouse_events();
 }
 
-extern "C" bool xiukit_hid_has_kbd(void) {
-  xiukit_xhci_poll();
+extern "C" bool chimerakit_hid_has_kbd(void) {
+  chimerakit_xhci_poll();
   return XIUKit::s_hid.has_events();
 }

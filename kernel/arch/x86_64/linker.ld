@@ -6,7 +6,7 @@ PHDRS
     data    PT_LOAD    FLAGS(6);
 }
 
-ENTRY(xiu_kernel_main)
+ENTRY(chimera_kernel_main)
 
 SECTIONS
 {

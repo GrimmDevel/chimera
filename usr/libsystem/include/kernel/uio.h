@@ -1,8 +1,8 @@
 // uio buffer move
-#ifndef XIU_UIO_H
-#define XIU_UIO_H
+#ifndef CHIMERA_UIO_H
+#define CHIMERA_UIO_H
 
-#include <kernel/xiu_types.h>
+#include <kernel/chimera_types.h>
 
 typedef enum {
     UIO_READ,
@@ -22,7 +22,7 @@ struct uio {
     uio_rw_t  uio_rw;
 };
 
-static inline xiu_error_t uio_move(void *cp, usize n, struct uio *uio) {
+static inline chimera_error_t uio_move(void *cp, usize n, struct uio *uio) {
     if (uio->uio_resid < n) n = uio->uio_resid;
     
     if (uio->uio_rw == UIO_READ) {

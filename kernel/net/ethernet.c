@@ -1,5 +1,5 @@
 /* =============================================================================
- * XIU Operating System — Ethernet Frame Processing
+ * Chimera Operating System — Ethernet Frame Processing
  * kernel/net/ethernet.c
  * ============================================================================= */
 
@@ -9,7 +9,7 @@
 
 extern void arp_input(ifnet_t *ifp, mbuf_t *m);
 extern void ip_input(ifnet_t *ifp, mbuf_t *m);
-extern xiu_error_t arp_resolve(ifnet_t *ifp, struct in_addr dest_ip, u8 *dest_mac);
+extern chimera_error_t arp_resolve(ifnet_t *ifp, struct in_addr dest_ip, u8 *dest_mac);
 
 void ethernet_input(ifnet_t *ifp, mbuf_t *m) {
     if (!ifp || !m || m->m_len < (i32)sizeof(ether_header_t)) {
@@ -40,8 +40,8 @@ void ethernet_input(ifnet_t *ifp, mbuf_t *m) {
     }
 }
 
-xiu_error_t ethernet_output(ifnet_t *ifp, mbuf_t *m, struct in_addr dest_ip, u16 ethertype) {
-    if (!ifp || !m) return XIU_ERR_INVALID;
+chimera_error_t ethernet_output(ifnet_t *ifp, mbuf_t *m, struct in_addr dest_ip, u16 ethertype) {
+    if (!ifp || !m) return CHIMERA_ERR_INVALID;
 
     u8 dest_mac[ETHER_ADDR_LEN];
     u32 dest_addr = ntohl(dest_ip.s_addr);
@@ -56,8 +56,8 @@ xiu_error_t ethernet_output(ifnet_t *ifp, mbuf_t *m, struct in_addr dest_ip, u16
             nexthop = ifp->if_gateway;
         }
 
-        xiu_error_t err = arp_resolve(ifp, nexthop, dest_mac);
-        if (err != XIU_SUCCESS) {
+        chimera_error_t err = arp_resolve(ifp, nexthop, dest_mac);
+        if (err != CHIMERA_SUCCESS) {
             m_freem(m);
             return err;
         }
@@ -67,7 +67,7 @@ xiu_error_t ethernet_output(ifnet_t *ifp, mbuf_t *m, struct in_addr dest_ip, u16
     mbuf_t *hdr = m_gethdr(MT_HEADER);
     if (!hdr) {
         m_freem(m);
-        return XIU_ERR_NOMEM;
+        return CHIMERA_ERR_NOMEM;
     }
 
     ether_header_t *eth = (ether_header_t *)hdr->m_data;
@@ -84,5 +84,5 @@ xiu_error_t ethernet_output(ifnet_t *ifp, mbuf_t *m, struct in_addr dest_ip, u16
     }
 
     m_freem(hdr);
-    return XIU_ERR_UNSUPPORTED;
+    return CHIMERA_ERR_UNSUPPORTED;
 }

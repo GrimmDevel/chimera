@@ -1,5 +1,5 @@
 /* =============================================================================
- * XIU Operating System — Syscall Numbers for User Space
+ * Chimera Operating System — Syscall Numbers for User Space
  * usr/libsystem/include/sys/syscall.h
  * ============================================================================= */
 

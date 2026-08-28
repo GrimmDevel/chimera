@@ -1,5 +1,5 @@
 // ls - list directory contents
-#include <kernel/xiu_types.h>
+#include <kernel/chimera_types.h>
 #include <sys/stat.h>
 #include <dirent.h>
 #include <stdio.h>

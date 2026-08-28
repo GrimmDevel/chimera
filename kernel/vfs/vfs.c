@@ -4,8 +4,8 @@
 #include <kernel/proc.h>
 #include <kernel/uio.h>
 
-extern xiu_error_t vfs_lookup(const char *path, vnode_t **vp_out);
-extern xiu_error_t vfs_register(const char *path, vnode_t *vp);
+extern chimera_error_t vfs_lookup(const char *path, vnode_t **vp_out);
+extern chimera_error_t vfs_register(const char *path, vnode_t *vp);
 
 vnode_t *vfs_root_vnode = nullptr;
 
@@ -124,8 +124,8 @@ void vfs_normalize_path(const char *in, char *out, usize cap) {
 
   if (p[0] != '/') {
     // prepend current working directory
-    xiu_task_t *task = current_task();
-    xiu_proc_t *proc = task ? task->ta_proc : nullptr;
+    chimera_task_t *task = current_task();
+    chimera_proc_t *proc = task ? task->ta_proc : nullptr;
     const char *cwd_str = nullptr;
     if (proc && proc->p_cwd) {
       if (proc->p_cwd->v_op && __builtin_strcmp(proc->p_cwd->v_op->vop_name, "fat32_dir") == 0) {
@@ -256,7 +256,7 @@ static vnode_t *vfs_create_dir_vnode(const char *name) {
     return nullptr;
   vnode_t *vp = &s_rootfs_vnodes[s_rootfs_vnode_count++];
   __builtin_memset(vp, 0, sizeof(vnode_t));
-  vp->v_signature = XIU_VNODE_MAGIC;
+  vp->v_signature = CHIMERA_VNODE_MAGIC;
   vp->v_type = VDIR;
   vp->v_flags = VN_SYSTEM;
   vp->v_op = &s_root_ops;
@@ -281,7 +281,7 @@ static void vfs_ensure_parent_dirs(const char *path) {
       buf[i] = '\0';
 
       vnode_t *existing = nullptr;
-      if (vfs_lookup(buf, &existing) != XIU_SUCCESS || !existing) {
+      if (vfs_lookup(buf, &existing) != CHIMERA_SUCCESS || !existing) {
         const char *name = buf;
         for (usize j = 0; j < i; j++) {
           if (buf[j] == '/')
@@ -296,9 +296,9 @@ static void vfs_ensure_parent_dirs(const char *path) {
   }
 }
 
-xiu_error_t vfs_register(const char *path, vnode_t *vp) {
-  XIU_ASSERT(path != nullptr);
-  XIU_ASSERT(vp != nullptr);
+chimera_error_t vfs_register(const char *path, vnode_t *vp) {
+  CHIMERA_ASSERT(path != nullptr);
+  CHIMERA_ASSERT(vp != nullptr);
 
   char norm[256];
   vfs_normalize_path(path, norm, sizeof(norm));
@@ -321,7 +321,7 @@ xiu_error_t vfs_register(const char *path, vnode_t *vp) {
     }
 
     vnode_t *dvp = nullptr;
-    if (vfs_lookup(pdir, &dvp) == XIU_SUCCESS && dvp && dvp != vp) {
+    if (vfs_lookup(pdir, &dvp) == CHIMERA_SUCCESS && dvp && dvp != vp) {
       vp->v_parent = dvp;
       vnode_t *c = dvp->v_children;
       bool found = false;
@@ -351,23 +351,23 @@ xiu_error_t vfs_register(const char *path, vnode_t *vp) {
       e->ve_path[255] = '\0';
       e->ve_vnode = vp;
       spinlock_unlock_irqrestore(&s_registry_lock, irq);
-      return XIU_SUCCESS;
+      return CHIMERA_SUCCESS;
     }
     if (__builtin_strcmp(e->ve_path, norm) == 0) {
       e->ve_vnode = vp;
       spinlock_unlock_irqrestore(&s_registry_lock, irq);
-      return XIU_SUCCESS;
+      return CHIMERA_SUCCESS;
     }
     idx = (idx + 1) % VFS_REGISTRY_SIZE;
     probe++;
   }
 
   spinlock_unlock_irqrestore(&s_registry_lock, irq);
-  return XIU_ERR_OVERFLOW;
+  return CHIMERA_ERR_OVERFLOW;
 }
 
-xiu_error_t vfs_unregister(const char *path) {
-  if (!path) return XIU_ERR_INVALID;
+chimera_error_t vfs_unregister(const char *path) {
+  if (!path) return CHIMERA_ERR_INVALID;
   char norm[256];
   vfs_normalize_path(path, norm, sizeof(norm));
 
@@ -401,7 +401,7 @@ xiu_error_t vfs_unregister(const char *path) {
       }
 
       spinlock_unlock_irqrestore(&s_registry_lock, irq);
-      return XIU_SUCCESS;
+      return CHIMERA_SUCCESS;
     }
     if (e->ve_vnode == nullptr && e->ve_path[0] == '\0') {
       break;
@@ -410,23 +410,23 @@ xiu_error_t vfs_unregister(const char *path) {
     probe++;
   }
   spinlock_unlock_irqrestore(&s_registry_lock, irq);
-  return XIU_ERR_NOTFOUND;
+  return CHIMERA_ERR_NOTFOUND;
 }
 
-xiu_error_t vfs_rename_node(const char *oldpath, const char *newpath) {
-  if (!oldpath || !newpath) return XIU_ERR_INVALID;
+chimera_error_t vfs_rename_node(const char *oldpath, const char *newpath) {
+  if (!oldpath || !newpath) return CHIMERA_ERR_INVALID;
 
   char norm_old[256], norm_new[256];
   vfs_normalize_path(oldpath, norm_old, sizeof(norm_old));
   vfs_normalize_path(newpath, norm_new, sizeof(norm_new));
 
   vnode_t *vp = nullptr;
-  xiu_error_t err = vfs_lookup(norm_old, &vp);
-  if (err != XIU_SUCCESS || !vp) return XIU_ERR_NOTFOUND;
+  chimera_error_t err = vfs_lookup(norm_old, &vp);
+  if (err != CHIMERA_SUCCESS || !vp) return CHIMERA_ERR_NOTFOUND;
 
   // register under new path
   err = vfs_register(norm_new, vp);
-  if (err != XIU_SUCCESS) return err;
+  if (err != CHIMERA_SUCCESS) return err;
 
   // unregister old path
   vfs_unregister(norm_old);
@@ -439,7 +439,7 @@ xiu_error_t vfs_rename_node(const char *oldpath, const char *newpath) {
   __builtin_strncpy(vp->v_name, base, sizeof(vp->v_name) - 1);
   vp->v_name[sizeof(vp->v_name) - 1] = '\0';
 
-  return XIU_SUCCESS;
+  return CHIMERA_SUCCESS;
 }
 
 static void vfs_path_to_83(const char *in, char *out, usize cap) {
@@ -492,9 +492,9 @@ static void vfs_path_to_83(const char *in, char *out, usize cap) {
   out[oi] = '\0';
 }
 
-xiu_error_t vfs_lookup(const char *path, vnode_t **vp_out) {
-  XIU_ASSERT(path != nullptr);
-  XIU_ASSERT(vp_out != nullptr);
+chimera_error_t vfs_lookup(const char *path, vnode_t **vp_out) {
+  CHIMERA_ASSERT(path != nullptr);
+  CHIMERA_ASSERT(vp_out != nullptr);
 
   char norm[256];
   vfs_normalize_path(path, norm, sizeof(norm));
@@ -512,7 +512,7 @@ xiu_error_t vfs_lookup(const char *path, vnode_t **vp_out) {
     if (e->ve_vnode && __builtin_strcmp(e->ve_path, norm) == 0) {
       *vp_out = e->ve_vnode;
       spinlock_unlock_irqrestore(&s_registry_lock, irq);
-      return XIU_SUCCESS;
+      return CHIMERA_SUCCESS;
     }
     idx = (idx + 1) % VFS_REGISTRY_SIZE;
     probe++;
@@ -531,7 +531,7 @@ xiu_error_t vfs_lookup(const char *path, vnode_t **vp_out) {
       if (e->ve_vnode && __builtin_strcmp(e->ve_path, path83) == 0) {
         *vp_out = e->ve_vnode;
         spinlock_unlock_irqrestore(&s_registry_lock, irq);
-        return XIU_SUCCESS;
+        return CHIMERA_SUCCESS;
       }
       idx = (idx + 1) % VFS_REGISTRY_SIZE;
       probe++;
@@ -539,7 +539,7 @@ xiu_error_t vfs_lookup(const char *path, vnode_t **vp_out) {
   }
 
   spinlock_unlock_irqrestore(&s_registry_lock, irq);
-  return XIU_ERR_NOTFOUND;
+  return CHIMERA_ERR_NOTFOUND;
 }
 
 const char *vfs_path_for_vnode(vnode_t *vp) {
@@ -556,10 +556,10 @@ const char *vfs_path_for_vnode(vnode_t *vp) {
   return nullptr;
 }
 
-xiu_error_t vfs_readdir_flat(vnode_t *dvp, u32 index, char *name_out,
+chimera_error_t vfs_readdir_flat(vnode_t *dvp, u32 index, char *name_out,
                              usize name_cap, vnode_t **child_out) {
   if (!dvp || !name_out || name_cap == 0 || !child_out)
-    return XIU_ERR_INVALID;
+    return CHIMERA_ERR_INVALID;
 
   irq_flags_t irq = spinlock_lock_irqsave(&s_registry_lock);
   vnode_t *cur = dvp->v_children;
@@ -571,33 +571,33 @@ xiu_error_t vfs_readdir_flat(vnode_t *dvp, u32 index, char *name_out,
 
   if (!cur) {
     spinlock_unlock_irqrestore(&s_registry_lock, irq);
-    return XIU_ERR_NOTFOUND;
+    return CHIMERA_ERR_NOTFOUND;
   }
 
   __builtin_strncpy(name_out, cur->v_name, name_cap - 1);
   name_out[name_cap - 1] = '\0';
   *child_out = cur;
   spinlock_unlock_irqrestore(&s_registry_lock, irq);
-  return XIU_SUCCESS;
+  return CHIMERA_SUCCESS;
 }
 
 static vnode_t s_root_vnode_obj;
 
-static xiu_error_t rootfs_vop_read(vnode_t *vp, struct uio *uio, int ioflags, vfs_context_t *ctx) {
+static chimera_error_t rootfs_vop_read(vnode_t *vp, struct uio *uio, int ioflags, vfs_context_t *ctx) {
   (void)ioflags; (void)ctx;
   if (!vp || !uio)
-    return XIU_ERR_INVALID;
+    return CHIMERA_ERR_INVALID;
   if (vp->v_type == VDIR)
-    return XIU_ERR_INVALID;
+    return CHIMERA_ERR_INVALID;
   if (!vp->v_data || uio->uio_offset >= vp->v_attr.va_size)
-    return XIU_SUCCESS;
+    return CHIMERA_SUCCESS;
 
   usize avail = vp->v_attr.va_size - uio->uio_offset;
   usize to_copy = uio->uio_resid < avail ? uio->uio_resid : avail;
 
-  extern xiu_error_t copyout(const void *kaddr, void *uaddr, usize len);
-  xiu_error_t err = copyout((const u8 *)vp->v_data + uio->uio_offset, uio->uio_buf, to_copy);
-  if (err == XIU_SUCCESS) {
+  extern chimera_error_t copyout(const void *kaddr, void *uaddr, usize len);
+  chimera_error_t err = copyout((const u8 *)vp->v_data + uio->uio_offset, uio->uio_buf, to_copy);
+  if (err == CHIMERA_SUCCESS) {
     uio->uio_buf = (void *)((uptr)uio->uio_buf + to_copy);
     uio->uio_resid -= to_copy;
     uio->uio_offset += to_copy;
@@ -605,12 +605,12 @@ static xiu_error_t rootfs_vop_read(vnode_t *vp, struct uio *uio, int ioflags, vf
   return err;
 }
 
-static xiu_error_t rootfs_vop_getattr(vnode_t *vp, vattr_t *vap, vfs_context_t *ctx) {
+static chimera_error_t rootfs_vop_getattr(vnode_t *vp, vattr_t *vap, vfs_context_t *ctx) {
   (void)ctx;
   if (!vp || !vap)
-    return XIU_ERR_INVALID;
+    return CHIMERA_ERR_INVALID;
   *vap = vp->v_attr;
-  return XIU_SUCCESS;
+  return CHIMERA_SUCCESS;
 }
 
 static vnode_ops_t s_root_ops = {
@@ -621,16 +621,16 @@ static vnode_ops_t s_root_ops = {
 
 extern void devfs_init(void);
 
-xiu_error_t vfs_register_module(const char *path, void *addr, usize size) {
+chimera_error_t vfs_register_module(const char *path, void *addr, usize size) {
   if (s_rootfs_vnode_count >= ROOTFS_MAX_VNODES)
-    return XIU_ERR_OVERFLOW;
+    return CHIMERA_ERR_OVERFLOW;
 
   char norm_path[256];
   vfs_normalize_path(path, norm_path, sizeof(norm_path));
 
   vnode_t *vp = &s_rootfs_vnodes[s_rootfs_vnode_count++];
   __builtin_memset(vp, 0, sizeof(vnode_t));
-  vp->v_signature = XIU_VNODE_MAGIC;
+  vp->v_signature = CHIMERA_VNODE_MAGIC;
   vp->v_type = VREG;
   vp->v_flags = VN_SYSTEM;
   vp->v_op = &s_root_ops;
@@ -646,12 +646,12 @@ xiu_error_t vfs_register_module(const char *path, void *addr, usize size) {
   return vfs_register(norm_path, vp);
 }
 
-xiu_error_t vfs_init(void) {
+chimera_error_t vfs_init(void) {
   __builtin_memset(s_registry, 0, sizeof(s_registry));
 
   vfs_root_vnode = &s_root_vnode_obj;
   __builtin_memset(vfs_root_vnode, 0, sizeof(vnode_t));
-  vfs_root_vnode->v_signature = XIU_VNODE_MAGIC;
+  vfs_root_vnode->v_signature = CHIMERA_VNODE_MAGIC;
   vfs_root_vnode->v_type = VDIR;
   vfs_root_vnode->v_flags = VN_ROOT | VN_SYSTEM;
   vfs_root_vnode->v_op = &s_root_ops;
@@ -679,7 +679,7 @@ xiu_error_t vfs_init(void) {
   for (usize i = 0; i < sizeof(s_default_dirs) / sizeof(s_default_dirs[0]); i++) {
     const char *dpath = s_default_dirs[i];
     vnode_t *existing = nullptr;
-    if (vfs_lookup(dpath, &existing) != XIU_SUCCESS || !existing) {
+    if (vfs_lookup(dpath, &existing) != CHIMERA_SUCCESS || !existing) {
       const char *name = dpath;
       for (const char *s = dpath; *s; s++) {
         if (*s == '/')
@@ -693,5 +693,5 @@ xiu_error_t vfs_init(void) {
   }
 
   devfs_init();
-  return XIU_SUCCESS;
+  return CHIMERA_SUCCESS;
 }

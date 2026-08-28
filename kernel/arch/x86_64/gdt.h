@@ -1,13 +1,13 @@
 /* =============================================================================
- * XIU Operating System — Global Descriptor Table (x86_64)
+ * Chimera Operating System — Global Descriptor Table (x86_64)
  * kernel/arch/x86_64/gdt.h
  * ============================================================================= */
 
 #pragma once
-#ifndef XIU_GDT_H
-#define XIU_GDT_H
+#ifndef CHIMERA_GDT_H
+#define CHIMERA_GDT_H
 
-#include <kernel/xiu_types.h>
+#include <kernel/chimera_types.h>
 
 #define GDT_KERNEL_CODE 0x08
 #define GDT_KERNEL_DATA 0x10
@@ -31,11 +31,11 @@ struct tss_entry {
     u64 reserved2;
     u16 reserved3;
     u16 iopb_offset;
-} XIU_PACKED;
+} CHIMERA_PACKED;
 
 void gdt_init(void);
 void gdt_init_ap(u64 *ap_gdt, struct tss_entry *ap_tss, u32 cpu_id);
 void tss_set_rsp0(u64 rsp0);
 void tss_set_rsp0_cpu(u32 cpu_id, u64 rsp0);
 
-#endif /* XIU_GDT_H */
+#endif /* CHIMERA_GDT_H */

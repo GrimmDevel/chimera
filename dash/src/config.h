@@ -1,10 +1,10 @@
 /* =============================================================================
- * XIU Operating System — dash config.h
+ * Chimera Operating System — dash config.h
  * dash/src/config.h
  * ============================================================================= */
 
-#ifndef XIU_DASH_CONFIG_H
-#define XIU_DASH_CONFIG_H
+#ifndef CHIMERA_DASH_CONFIG_H
+#define CHIMERA_DASH_CONFIG_H
 
 /* Define to 1 if you have the <sys/stat.h> header file. */
 #define HAVE_SYS_STAT_H 1

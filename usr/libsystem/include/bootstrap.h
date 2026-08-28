@@ -1,5 +1,5 @@
 /* =============================================================================
- * XIU Operating System — Darwin Mach Bootstrap Service API
+ * Chimera Operating System — Darwin Mach Bootstrap Service API
  * usr/libsystem/include/bootstrap.h
  * ============================================================================= */
 

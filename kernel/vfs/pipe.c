@@ -1,5 +1,5 @@
 /* =============================================================================
- * XIU Operating System — UNIX Anonymous Pipe Implementation
+ * Chimera Operating System — UNIX Anonymous Pipe Implementation
  * kernel/vfs/pipe.c
  * ============================================================================= */
 
@@ -10,15 +10,15 @@
 #include <kernel/panic.h>
 #include <kernel/wait_queue.h>
 
-extern xiu_error_t copyin(const void *uaddr, void *kaddr, usize len);
-extern xiu_error_t copyout(const void *kaddr, void *uaddr, usize len);
-extern xiu_task_t *current_task(void);
-extern xiu_error_t proc_signal(xiu_proc_t *proc, int sig);
+extern chimera_error_t copyin(const void *uaddr, void *kaddr, usize len);
+extern chimera_error_t copyout(const void *kaddr, void *uaddr, usize len);
+extern chimera_task_t *current_task(void);
+extern chimera_error_t proc_signal(chimera_proc_t *proc, int sig);
 
 #define PIPE_BUF_SIZE 65536
 #define MAX_PIPES     32
 
-typedef struct xiu_pipe {
+typedef struct chimera_pipe {
     u8           buf[PIPE_BUF_SIZE];
     usize        head;   // write offset
     usize        tail;   // read offset
@@ -31,95 +31,67 @@ typedef struct xiu_pipe {
     wait_queue_t w_wq;
     vnode_t      read_vn;
     vnode_t      write_vn;
-} xiu_pipe_t;
+} chimera_pipe_t;
 
-static xiu_pipe_t s_pipes[MAX_PIPES];
+static chimera_pipe_t s_pipes[MAX_PIPES];
 static spinlock_t s_pipe_pool_lock = SPINLOCK_INIT;
 
 // pipe read vnode operations
-static xiu_error_t pipe_read_vop_read(vnode_t *vp, struct uio *uio, int flags,
-                                      vfs_context_t *ctx) {
+static chimera_error_t pipe_read_vop_read(vnode_t *vp, struct uio *uio, int flags,
+                                          vfs_context_t *ctx) {
     (void)flags; (void)ctx;
-    if (!vp || !uio || !uio->uio_buf || uio->uio_resid == 0) return XIU_SUCCESS;
+    if (!vp || !uio || !uio->uio_buf || uio->uio_resid == 0) return CHIMERA_SUCCESS;
 
-    xiu_pipe_t *pipe = (xiu_pipe_t *)vp->v_data;
-    if (!pipe) return XIU_ERR_INVALID;
+    chimera_pipe_t *pipe = (chimera_pipe_t *)vp->v_data;
+    if (!pipe) return CHIMERA_ERR_INVALID;
+
+    usize total_read = 0;
 
     while (uio->uio_resid > 0) {
+        char tmp[256];
+        usize to_read = 0;
+
         irq_flags_t irq = spinlock_lock_irqsave(&pipe->lock);
 
-        if (pipe->count > 0) {
-            usize to_read = uio->uio_resid;
-            if (to_read > pipe->count) to_read = pipe->count;
-
-            // copy in up to two chunks to handle circular wrap-around
-            usize first_chunk = to_read;
-            if (pipe->tail + first_chunk > PIPE_BUF_SIZE) {
-                first_chunk = PIPE_BUF_SIZE - pipe->tail;
-            }
-            usize second_chunk = to_read - first_chunk;
-
-            char tmp[256];
-            usize copied = 0;
-            while (copied < first_chunk) {
-                usize step = first_chunk - copied;
-                if (step > sizeof(tmp)) step = sizeof(tmp);
-                __builtin_memcpy(tmp, &pipe->buf[pipe->tail + copied], step);
+        if (pipe->count == 0) {
+            if (pipe->writers == 0 || total_read > 0) {
+                // EOF or already read partial data
                 spinlock_unlock_irqrestore(&pipe->lock, irq);
-
-                if (copyout(tmp, (void *)((uptr)uio->uio_buf + copied), step) != XIU_SUCCESS) {
-                    return XIU_ERR_GENERIC;
-                }
-                irq = spinlock_lock_irqsave(&pipe->lock);
-                copied += step;
+                return CHIMERA_SUCCESS;
             }
-
-            if (second_chunk > 0) {
-                copied = 0;
-                while (copied < second_chunk) {
-                    usize step = second_chunk - copied;
-                    if (step > sizeof(tmp)) step = sizeof(tmp);
-                    __builtin_memcpy(tmp, &pipe->buf[copied], step);
-                    spinlock_unlock_irqrestore(&pipe->lock, irq);
-
-                    if (copyout(tmp, (void *)((uptr)uio->uio_buf + first_chunk + copied), step) != XIU_SUCCESS) {
-                        return XIU_ERR_GENERIC;
-                    }
-                    irq = spinlock_lock_irqsave(&pipe->lock);
-                    copied += step;
-                }
-            }
-
-            pipe->tail = (pipe->tail + to_read) % PIPE_BUF_SIZE;
-            pipe->count -= to_read;
-            
-            // notify writers that buffer now has free space
-            wait_queue_wakeup_one(&pipe->w_wq);
-            spinlock_unlock_irqrestore(&pipe->lock, irq);
-
-            uio->uio_buf = (void *)((uptr)uio->uio_buf + to_read);
-            uio->uio_resid -= to_read;
-            return XIU_SUCCESS;
+            wait_queue_sleep_irqrestore(&pipe->r_wq, &pipe->lock, irq);
+            continue;
         }
 
-        // buffer is empty
-        if (pipe->writers == 0) {
-            spinlock_unlock_irqrestore(&pipe->lock, irq);
-            return XIU_SUCCESS;
+        to_read = uio->uio_resid < sizeof(tmp) ? uio->uio_resid : sizeof(tmp);
+        if (to_read > pipe->count) to_read = pipe->count;
+
+        for (usize i = 0; i < to_read; i++) {
+            tmp[i] = (char)pipe->buf[(pipe->tail + i) % PIPE_BUF_SIZE];
+        }
+        pipe->tail = (pipe->tail + to_read) % PIPE_BUF_SIZE;
+        pipe->count -= to_read;
+
+        wait_queue_wakeup_one(&pipe->w_wq);
+        spinlock_unlock_irqrestore(&pipe->lock, irq);
+
+        if (copyout(tmp, uio->uio_buf, to_read) != CHIMERA_SUCCESS) {
+            return CHIMERA_ERR_GENERIC;
         }
 
-        // writers still open: sleep on read wait queue
-        wait_queue_sleep_irqrestore(&pipe->r_wq, &pipe->lock, irq);
+        uio->uio_buf = (void *)((uptr)uio->uio_buf + to_read);
+        uio->uio_resid -= to_read;
+        total_read += to_read;
     }
 
-    return XIU_SUCCESS;
+    return CHIMERA_SUCCESS;
 }
 
-static xiu_error_t pipe_read_vop_close(vnode_t *vp, int flags, vfs_context_t *ctx) {
+static chimera_error_t pipe_read_vop_close(vnode_t *vp, int flags, vfs_context_t *ctx) {
     (void)flags; (void)ctx;
-    if (!vp) return XIU_SUCCESS;
-    xiu_pipe_t *pipe = (xiu_pipe_t *)vp->v_data;
-    if (!pipe) return XIU_SUCCESS;
+    if (!vp) return CHIMERA_SUCCESS;
+    chimera_pipe_t *pipe = (chimera_pipe_t *)vp->v_data;
+    if (!pipe) return CHIMERA_SUCCESS;
 
     irq_flags_t irq = spinlock_lock_irqsave(&pipe->lock);
     if (pipe->readers > 0) pipe->readers--;
@@ -129,7 +101,7 @@ static xiu_error_t pipe_read_vop_close(vnode_t *vp, int flags, vfs_context_t *ct
     // wake any writers blocked on full pipe
     wait_queue_wakeup_all(&pipe->w_wq);
     spinlock_unlock_irqrestore(&pipe->lock, irq);
-    return XIU_SUCCESS;
+    return CHIMERA_SUCCESS;
 }
 
 static vnode_ops_t s_pipe_read_ops = {
@@ -139,93 +111,63 @@ static vnode_ops_t s_pipe_read_ops = {
 };
 
 // pipe write vnode operations
-static xiu_error_t pipe_write_vop_write(vnode_t *vp, struct uio *uio, int flags,
-                                        vfs_context_t *ctx) {
+static chimera_error_t pipe_write_vop_write(vnode_t *vp, struct uio *uio, int flags,
+                                            vfs_context_t *ctx) {
     (void)flags; (void)ctx;
-    if (!vp || !uio || !uio->uio_buf || uio->uio_resid == 0) return XIU_SUCCESS;
+    if (!vp || !uio || !uio->uio_buf || uio->uio_resid == 0) return CHIMERA_SUCCESS;
 
-    xiu_pipe_t *pipe = (xiu_pipe_t *)vp->v_data;
-    if (!pipe) return XIU_ERR_INVALID;
+    chimera_pipe_t *pipe = (chimera_pipe_t *)vp->v_data;
+    if (!pipe) return CHIMERA_ERR_INVALID;
 
     while (uio->uio_resid > 0) {
+        char tmp[256];
+        usize chunk_to_copy = uio->uio_resid < sizeof(tmp) ? uio->uio_resid : sizeof(tmp);
+        if (copyin(uio->uio_buf, tmp, chunk_to_copy) != CHIMERA_SUCCESS) {
+            return CHIMERA_ERR_GENERIC;
+        }
+
         irq_flags_t irq = spinlock_lock_irqsave(&pipe->lock);
 
         if (pipe->readers == 0) {
-            // no readers: send SIGPIPE and return EPIPE
             spinlock_unlock_irqrestore(&pipe->lock, irq);
-            xiu_task_t *task = current_task();
+            chimera_task_t *task = current_task();
             if (task && task->ta_proc) {
                 proc_signal(task->ta_proc, 13);
             }
-            return XIU_ERR_GENERIC; // -epipe
+            return CHIMERA_ERR_GENERIC; // -EPIPE
         }
 
-        usize space = PIPE_BUF_SIZE - pipe->count;
-        if (space > 0) {
-            usize to_write = uio->uio_resid;
-            if (to_write > space) to_write = space;
-
-            usize first_chunk = to_write;
-            if (pipe->head + first_chunk > PIPE_BUF_SIZE) {
-                first_chunk = PIPE_BUF_SIZE - pipe->head;
-            }
-            usize second_chunk = to_write - first_chunk;
-
-            char tmp[256];
-            usize copied = 0;
-            while (copied < first_chunk) {
-                usize step = first_chunk - copied;
-                if (step > sizeof(tmp)) step = sizeof(tmp);
-                spinlock_unlock_irqrestore(&pipe->lock, irq);
-
-                if (copyin((const void *)((uptr)uio->uio_buf + copied), tmp, step) != XIU_SUCCESS) {
-                    return XIU_ERR_GENERIC;
-                }
-                irq = spinlock_lock_irqsave(&pipe->lock);
-                __builtin_memcpy(&pipe->buf[pipe->head + copied], tmp, step);
-                copied += step;
-            }
-
-            if (second_chunk > 0) {
-                copied = 0;
-                while (copied < second_chunk) {
-                    usize step = second_chunk - copied;
-                    if (step > sizeof(tmp)) step = sizeof(tmp);
-                    spinlock_unlock_irqrestore(&pipe->lock, irq);
-
-                    if (copyin((const void *)((uptr)uio->uio_buf + first_chunk + copied), tmp, step) != XIU_SUCCESS) {
-                        return XIU_ERR_GENERIC;
-                    }
-                    irq = spinlock_lock_irqsave(&pipe->lock);
-                    __builtin_memcpy(&pipe->buf[copied], tmp, step);
-                    copied += step;
-                }
-            }
-
-            pipe->head = (pipe->head + to_write) % PIPE_BUF_SIZE;
-            pipe->count += to_write;
-
-            // wake readers
-            wait_queue_wakeup_one(&pipe->r_wq);
-            spinlock_unlock_irqrestore(&pipe->lock, irq);
-
-            uio->uio_buf = (void *)((uptr)uio->uio_buf + to_write);
-            uio->uio_resid -= to_write;
+        if (pipe->count >= PIPE_BUF_SIZE) {
+            // buffer is full: sleep on write wait queue
+            wait_queue_sleep_irqrestore(&pipe->w_wq, &pipe->lock, irq);
             continue;
         }
 
-        // buffer is full: sleep on write wait queue
-        wait_queue_sleep_irqrestore(&pipe->w_wq, &pipe->lock, irq);
+        usize space = PIPE_BUF_SIZE - pipe->count;
+        usize to_write = chunk_to_copy < space ? chunk_to_copy : space;
+
+        // copy into circular buffer
+        for (usize i = 0; i < to_write; i++) {
+            pipe->buf[(pipe->head + i) % PIPE_BUF_SIZE] = (u8)tmp[i];
+        }
+        pipe->head = (pipe->head + to_write) % PIPE_BUF_SIZE;
+        pipe->count += to_write;
+
+        wait_queue_wakeup_one(&pipe->r_wq);
+        spinlock_unlock_irqrestore(&pipe->lock, irq);
+
+        uio->uio_buf = (void *)((uptr)uio->uio_buf + to_write);
+        uio->uio_resid -= to_write;
     }
 
-    return XIU_SUCCESS;
+    return CHIMERA_SUCCESS;
 }
 
-static xiu_error_t pipe_write_vop_close(vnode_t *vp, int flags, vfs_context_t *ctx) {
+static chimera_error_t pipe_write_vop_close(vnode_t *vp, int flags, vfs_context_t *ctx) {
     (void)flags; (void)ctx;
-    if (!vp) return XIU_SUCCESS;
-    xiu_pipe_t *pipe = (xiu_pipe_t *)vp->v_data;
-    if (!pipe) return XIU_SUCCESS;
+    if (!vp) return CHIMERA_SUCCESS;
+    chimera_pipe_t *pipe = (chimera_pipe_t *)vp->v_data;
+    if (!pipe) return CHIMERA_SUCCESS;
 
     irq_flags_t irq = spinlock_lock_irqsave(&pipe->lock);
     if (pipe->writers > 0) pipe->writers--;
@@ -235,7 +177,7 @@ static xiu_error_t pipe_write_vop_close(vnode_t *vp, int flags, vfs_context_t *c
     // wake any readers blocked on empty pipe so they see EOF (writers==0)
     wait_queue_wakeup_all(&pipe->r_wq);
     spinlock_unlock_irqrestore(&pipe->lock, irq);
-    return XIU_SUCCESS;
+    return CHIMERA_SUCCESS;
 }
 
 static vnode_ops_t s_pipe_write_ops = {
@@ -245,11 +187,11 @@ static vnode_ops_t s_pipe_write_ops = {
 };
 
 // pipe_create
-xiu_error_t pipe_create(vnode_t **read_vp_out, vnode_t **write_vp_out) {
-    if (!read_vp_out || !write_vp_out) return XIU_ERR_INVALID;
+chimera_error_t pipe_create(vnode_t **read_vp_out, vnode_t **write_vp_out) {
+    if (!read_vp_out || !write_vp_out) return CHIMERA_ERR_INVALID;
 
     irq_flags_t irq = spinlock_lock_irqsave(&s_pipe_pool_lock);
-    xiu_pipe_t *pipe = nullptr;
+    chimera_pipe_t *pipe = nullptr;
 
     for (int i = 0; i < MAX_PIPES; i++) {
         if (!s_pipes[i].active) {
@@ -260,7 +202,7 @@ xiu_error_t pipe_create(vnode_t **read_vp_out, vnode_t **write_vp_out) {
 
     if (!pipe) {
         spinlock_unlock_irqrestore(&s_pipe_pool_lock, irq);
-        return XIU_ERR_NOMEM;
+        return CHIMERA_ERR_NOMEM;
     }
 
     pipe->head = 0;
@@ -275,7 +217,7 @@ xiu_error_t pipe_create(vnode_t **read_vp_out, vnode_t **write_vp_out) {
 
     // setup read vnode
     __builtin_memset(&pipe->read_vn, 0, sizeof(vnode_t));
-    pipe->read_vn.v_signature = XIU_VNODE_MAGIC;
+    pipe->read_vn.v_signature = CHIMERA_VNODE_MAGIC;
     pipe->read_vn.v_type = VFIFO;
     pipe->read_vn.v_op = &s_pipe_read_ops;
     pipe->read_vn.v_data = pipe;
@@ -284,7 +226,7 @@ xiu_error_t pipe_create(vnode_t **read_vp_out, vnode_t **write_vp_out) {
 
     // setup write vnode
     __builtin_memset(&pipe->write_vn, 0, sizeof(vnode_t));
-    pipe->write_vn.v_signature = XIU_VNODE_MAGIC;
+    pipe->write_vn.v_signature = CHIMERA_VNODE_MAGIC;
     pipe->write_vn.v_type = VFIFO;
     pipe->write_vn.v_op = &s_pipe_write_ops;
     pipe->write_vn.v_data = pipe;
@@ -295,12 +237,12 @@ xiu_error_t pipe_create(vnode_t **read_vp_out, vnode_t **write_vp_out) {
 
     *read_vp_out = &pipe->read_vn;
     *write_vp_out = &pipe->write_vn;
-    return XIU_SUCCESS;
+    return CHIMERA_SUCCESS;
 }
 
 i16 pipe_poll(vnode_t *vp, i16 events) {
     if (!vp || !vp->v_data) return 0x0020; // POLLNVAL
-    xiu_pipe_t *pipe = (xiu_pipe_t *)vp->v_data;
+    chimera_pipe_t *pipe = (chimera_pipe_t *)vp->v_data;
     i16 revents = 0;
 
     irq_flags_t irq = spinlock_lock_irqsave(&pipe->lock);

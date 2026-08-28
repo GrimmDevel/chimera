@@ -1,5 +1,5 @@
 /* =============================================================================
- * XIU Operating System — User Space C Library
+ * Chimera Operating System — User Space C Library
  * usr/libsystem/locale/mbtowc.c
  * ============================================================================= */
 

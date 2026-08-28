@@ -1,5 +1,5 @@
 /* =============================================================================
- * XIU Operating System — Darwin Mach Virtual Memory Object Subsystem
+ * Chimera Operating System — Darwin Mach Virtual Memory Object Subsystem
  * kernel/mm/vm_object.c
  *
  * Implements Darwin vm_object_t backing, COW shadow chains, and memory faulting.
@@ -9,11 +9,11 @@
 #include <kernel/zone.h>
 #include <kernel/panic.h>
 #include <kernel/spinlock.h>
-#include <kernel/xiu_types.h>
+#include <kernel/chimera_types.h>
 
 extern void kprintf(const char *fmt, ...);
-extern xiu_paddr_t pmm_alloc_page(void);
-extern void pmm_release_page(xiu_paddr_t addr);
+extern chimera_paddr_t pmm_alloc_page(void);
+extern void pmm_release_page(chimera_paddr_t addr);
 extern u64 g_hhdm_base;
 
 static zone_t s_vm_obj_zone = ZONE_NULL;
@@ -28,18 +28,18 @@ void vm_object_init(void) {
     kprintf("        vm_object: Darwin Mach VM Object subsystem initialized\n");
 }
 
-xiu_error_t vm_object_create(xiu_size_t size, vm_prot_t max_prot, vm_object_t *obj_out) {
-    if (!obj_out) return XIU_ERR_INVALID;
+chimera_error_t vm_object_create(chimera_size_t size, vm_prot_t max_prot, vm_object_t *obj_out) {
+    if (!obj_out) return CHIMERA_ERR_INVALID;
 
     if (!s_vm_obj_initialized) {
         vm_object_init();
     }
 
     vm_object_t obj = (vm_object_t)zalloc(s_vm_obj_zone);
-    if (!obj) return XIU_ERR_NOMEM;
+    if (!obj) return CHIMERA_ERR_NOMEM;
 
     __builtin_memset(obj, 0, sizeof(*obj));
-    obj->vmo_signature   = XIU_VM_OBJECT_MAGIC;
+    obj->vmo_signature   = CHIMERA_VM_OBJECT_MAGIC;
     obj->vmo_size        = size;
     obj->vmo_max_prot    = max_prot;
     obj->vmo_inherit     = VM_INHERIT_DEFAULT;
@@ -49,30 +49,30 @@ xiu_error_t vm_object_create(xiu_size_t size, vm_prot_t max_prot, vm_object_t *o
     spinlock_init(&obj->vmo_lock);
 
     *obj_out = obj;
-    return XIU_SUCCESS;
+    return CHIMERA_SUCCESS;
 }
 
-xiu_error_t vm_object_create_vnode(struct vnode *vp, xiu_offset_t offset,
-                                   xiu_size_t size, vm_object_t *obj_out) {
-    if (!vp || !obj_out) return XIU_ERR_INVALID;
-    xiu_error_t err = vm_object_create(size, VM_PROT_ALL, obj_out);
-    if (XIU_FAILED(err)) return err;
+chimera_error_t vm_object_create_vnode(struct vnode *vp, chimera_offset_t offset,
+                                   chimera_size_t size, vm_object_t *obj_out) {
+    if (!vp || !obj_out) return CHIMERA_ERR_INVALID;
+    chimera_error_t err = vm_object_create(size, VM_PROT_ALL, obj_out);
+    if (CHIMERA_FAILED(err)) return err;
 
     vm_object_t obj = *obj_out;
     obj->vmo_pager_type   = VM_PAGER_VNODE;
     obj->vmo_vnode        = vp;
     obj->vmo_pager_offset = offset;
     obj->vmo_flags        = VM_OBJ_VNODE | VM_OBJ_ALIVE;
-    return XIU_SUCCESS;
+    return CHIMERA_SUCCESS;
 }
 
-xiu_error_t vm_object_shadow(vm_object_t original, xiu_offset_t offset,
-                             xiu_size_t size, vm_object_t *shadow_out) {
-    if (!original || !shadow_out) return XIU_ERR_INVALID;
+chimera_error_t vm_object_shadow(vm_object_t original, chimera_offset_t offset,
+                             chimera_size_t size, vm_object_t *shadow_out) {
+    if (!original || !shadow_out) return CHIMERA_ERR_INVALID;
 
     vm_object_t shadow = nullptr;
-    xiu_error_t err = vm_object_create(size, original->vmo_max_prot, &shadow);
-    if (XIU_FAILED(err)) return err;
+    chimera_error_t err = vm_object_create(size, original->vmo_max_prot, &shadow);
+    if (CHIMERA_FAILED(err)) return err;
 
     vm_object_reference(original);
     shadow->vmo_shadow        = original;
@@ -81,16 +81,16 @@ xiu_error_t vm_object_shadow(vm_object_t original, xiu_offset_t offset,
     shadow->vmo_flags        |= VM_OBJ_SHADOW | VM_OBJ_COPY_ON_WRITE;
 
     *shadow_out = shadow;
-    return XIU_SUCCESS;
+    return CHIMERA_SUCCESS;
 }
 
 void vm_object_reference(vm_object_t obj) {
-    if (!obj || obj->vmo_signature != XIU_VM_OBJECT_MAGIC) return;
+    if (!obj || obj->vmo_signature != CHIMERA_VM_OBJECT_MAGIC) return;
     atomic_fetch_add(&obj->vmo_ref_count, 1);
 }
 
 void vm_object_deallocate(vm_object_t obj) {
-    if (!obj || obj->vmo_signature != XIU_VM_OBJECT_MAGIC) return;
+    if (!obj || obj->vmo_signature != CHIMERA_VM_OBJECT_MAGIC) return;
 
     if (atomic_fetch_sub(&obj->vmo_ref_count, 1) == 1) {
         irq_flags_t flags = spinlock_lock_irqsave(&obj->vmo_lock);
@@ -122,8 +122,8 @@ void vm_object_deallocate(vm_object_t obj) {
     }
 }
 
-vm_page_t *vm_object_lookup_page(vm_object_t obj, xiu_offset_t offset) {
-    if (!obj || obj->vmo_signature != XIU_VM_OBJECT_MAGIC) return nullptr;
+vm_page_t *vm_object_lookup_page(vm_object_t obj, chimera_offset_t offset) {
+    if (!obj || obj->vmo_signature != CHIMERA_VM_OBJECT_MAGIC) return nullptr;
 
     irq_flags_t flags = spinlock_lock_irqsave(&obj->vmo_lock);
     vm_page_t *curr = obj->vmo_pages;
@@ -138,9 +138,9 @@ vm_page_t *vm_object_lookup_page(vm_object_t obj, xiu_offset_t offset) {
     return nullptr;
 }
 
-vm_page_t *vm_object_resolve_shadow(vm_object_t obj, xiu_offset_t offset) {
+vm_page_t *vm_object_resolve_shadow(vm_object_t obj, chimera_offset_t offset) {
     vm_object_t curr = obj;
-    xiu_offset_t cur_off = offset;
+    chimera_offset_t cur_off = offset;
 
     while (curr) {
         vm_page_t *p = vm_object_lookup_page(curr, cur_off);
@@ -151,17 +151,17 @@ vm_page_t *vm_object_resolve_shadow(vm_object_t obj, xiu_offset_t offset) {
     return nullptr;
 }
 
-xiu_error_t vm_object_fault(vm_object_t obj, xiu_offset_t offset,
+chimera_error_t vm_object_fault(vm_object_t obj, chimera_offset_t offset,
                             vm_prot_t fault_type, vm_page_t **page_out) {
-    if (!obj || !page_out) return XIU_ERR_INVALID;
+    if (!obj || !page_out) return CHIMERA_ERR_INVALID;
     (void)fault_type;
 
     vm_page_t *page = vm_object_lookup_page(obj, offset);
     if (!page) {
         vm_page_t *shadow_page = vm_object_resolve_shadow(obj, offset);
 
-        xiu_paddr_t phys = pmm_alloc_page();
-        if (phys == (xiu_paddr_t)-1 || phys == 0) return XIU_ERR_NOMEM;
+        chimera_paddr_t phys = pmm_alloc_page();
+        if (phys == (chimera_paddr_t)-1 || phys == 0) return CHIMERA_ERR_NOMEM;
 
         void *virt = (void *)(phys + g_hhdm_base);
         if (shadow_page && shadow_page->vmp_phys_addr) {
@@ -173,7 +173,7 @@ xiu_error_t vm_object_fault(vm_object_t obj, xiu_offset_t offset,
         page = (vm_page_t *)kalloc(sizeof(vm_page_t));
         if (!page) {
             pmm_release_page(phys);
-            return XIU_ERR_NOMEM;
+            return CHIMERA_ERR_NOMEM;
         }
 
         __builtin_memset(page, 0, sizeof(*page));
@@ -191,10 +191,10 @@ xiu_error_t vm_object_fault(vm_object_t obj, xiu_offset_t offset,
     }
 
     *page_out = page;
-    return XIU_SUCCESS;
+    return CHIMERA_SUCCESS;
 }
 
-xiu_error_t vm_object_sync(vm_object_t obj) {
-    if (!obj || obj->vmo_signature != XIU_VM_OBJECT_MAGIC) return XIU_ERR_INVALID;
-    return XIU_SUCCESS;
+chimera_error_t vm_object_sync(vm_object_t obj) {
+    if (!obj || obj->vmo_signature != CHIMERA_VM_OBJECT_MAGIC) return CHIMERA_ERR_INVALID;
+    return CHIMERA_SUCCESS;
 }

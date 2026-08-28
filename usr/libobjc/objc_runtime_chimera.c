@@ -1,5 +1,5 @@
 /*
- * XIU OS Objective-C 2.0 Core Runtime Implementation
+ * Chimera OS Objective-C 2.0 Core Runtime Implementation
  * ABI compliant with Apple/ravynOS ObjC runtime
  */
 

@@ -1,8 +1,8 @@
 // iokit driver and event headers
-#ifndef XIU_IOKIT_XNU_H
-#define XIU_IOKIT_XNU_H
+#ifndef CHIMERA_IOKIT_XNU_H
+#define CHIMERA_IOKIT_XNU_H
 
-#include <kernel/xiu_types.h>
+#include <kernel/chimera_types.h>
 
 #ifdef __cplusplus
 extern "C" {

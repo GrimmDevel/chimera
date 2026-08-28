@@ -1,24 +1,24 @@
 /* =============================================================================
- * XIU Operating System — AHCI / Serial ATA Storage Driver
- * kernel/xiukit/ahci.cpp
+ * Chimera Operating System — AHCI / Serial ATA Storage Driver
+ * kernel/chimerakit/ahci.cpp
  *
  * Implements full AHCI 1.3 specification for SATA Host Bus Adapters (HBA),
  * port enumeration, Command List, Frame Information Structure (FIS), and
  * Physical Region Descriptor Table (PRDT) DMA block transfers.
  * ============================================================================= */
 
-#include <kernel/xiu_types.h>
+#include <kernel/chimera_types.h>
 #include <kernel/panic.h>
 #include <kernel/spinlock.h>
 
-#ifndef XIU_ERR_IO
-#define XIU_ERR_IO XIU_ERR_GENERIC
+#ifndef CHIMERA_ERR_IO
+#define CHIMERA_ERR_IO CHIMERA_ERR_GENERIC
 #endif
 
 extern "C" {
     void kprintf(const char *fmt, ...);
-    xiu_paddr_t pmm_alloc_page(void);
-    void pmm_free_page(xiu_paddr_t addr);
+    chimera_paddr_t pmm_alloc_page(void);
+    void pmm_free_page(chimera_paddr_t addr);
 }
 
 namespace XIUKit {
@@ -47,7 +47,7 @@ namespace XIUKit {
 #define FIS_TYPE_REG_H2D 0x27u
 
 // fis Register — Host to Device
-typedef struct XIU_PACKED {
+typedef struct CHIMERA_PACKED {
     u8  fis_type;
     u8  pmport:4;
     u8  rsv0:3;
@@ -70,7 +70,7 @@ typedef struct XIU_PACKED {
 } fis_reg_h2d_t;
 
 // physical Region Descriptor Table (PRDT) entry
-typedef struct XIU_PACKED {
+typedef struct CHIMERA_PACKED {
     u32 dba;
     u32 dbau;
     u32 rsv0;
@@ -80,7 +80,7 @@ typedef struct XIU_PACKED {
 } hba_prdt_entry_t;
 
 // command Table
-typedef struct XIU_PACKED {
+typedef struct CHIMERA_PACKED {
     u8               cfis[64];
     u8               acmd[16];
     u8               rsv[48];
@@ -88,7 +88,7 @@ typedef struct XIU_PACKED {
 } hba_cmd_tbl_t;
 
 // command Header
-typedef struct XIU_PACKED {
+typedef struct CHIMERA_PACKED {
     u8           cfl:5;
     u8           a:1;
     u8           w:1;
@@ -106,7 +106,7 @@ typedef struct XIU_PACKED {
 } hba_cmd_header_t;
 
 // hba Port Registers
-typedef volatile struct XIU_PACKED {
+typedef volatile struct CHIMERA_PACKED {
     u32 clb;
     u32 clbu;
     u32 fb;
@@ -129,7 +129,7 @@ typedef volatile struct XIU_PACKED {
 } hba_port_t;
 
 // generic Host Control / Memory Registers
-typedef volatile struct XIU_PACKED {
+typedef volatile struct CHIMERA_PACKED {
     u32        cap;
     u32        ghc;
     u32        is;
@@ -154,12 +154,12 @@ public:
 
     void init() {
         if (!m_abar_phys) {
-            kprintf("[XIU-Kit] AHCI: Invalid ABAR physical address\n");
+            kprintf("[ChimeraKit] AHCI: Invalid ABAR physical address\n");
             return;
         }
 
         m_hba = (hba_mem_t *)(m_abar_phys + g_hhdm_base);
-        kprintf("[XIU-Kit] AHCI: Initializing controller (ABAR=%p, Version %x.%x)\n",
+        kprintf("[ChimeraKit] AHCI: Initializing controller (ABAR=%p, Version %x.%x)\n",
                 (void *)m_abar_phys, (m_hba->vs >> 16), (m_hba->vs & 0xFFFF));
 
         // enable AHCI mode in Global Host Control
@@ -193,8 +193,8 @@ public:
         }
     }
 
-    xiu_error_t read_blocks(u32 port_idx, u64 lba, u32 count, void *buffer) {
-        if (!m_hba || count == 0 || !buffer) return XIU_ERR_INVALID;
+    chimera_error_t read_blocks(u32 port_idx, u64 lba, u32 count, void *buffer) {
+        if (!m_hba || count == 0 || !buffer) return CHIMERA_ERR_INVALID;
 
         hba_port_t *port = nullptr;
         bool found = false;
@@ -205,7 +205,7 @@ public:
                 break;
             }
         }
-        if (!found || !port) return XIU_ERR_NOTFOUND;
+        if (!found || !port) return CHIMERA_ERR_NOTFOUND;
 
         irq_flags_t flags = spinlock_lock_irqsave(&m_lock);
 
@@ -260,17 +260,17 @@ public:
             if (!(port->ci & 1u)) break;
             if (port->is & (1u << 30)) { // task file error status
                 spinlock_unlock_irqrestore(&m_lock, flags);
-                return XIU_ERR_IO;
+                return CHIMERA_ERR_IO;
             }
         }
 
         spinlock_unlock_irqrestore(&m_lock, flags);
 
         if (port->tfd & (ATA_DEV_ERR | ATA_DEV_BUSY)) {
-            return XIU_ERR_IO;
+            return CHIMERA_ERR_IO;
         }
 
-        return (port->ci & 1u) ? XIU_ERR_IO : XIU_SUCCESS;
+        return (port->ci & 1u) ? CHIMERA_ERR_IO : CHIMERA_SUCCESS;
     }
 
 private:
@@ -297,8 +297,8 @@ private:
         (void)port_no;
         stop_cmd(port);
 
-        xiu_paddr_t page_phys = pmm_alloc_page();
-        if (page_phys == (xiu_paddr_t)-1 || page_phys == 0) return;
+        chimera_paddr_t page_phys = pmm_alloc_page();
+        if (page_phys == (chimera_paddr_t)-1 || page_phys == 0) return;
 
         u8 *virt = (u8 *)(page_phys + g_hhdm_base);
         __builtin_memset(virt, 0, 4096);
@@ -308,13 +308,13 @@ private:
         port->clbu = (u32)((page_phys >> 32) & 0xFFFFFFFF);
 
         // 256B Received FIS area
-        xiu_paddr_t fis_phys = page_phys + 1024;
+        chimera_paddr_t fis_phys = page_phys + 1024;
         port->fb  = (u32)(fis_phys & 0xFFFFFFFF);
         port->fbu = (u32)((fis_phys >> 32) & 0xFFFFFFFF);
 
         // Command Table for slot 0 at offset 2048
         hba_cmd_header_t *cmdheader = (hba_cmd_header_t *)virt;
-        xiu_paddr_t ct_phys = page_phys + 2048;
+        chimera_paddr_t ct_phys = page_phys + 2048;
         cmdheader[0].ctba  = (u32)(ct_phys & 0xFFFFFFFF);
         cmdheader[0].ctbau = (u32)((ct_phys >> 32) & 0xFFFFFFFF);
 
@@ -332,15 +332,15 @@ static AHCIDriver *s_ahci_driver_instance = nullptr;
 
 } // namespace XIUKit
 
-extern "C" void xiukit_ahci_init(u64 abar_phys) {
+extern "C" void chimerakit_ahci_init(u64 abar_phys) {
     if (!abar_phys) return;
     static XIUKit::AHCIDriver s_ahci(abar_phys);
     s_ahci.init();
     XIUKit::s_ahci_driver_instance = &s_ahci;
 }
 
-extern "C" xiu_error_t ahci_read_blocks(u32 port, u64 lba, u32 count, void *buffer) {
-    if (!XIUKit::s_ahci_driver_instance) return XIU_ERR_NOTFOUND;
+extern "C" chimera_error_t ahci_read_blocks(u32 port, u64 lba, u32 count, void *buffer) {
+    if (!XIUKit::s_ahci_driver_instance) return CHIMERA_ERR_NOTFOUND;
     return XIUKit::s_ahci_driver_instance->read_blocks(port, lba, count, buffer);
 }
 

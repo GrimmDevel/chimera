@@ -1,5 +1,5 @@
 /* =============================================================================
- * XIU Operating System — Address Resolution Protocol (ARP)
+ * Chimera Operating System — Address Resolution Protocol (ARP)
  * kernel/net/arp.c
  * ============================================================================= */
 
@@ -82,7 +82,7 @@ void arp_send_request(ifnet_t *ifp, struct in_addr target_ip) {
     struct in_addr bcast;
     bcast.s_addr = INADDR_BROADCAST;
 
-    extern xiu_error_t ethernet_output(ifnet_t *ifp, mbuf_t *m, struct in_addr dest_ip, u16 ethertype);
+    extern chimera_error_t ethernet_output(ifnet_t *ifp, mbuf_t *m, struct in_addr dest_ip, u16 ethertype);
     ethernet_output(ifp, m, bcast, ETHERTYPE_ARP);
 }
 
@@ -110,13 +110,13 @@ void arp_send_reply(ifnet_t *ifp, const ether_arp_t *req) {
     struct in_addr target_ip;
     __builtin_memcpy(&target_ip.s_addr, req->arp_spa, 4);
 
-    extern xiu_error_t ethernet_output(ifnet_t *ifp, mbuf_t *m, struct in_addr dest_ip, u16 ethertype);
+    extern chimera_error_t ethernet_output(ifnet_t *ifp, mbuf_t *m, struct in_addr dest_ip, u16 ethertype);
     ethernet_output(ifp, m, target_ip, ETHERTYPE_ARP);
 }
 
 void arp_input(ifnet_t *ifp, mbuf_t *m) {
     if (!ifp || !m || m->m_len < (i32)sizeof(ether_arp_t)) {
-        m_freem(m);
+        if (m) m_freem(m);
         return;
     }
 
@@ -130,16 +130,24 @@ void arp_input(ifnet_t *ifp, mbuf_t *m) {
     __builtin_memcpy(&sender_ip.s_addr, arp.arp_spa, 4);
     __builtin_memcpy(&target_ip.s_addr, arp.arp_tpa, 4);
 
-    // cache sender MAC
-    arp_cache_insert(sender_ip, arp.arp_sha);
+    // filter out invalid/multicast/broadcast sender MAC
+    if ((arp.arp_sha[0] & 1) != 0) return;
+    static const u8 s_zero_mac[6] = {0};
+    if (__builtin_memcmp(arp.arp_sha, s_zero_mac, 6) == 0) return;
+
+    // filter out invalid sender IPs
+    if (sender_ip.s_addr == 0 || sender_ip.s_addr == INADDR_BROADCAST || sender_ip.s_addr == ifp->if_ip.s_addr) return;
 
     u16 op = ntohs(arp.ea_op);
     if (op == ARPOP_REQUEST && target_ip.s_addr == ifp->if_ip.s_addr) {
+        arp_cache_insert(sender_ip, arp.arp_sha);
         arp_send_reply(ifp, &arp);
+    } else if (op == ARPOP_REPLY && target_ip.s_addr == ifp->if_ip.s_addr) {
+        arp_cache_insert(sender_ip, arp.arp_sha);
     }
 }
 
-xiu_error_t arp_resolve(ifnet_t *ifp, struct in_addr dest_ip, u8 *dest_mac) {
+chimera_error_t arp_resolve(ifnet_t *ifp, struct in_addr dest_ip, u8 *dest_mac) {
     if (ifp->if_gateway.s_addr != 0 &&
         (dest_ip.s_addr & ifp->if_netmask.s_addr) != (ifp->if_ip.s_addr & ifp->if_netmask.s_addr)) {
         dest_ip = ifp->if_gateway;
@@ -150,7 +158,7 @@ xiu_error_t arp_resolve(ifnet_t *ifp, struct in_addr dest_ip, u8 *dest_mac) {
         if (s_arp_table[i].valid && s_arp_table[i].ip.s_addr == dest_ip.s_addr) {
             __builtin_memcpy(dest_mac, s_arp_table[i].mac, ETHER_ADDR_LEN);
             spinlock_unlock_irqrestore(&s_arp_lock, flags);
-            return XIU_SUCCESS;
+            return CHIMERA_SUCCESS;
         }
     }
     spinlock_unlock_irqrestore(&s_arp_lock, flags);
@@ -166,7 +174,7 @@ xiu_error_t arp_resolve(ifnet_t *ifp, struct in_addr dest_ip, u8 *dest_mac) {
             if (s_arp_table[i].valid && s_arp_table[i].ip.s_addr == dest_ip.s_addr) {
                 __builtin_memcpy(dest_mac, s_arp_table[i].mac, ETHER_ADDR_LEN);
                 spinlock_unlock_irqrestore(&s_arp_lock, flags);
-                return XIU_SUCCESS;
+                return CHIMERA_SUCCESS;
             }
         }
         spinlock_unlock_irqrestore(&s_arp_lock, flags);
@@ -177,5 +185,5 @@ xiu_error_t arp_resolve(ifnet_t *ifp, struct in_addr dest_ip, u8 *dest_mac) {
     dest_mac[0] = 0x52; dest_mac[1] = 0x55; dest_mac[2] = 0x0A;
     dest_mac[3] = 0x00; dest_mac[4] = 0x02; dest_mac[5] = 0x02;
     arp_cache_insert(dest_ip, dest_mac);
-    return XIU_SUCCESS;
+    return CHIMERA_SUCCESS;
 }

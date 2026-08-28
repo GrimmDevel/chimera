@@ -1,5 +1,5 @@
 // whoami - print current user
-#include <kernel/xiu_types.h>
+#include <kernel/chimera_types.h>
 #include <stdio.h>
 #include <unistd.h>
 #include <pwd.h>

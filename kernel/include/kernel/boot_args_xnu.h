@@ -1,14 +1,14 @@
 /* =============================================================================
- * XIU Operating System — Apple XNU Boot Parameters Header
+ * Chimera Operating System — Apple XNU Boot Parameters Header
  * kernel/include/kernel/boot_args_xnu.h
  * Derived from XNU pexpert/pexpert/boot_args.h
  * =============================================================================
  */
 
-#ifndef XIU_BOOT_ARGS_XNU_H
-#define XIU_BOOT_ARGS_XNU_H
+#ifndef CHIMERA_BOOT_ARGS_XNU_H
+#define CHIMERA_BOOT_ARGS_XNU_H
 
-#include <kernel/xiu_types.h>
+#include <kernel/chimera_types.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -39,4 +39,4 @@ typedef struct {
 }
 #endif
 
-#endif /* XIU_BOOT_ARGS_XNU_H */
+#endif /* CHIMERA_BOOT_ARGS_XNU_H */

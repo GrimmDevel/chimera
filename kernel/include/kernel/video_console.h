@@ -1,12 +1,12 @@
 /*
- * XIU Operating System — Darwin XNU Video Console Header
+ * Chimera Operating System — Darwin XNU Video Console Header
  * Adapted from Apple XNU osfmk/console/video_console.h
  */
 
 #ifndef _KERNEL_VIDEO_CONSOLE_H_
 #define _KERNEL_VIDEO_CONSOLE_H_
 
-#include <kernel/xiu_types.h>
+#include <kernel/chimera_types.h>
 
 #ifdef __cplusplus
 extern "C" {

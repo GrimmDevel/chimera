@@ -1,13 +1,13 @@
 /* =============================================================================
- * XIU Operating System — Apple XNU Mach VM Subsystem Interface
+ * Chimera Operating System — Apple XNU Mach VM Subsystem Interface
  * kernel/include/kernel/vm_xnu.h
  * Derived from XNU osfmk/mach/vm_map.h & vm_prot.h
  * ============================================================================= */
 
-#ifndef XIU_VM_XNU_H
-#define XIU_VM_XNU_H
+#ifndef CHIMERA_VM_XNU_H
+#define CHIMERA_VM_XNU_H
 
-#include <kernel/xiu_types.h>
+#include <kernel/chimera_types.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -40,4 +40,4 @@ typedef struct {
 }
 #endif
 
-#endif /* XIU_VM_XNU_H */
+#endif /* CHIMERA_VM_XNU_H */
