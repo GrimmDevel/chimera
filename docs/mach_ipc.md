@@ -1,20 +1,21 @@
-# mach ipc
+# Mach IPC Subsystem
 
-darwin mach-style message passing subsystem.
+Darwin Mach-style message passing subsystem with capability-based security.
 
-## core concepts
-- `ipc_port_t`: kernel-allocated object representing a message queue. Protected by spinlock.
-- `ipc_space_t`: per-task table of port names (`mach_port_name_t`).
-- `ipc_entry_t`: maps port name to `ipc_port_t *` with specific rights.
+## Core Concepts
+- `ipc_port_t`: Kernel-allocated object representing a message queue, protected by `irqsave` spinlocks.
+- `ipc_space_t`: Per-task table of port names (`mach_port_name_t`) and rights.
+- `ipc_entry_t`: Table entry associating a port name with an `ipc_port_t *` and capability rights.
+- `ipc_kmsg_t`: In-flight kernel message envelope containing header, inline body, and optional OOL descriptors.
 
-## port rights
-- `MACH_PORT_RIGHT_SEND`: allows sending messages to port.
-- `MACH_PORT_RIGHT_RECEIVE`: only one task holds receive right per port. Allows dequeueing messages.
-- `MACH_PORT_RIGHT_SEND_ONCE`: single-use send capability, consumed after sending reply.
-- `MACH_PORT_RIGHT_DEAD_NAME`: dead port tombstone after port destroy.
+## Port Rights
+- `MACH_PORT_RIGHT_SEND`: Capability to transmit messages to a port.
+- `MACH_PORT_RIGHT_RECEIVE`: Capability to dequeue messages from a port. Exactly one task holds receive rights for a given port.
+- `MACH_PORT_RIGHT_SEND_ONCE`: Single-use send capability, consumed immediately upon transmitting a reply.
+- `MACH_PORT_RIGHT_DEAD_NAME`: Tombstone right signifying the underlying port has been destroyed.
 
-## message format
-standard mach header with optional complex body:
+## Message Format
+Standard Mach header with optional complex body:
 ```c
 typedef struct {
     mach_msg_bits_t       msgh_bits;
@@ -26,16 +27,17 @@ typedef struct {
 } mach_msg_header_t;
 ```
 
-## out-of-line (ool) memory
-for large data transfers (e.g. window server compositor surfaces):
-- `mach_msg_ool_descriptor_t` passes virtual address and size.
-- kernel maps physical pages from sender `vm_map` into receiver `vm_map` using copy-on-write page table flags.
-- zero-copy page sharing instead of large memcpy in ipc queues.
+## Out-of-Line (OOL) Memory
+For large data transfers (such as WindowServer graphics surfaces):
+- `mach_msg_ool_descriptor_t` specifies the user virtual address, size, copy method, and deallocate options.
+- The kernel maps physical pages from the sender's `vm_map` into the receiver's `vm_map` using copy-on-write (COW) page table attributes.
+- Eliminates large `memcpy` operations within kernel message buffers.
+- Verified bounds checking: user addresses passed in descriptors are validated against `USER_SPACE_MIN` and `USER_SPACE_MAX`.
 
-## traps / syscalls
-- `mach_msg_trap(msg, option, send_size, rcv_size, rcv_name, timeout, notify)`
-- `mach_port_allocate(task, right, &name)`
-- `mach_port_insert_right(task, name, port, right_type)`
-- `mach_port_deallocate(task, name)`
-- `mach_reply_port()` - allocates or reuses thread-local send-once reply port
-- `task_get_bootstrap_port(task, &port)` - retrieves system service lookup port
+## Mach Traps & System Calls
+- `mach_msg_trap(msg, option, send_size, rcv_size, rcv_name, timeout, notify)` — primary message transmission and reception trap.
+- `mach_port_allocate(task, right, &name)` — allocates a new port right in the task's IPC space.
+- `mach_port_insert_right(task, name, port, right_type)` — inserts an existing right into target task space.
+- `mach_port_deallocate(task, name)` — drops a reference to a port right.
+- `mach_reply_port()` — allocates or reuses a thread-local send-once reply port.
+- `task_get_bootstrap_port(task, &port)` — retrieves system service lookup port.

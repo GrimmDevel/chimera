@@ -1,11 +1,11 @@
-# xiu documentation
+# Chimera OS Documentation
 
-system documentation index.
+System documentation index for Chimera OS.
 
-- [architecture](architecture.md) — kernel address space, ring0/ring3 isolation, memory layout
-- [mach ipc](mach_ipc.md) — ports, port rights, message passing, out-of-line memory
-- [smp and scheduler](smp_scheduler.md) — multi-core boot, local apic, ipi, priority decay scheduler
-- [vfs](vfs.md) — vnodes, devfs (/dev), fat32 persistent storage, pipes, pseudoterminals
-- [networking](networking.md) — mbufs, ifnet, intel e1000 driver, arp, ip, icmp, udp, tcp, dhcp, sockets
-- [chimerakit](chimerakit.md) — pci enumeration, xhci usb 3.0 controller, hid input layer, framebuffer
-- [userspace](userspace.md) — libsystem, mach-o/elf loader, process lifecycle, userland tools
+- [Architecture](architecture.md) — Kernel address space, Ring 0/Ring 3 isolation, memory layout
+- [Mach IPC](mach_ipc.md) — Mach ports, port rights, message passing, out-of-line (OOL) memory
+- [SMP and Scheduler](smp_scheduler.md) — Multi-core boot, Local APIC, IPI vectors, priority decay scheduler
+- [VFS](vfs.md) — Vnodes, DevFS (`/dev`), FAT32 persistent storage, pipes, pseudoterminals
+- [Networking](networking.md) — mbufs, ifnet, Intel e1000 driver, ARP, IPv4, ICMP, UDP, TCP, DHCP, BSD sockets
+- [ChimeraKit](chimerakit.md) — PCI enumeration, xHCI USB 3.0 controller, AppleHIDDriver, framebuffer console
+- [Userspace](userspace.md) — libsystem, Mach-O/ELF loader, process lifecycle, Darwin hierarchy, userland tools

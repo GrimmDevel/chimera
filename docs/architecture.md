@@ -1,13 +1,13 @@
-# xiu architecture
+# Chimera OS Architecture
 
-hybrid mach/bsd kernel for x86_64. heavily modeled after apple xnu / darwin.
+Hybrid Mach/BSD kernel for x86_64, modeled after Apple XNU / Darwin.
 
-## memory map
-- limine protocol loads kernel to higher-half `-2GB` (`0xFFFFFFFF80000000`)
-- `g_hhdm_base` maps all physical memory 1:1 at `0xFFFF800000000000`
-- userspace address space is `0x0000000000000000` to `0x00007FFFFFFFFFFF`
-- user stack grows down from `0x00007FFFFFFFE000`
-- user heap / mmap starts at `0x0000100000000000`
+## Memory Map
+- Limine protocol loads kernel to higher-half `-2GB` (`0xFFFFFFFF80000000`)
+- `g_hhdm_base` maps all physical memory 1:1 at `0xFFFF800000000000` (HHDM)
+- Userspace virtual address space covers `0x0000000000001000` to `0x00007FFFFFFFFFFF`
+- User stack grows down from `0x00007FFFFFFF0000`
+- User heap / mmap allocator starts at `0x0000100000000000`
 
 ```
 +------------------------------------+ 0xFFFFFFFFFFFFFFFF
@@ -17,32 +17,33 @@ hybrid mach/bsd kernel for x86_64. heavily modeled after apple xnu / darwin.
 +------------------------------------+
 | Canonical hole (non-canonical)     |
 +------------------------------------+
-| Userspace stack (grows down)       | 0x00007FFFFFFFF000
+| Userspace stack (grows down)       | 0x00007FFFFFFF0000
 | Userspace mmap / heap / bss        | 0x0000100000000000
-| Userspace text / data / elf        | 0x0000000000400000
+| Userspace text / data / Mach-O     | 0x0000000000001000
 +------------------------------------+ 0x0000000000000000
 ```
 
-## kernel layers
-1. **mach core**:
-   - `task`: resource container, vm_map, port space, credentials
-   - `thread`: execution context, kernel stack, saved registers, sched state
-   - `ipc_port`: communication endpoint with message queue
-   - `vm_map` / `vm_object`: address space tracking with copy-on-write page tables
-2. **bsd personality**:
-   - `proc`: posix process structure, pid, parent/child relationships, signal handlers
-   - `fileproc` / `fd_table`: per-process file descriptor table
-   - `syscall`: syscall dispatcher via x86_64 `syscall` / `sysretq` instructions
-3. **vfs**:
-   - `vnode` abstraction for rootfs, devfs, fat32, pipes, and pseudoterminals
-4. **chimerakit**:
-   - c++ driver layer for pci discovery, xhci usb host controllers, hid input, framebuffer
-5. **net**:
-   - darwin-style socket layer (`socket_t`), `mbuf` packet chains, `ifnet` network interfaces
+## Kernel Subsystems
+1. **Mach Core**:
+   - `chimera_task_t`: Resource container, `vm_map`, port space (`ipc_space_t`), credentials
+   - `chimera_thread_t`: Execution context, kernel stack, saved registers, FPU/SSE state, scheduling priority
+   - `ipc_port_t`: Communication endpoint with locked message queue
+   - `vm_map` / `vm_object`: Address space management with copy-on-write (COW) page tables and zero-copy OOL transfer
+2. **BSD Personality**:
+   - `chimera_proc_t`: POSIX process structure, PID, parent/child relationships, signal actions, credentials (`uid`, `gid`)
+   - `fileproc_t` / `fd_table`: Per-process file descriptor table for vnodes, sockets, pipes, and PTYs
+   - `syscall`: System call dispatcher via x86_64 `syscall` / `sysretq` instructions (`MSR_LSTAR`)
+3. **Virtual File System (VFS)**:
+   - `vnode_t` abstraction for rootfs, DevFS, FAT32 on ATA, pipes, and pseudoterminals
+4. **ChimeraKit Driver Framework**:
+   - C++ driver layer for PCI bus enumeration, xHCI USB 3.0 host controller, AppleHIDDriver, display controller
+5. **Chimera-Net**:
+   - Darwin-style socket layer (`socket_t`), `mbuf` packet chains and clusters, `ifnet` network interfaces, Intel e1000 driver
 
-## ring 0 / ring 3 isolation
-- userspace syscall entry via `MSR_LSTAR` pointing to `syscall_entry` in `switch.S`
-- `swapgs` switches to per-cpu `cpu_local_t` struct
-- kernel stack loaded from `tss_set_rsp0()` on task switch
-- `copyin()` and `copyout()` validate all user pointers against page table mappings; invalid pointers return `-EFAULT`
-- user faults (div-by-zero, segfault, illegal instruction) dispatch signals (`SIGSEGV`, `SIGFPE`, `SIGILL`) to the faulting process without crashing the kernel
+## Ring 0 / Ring 3 Isolation & Security
+- Userspace syscall entry via `MSR_LSTAR` pointing to `x86_64_syscall_entry` in `syscall_entry.S`
+- `swapgs` switches between user `%gs` and per-CPU `cpu_local_t` struct
+- Kernel stack loaded into TSS (`tss_set_rsp0_cpu`) on task switch
+- `copyin()` and `copyout()` enforce boundary validation (`0x1000` to `0x7FFFFFFFFFFF`); passing kernel virtual addresses returns `-EFAULT`
+- User faults (divide-by-zero, segfault, invalid opcode) deliver signals (`SIGSEGV`, `SIGFPE`, `SIGILL`) to the process without crashing the kernel
+- Full resource reclamation on `exit()`: physical pages, intermediate page tables, and file descriptors are freed to prevent memory leaks

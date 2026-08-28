@@ -1,38 +1,37 @@
-# chimerakit driver framework
+# ChimeraKit Driver Framework
 
-modular c++ driver subsystem for bus enumeration, usb 3.0, input devices, and graphics.
+Modular C++ driver subsystem for bus enumeration, USB 3.0, input devices, and graphics controllers.
 
-## pci bus enumeration
-`chimerakit_pci` scans 256 buses, 32 devices, 8 functions:
-- reads vendor id / device id / class code
-- enables bus mastering, memory space, and io space in command register (`0x04`)
-- extracts BAR0 mmio base addresses for e1000 nic and xhci controller
+## PCI Bus Enumeration
+`chimerakit_pci` scans 256 buses, 32 devices, and 8 functions:
+- Reads Vendor ID, Device ID, Class Code, Subclass, and Header Type.
+- Configures PCI command register (`0x04`) enabling Bus Mastering, Memory Space, and I/O Space.
+- Discovers and maps BAR0 MMIO base addresses for Intel e1000 NIC and xHCI USB controller.
 
-## xhci usb 3.0 host controller
-implements xhci 1.1 specification for full-speed, high-speed, and superspeed devices:
-1. **bios handoff**: acquires os-owned semaphore via extended capability registers (`XECP`).
-2. **rings & buffers**:
-   - `m_cmd_ring`: command ring for enable slot, address device, configure endpoint.
-   - `m_ev_ring`: event ring pointing to `ERSTBA` with dequeue pointer written to `ERDP`.
-   - `transfer_ring`: endpoint 0 control transfer ring (setup, data, status stages).
-   - `ep1_ring`: 16-trb ring for interrupt IN endpoints linked with toggle cycle link trb.
-3. **hid enumeration**:
-   - queries configuration descriptors, parses interface and endpoint descriptors.
-   - sends `SET_CONFIGURATION(1)`, `SET_PROTOCOL(0)` (boot protocol), `SET_IDLE(0)`.
-   - configures endpoint context with actual endpoint interval and max packet size.
-4. **packet decoding**:
-   - keyboard: 8-byte boot report parsed for modifiers, scan codes, key press/release transitions.
-   - mouse: 3/4/8-byte reports parsed for button masks and relative dx/dy/dz movement.
+## xHCI USB 3.0 Host Controller
+Implements the xHCI 1.1 specification for low-speed, full-speed, high-speed, and SuperSpeed devices:
+1. **BIOS Handoff**: Acquires OS-owned semaphore via Extended Capability registers (`XECP`).
+2. **Rings & Data Structures**:
+   - `m_cmd_ring`: Command ring for Enable Slot, Address Device, Configure Endpoint commands.
+   - `m_ev_ring`: Primary event ring pointing to `ERSTBA` with dequeue pointer updated via `ERDP`.
+   - `transfer_ring`: Endpoint 0 control transfer ring (Setup, Data, Status stages).
+   - `ep1_ring`: Interrupt IN transfer ring with Link TRBs and toggle cycle bits.
+3. **Device Enumeration**:
+   - Reads device and configuration descriptors, parses interface and endpoint descriptors.
+   - Issues `SET_CONFIGURATION(1)`, `SET_PROTOCOL(0)` (boot protocol), and `SET_IDLE(0)`.
+   - Configures endpoint contexts with hardware polling interval and maximum packet size.
+4. **Report Decoding**:
+   - Keyboard: 8-byte HID boot reports parsed for modifier keys, keycode array, press/release state transitions.
+   - Mouse: 3/4/8-byte reports decoded for button masks and relative DX/DY/DZ coordinate updates.
 
-## hid input layer
+## AppleHIDDriver & Input Layer
 `kernel/chimerakit/hid.cpp` provides unified input abstraction:
-- maintains circular ringbuffers for keyboard events and mouse motion.
-- decodes scancodes to unicode with shift, caps lock, ctrl, alt, and cmd modifiers.
-- feeds canonical line buffer in `console_in_push()`.
+- Ring buffers for keyboard events and relative/absolute mouse motion.
+- Scancode to ASCII/Unicode translation with Shift, Caps Lock, Ctrl, Alt, and Command modifiers.
+- Direct integration into virtual console line discipline (`console_in_push()`) and `/dev/mouse`.
 
-## framebuffer console
-`kernel/console.c` renders text onto linear limine framebuffer:
-- 8x16 vga bitmap glyph rasterization.
-- double-buffered shadow ram (`s_fb_shadow`) in cached memory avoids slow un-cached vram reads during scrolling.
-- ansi escape parser handles cursor repositioning, screen clear (`\033[2J`), and colors.
-- 1000-line scrollback buffer with shift+pageup/pagedown viewport navigation.
+## Framebuffer & Display Driver
+`kernel/console.c` renders graphics and text onto the linear Limine framebuffer:
+- 8x16 VGA bitmap glyph rasterizer with ANSI color parsing.
+- Double-buffered shadow RAM (`s_fb_shadow`) avoids un-cached VRAM reads during scrolling.
+- 1000-line scrollback buffer with Shift+PageUp / Shift+PageDown viewport navigation.
