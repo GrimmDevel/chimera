@@ -131,6 +131,10 @@ typedef s64         chimera_reltime_t;
 #ifndef CHIMERA_PAGE_SIZE
 #  define CHIMERA_PAGE_SIZE 4096
 #endif
+
+
+// fixed user VA of the shared RX signal-trampoline page ("mini-vdso")
+#define SIGNAL_TRAMP_VA 0x0000000070000000ULL
 #define CHIMERA_PAGE_MASK       ((chimera_size_t)(CHIMERA_PAGE_SIZE - 1))
 #define CHIMERA_PAGE_ALIGN(a)   (((chimera_vaddr_t)(a) + CHIMERA_PAGE_MASK) & ~CHIMERA_PAGE_MASK)
 #define CHIMERA_PAGE_TRUNC(a)   ((chimera_vaddr_t)(a) & ~CHIMERA_PAGE_MASK)

@@ -16,8 +16,8 @@ Darwin and POSIX userspace environment, standard C library, Cocoa/NextStep runti
 - `AppKit` & `CoreGraphics` / `Onyx2D`: 2D vector drawing, window backing stores, event dispatch, and UI controls.
 
 ## Binary Loader (`kernel/bsd/mach_loader.c`)
-- Supports both 64-bit Mach-O (`MH_MAGIC_64`) and ELF64 formats.
-- Maps segments (`LC_SEGMENT_64`, `PT_LOAD`) into user `vm_map` with strict page alignment.
+- Supports native 64-bit x86_64 Mach-O (`MH_MAGIC_64`, `MH_EXECUTE`) only.
+- Maps `LC_SEGMENT_64` segments into user `vm_map` with strict page alignment.
 - Allocates an 8MB user stack (`0x00007FFFFFFF0000`).
 - Formats `argc`, `argv`, and `envp` onto the user stack before entering user mode via `task_switch_to_user()` / `iretq`.
 

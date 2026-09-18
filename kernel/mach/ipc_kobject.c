@@ -9,7 +9,7 @@
 extern void kprintf(const char *fmt, ...);
 extern chimera_paddr_t pmm_alloc_page(void);
 extern void pmm_release_page(chimera_paddr_t addr);
-extern u64 pmap_map_user_page(u64 target_pml4_phys, u64 vaddr, u64 paddr, u32 flags);
+extern u64 pmap_map_user_page(u64 target_pml4_phys, u64 vaddr, u64 paddr, u64 flags);
 extern void pmap_unmap_user_range(u64 pml4_phys, u64 vaddr, usize len);
 
 void ipc_kobject_set(struct ipc_port *port, void *kobject, ipc_kobject_type_t type) {

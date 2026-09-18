@@ -76,6 +76,43 @@ chimera_error_t wait_queue_sleep_irqrestore(wait_queue_t *wq, spinlock_t *lock,
   return curr->th_wait_result;
 }
 
+chimera_error_t wait_queue_sleep_until_irqrestore(wait_queue_t *wq,
+                                                  u64 deadline_ms,
+                                                  spinlock_t *lock,
+                                                  irq_flags_t flags) {
+  chimera_thread_t *curr = current_thread();
+  CHIMERA_ASSERT(curr != nullptr);
+
+  irq_flags_t wq_flags = spinlock_lock_irqsave(&wq->wq_lock);
+
+  curr->th_state = THREAD_STATE_WAITING;
+  curr->th_wait_next = nullptr;
+  curr->th_wait_result = CHIMERA_SUCCESS;
+
+  if (wq->tail) {
+    wq->tail->th_wait_next = curr;
+  } else {
+    wq->head = curr;
+  }
+  wq->tail = curr;
+
+  if (lock) {
+    spinlock_unlock_irqrestore(lock, flags);
+  } else {
+    irq_restore(flags);
+  }
+
+  // bounded wait: the PIT releases us even without an explicit wakeup
+  extern void thread_sleep_list_add(chimera_thread_t * th, u64 deadline_ms);
+  thread_sleep_list_add(curr, deadline_ms);
+
+  spinlock_unlock_irqrestore(&wq->wq_lock, wq_flags);
+
+  scheduler_yield();
+
+  return curr->th_wait_result;
+}
+
 void wait_queue_wakeup_one(wait_queue_t *wq) {
   if (!wq) return;
   irq_flags_t wq_flags = spinlock_lock_irqsave(&wq->wq_lock);

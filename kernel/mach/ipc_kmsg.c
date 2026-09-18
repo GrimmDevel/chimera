@@ -302,7 +302,7 @@ chimera_error_t ipc_kmsg_copyout(ipc_kmsg_t *kmsg, chimera_vaddr_t user_buf_va,
           chimera_paddr_t user_paddr = (chimera_paddr_t)((uptr)kbuf - g_hhdm_base);
           if (space->is_task && space->is_task->ta_vm_map) {
             u64 target_va = 0x0000700000000000ULL + ((u64)ool_idx * 0x10000000ULL);
-            extern u64 pmap_map_user_page(u64 target_pml4_phys, u64 vaddr, u64 paddr, u32 flags);
+            extern u64 pmap_map_user_page(u64 target_pml4_phys, u64 vaddr, u64 paddr, u64 flags);
             for (usize pg = 0; pg < page_count; pg++) {
               pmap_map_user_page((u64)space->is_task->ta_vm_map,
                                  target_va + (pg * 4096),
@@ -365,8 +365,30 @@ chimera_error_t ipc_mqueue_send(struct ipc_port *port, ipc_kmsg_t *kmsg,
   }
 
   if (mq->imq_msgcount >= mq->imq_qlimit) {
-    spinlock_unlock_irqrestore(&mq->imq_lock, f);
-    return CHIMERA_ERR_PORT_FULL;
+    if (timeout_ms == 0) {
+      // MACH_MSG_TIMEOUT_NONE semantics: report instead of blocking
+      spinlock_unlock_irqrestore(&mq->imq_lock, f);
+      return CHIMERA_ERR_PORT_FULL;
+    }
+    // bounded blocking send: wait for a receiver to drain a slot; the
+    // timer sleep list releases us even if no receiver ever wakes us
+    extern u64 timer_get_uptime_ms(void);
+    u64 deadline = timer_get_uptime_ms() + timeout_ms;
+    for (;;) {
+      wait_queue_sleep_until_irqrestore(&mq->imq_send_waiters, deadline,
+                                        &mq->imq_lock, f);
+      f = spinlock_lock_irqsave(&mq->imq_lock);
+      if (!ipc_port_is_active(port)) {
+        spinlock_unlock_irqrestore(&mq->imq_lock, f);
+        return CHIMERA_ERR_PORT_DEAD;
+      }
+      if (mq->imq_msgcount < mq->imq_qlimit)
+        break; // a slot opened up
+      if ((i64)(deadline - timer_get_uptime_ms()) <= 0) {
+        spinlock_unlock_irqrestore(&mq->imq_lock, f);
+        return CHIMERA_ERR_TIMEOUT;
+      }
+    }
   }
 
   // assign sequence number
@@ -405,6 +427,10 @@ chimera_error_t ipc_mqueue_receive(struct ipc_port *port, ipc_kmsg_t **kmsg_out,
   ipc_mqueue_t *mq = &port->ip_messages;
   irq_flags_t f = spinlock_lock_irqsave(&mq->imq_lock);
 
+  extern u64 timer_get_uptime_ms(void);
+  u64 rcv_deadline =
+      (timeout_ms != 0) ? (timer_get_uptime_ms() + timeout_ms) : 0;
+
   for (;;) {
     if (!ipc_port_is_active(port)) {
       spinlock_unlock_irqrestore(&mq->imq_lock, f);
@@ -415,8 +441,13 @@ chimera_error_t ipc_mqueue_receive(struct ipc_port *port, ipc_kmsg_t **kmsg_out,
       break;
     }
 
-    // no message — Handle non-blocking or block
+    // no message — Handle non-blocking or bounded block
     if (timeout_ms == 0) {
+      spinlock_unlock_irqrestore(&mq->imq_lock, f);
+      return CHIMERA_ERR_TIMEOUT;
+    }
+
+    if ((i64)(rcv_deadline - timer_get_uptime_ms()) <= 0) {
       spinlock_unlock_irqrestore(&mq->imq_lock, f);
       return CHIMERA_ERR_TIMEOUT;
     }
@@ -424,11 +455,8 @@ chimera_error_t ipc_mqueue_receive(struct ipc_port *port, ipc_kmsg_t **kmsg_out,
     dprintf("[IPC-DBG] mqueue_receive: port=%p label=%s BLOCKING (timeout=%u)\n",
             (void *)port, port->ip_label ? port->ip_label : "?", timeout_ms);
 
-    chimera_error_t err =
-        wait_queue_sleep_irqrestore(&mq->imq_recv_waiters, &mq->imq_lock, f);
-    if (err != CHIMERA_SUCCESS) {
-      return err;
-    }
+    wait_queue_sleep_until_irqrestore(&mq->imq_recv_waiters, rcv_deadline,
+                                      &mq->imq_lock, f);
 
     // re-acquire lock to check queue again
     f = spinlock_lock_irqsave(&mq->imq_lock);
@@ -451,6 +479,9 @@ chimera_error_t ipc_mqueue_receive(struct ipc_port *port, ipc_kmsg_t **kmsg_out,
   kmsg->ikm_prev = nullptr;
 
   spinlock_unlock_irqrestore(&mq->imq_lock, f);
+
+  // a slot opened up: release one sender blocked on a full queue
+  wait_queue_wakeup_one(&mq->imq_send_waiters);
 
   *kmsg_out = kmsg;
   return CHIMERA_SUCCESS;

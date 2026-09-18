@@ -80,9 +80,25 @@ typedef struct ipc_entry {
     struct ipc_port    *ie_object;
     mach_port_type_t    ie_bits;
     u32                 ie_urefs;
+    u8                  ie_gen;   // generation: bumped on free so stale
+                                  // names die instead of colliding
 } ipc_entry_t;
 
 #define IPC_SPACE_INITIAL_CAPACITY  64
+
+// Mach-style scoping names: (generation << shift) | index. Names stay valid
+// table indices but carry a per-entry generation so a stale (freed) name
+// cannot accidentally resolve to a newer right on the same index.
+#define IPC_NAME_IDX_MASK(n) ((n) & 0x3F)
+static inline u32 ipc_name_make(u32 gen, u32 idx) {
+    return ((gen & 0x3FFu) << 6) | (idx & 0x3Fu);
+}
+static inline u32 ipc_name_index(mach_port_name_t name) {
+    return IPC_NAME_IDX_MASK((u32)name);
+}
+static inline u32 ipc_name_gen(mach_port_name_t name) {
+    return ((u32)name >> 6) & 0x3FFu;
+}
 #define IPC_SPACE_MAX_CAPACITY      (1u << 20)
 
 typedef struct ipc_space {

@@ -1,5 +1,5 @@
 # =============================================================================
-# XIU Cross-Compilation Toolchain — x86_64 bare-metal ELF
+# XIU Cross-Compilation Toolchain — x86_64 bare-metal Mach-O
 # Usage: cmake -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-x86_64.cmake ..
 # =============================================================================
 
@@ -27,7 +27,7 @@ set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
 set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
 set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
 
-# Bypass compiler checks which fail on macOS when cross-compiling to ELF
+# Bypass compiler checks which fail on macOS when cross-compiling bare metal
 set(CMAKE_C_COMPILER_WORKS 1)
 set(CMAKE_CXX_COMPILER_WORKS 1)
 

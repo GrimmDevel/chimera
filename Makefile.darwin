@@ -6,7 +6,7 @@ LD = ld
 CFLAGS = -target $(TARGET_TRIPLE) \
          -mkernel -fapple-kext \
          -nostdlib -nostdlibinc -fno-builtin -fno-exceptions -fno-stack-protector \
-         -O2 -Wall -Wextra \
+         -O2 -Wall -Wextra -fno-omit-frame-pointer \
          -I./kernel/include -I./kernel -I./drivers
 
 CXXFLAGS = $(CFLAGS) -fno-rtti -fno-threadsafe-statics -std=c++20

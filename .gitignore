@@ -31,3 +31,10 @@ OpenCorePkg/
 
 # Limine tarball
 limine-*.tar.gz
+
+# Build artifacts committed by accident
+*.o
+mach_kernel
+bootx64.efi
+efiloader.o
+build_usr/

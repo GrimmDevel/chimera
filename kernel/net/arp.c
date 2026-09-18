@@ -181,9 +181,7 @@ chimera_error_t arp_resolve(ifnet_t *ifp, struct in_addr dest_ip, u8 *dest_mac) 
         for (volatile int delay = 0; delay < 10000; delay++) cpu_relax();
     }
 
-    // fallback default router mac
-    dest_mac[0] = 0x52; dest_mac[1] = 0x55; dest_mac[2] = 0x0A;
-    dest_mac[3] = 0x00; dest_mac[4] = 0x02; dest_mac[5] = 0x02;
-    arp_cache_insert(dest_ip, dest_mac);
-    return CHIMERA_SUCCESS;
+    // no resolution within the retry budget: report failure instead of
+    // inventing a destination MAC (frames would silently vanish on the wire)
+    return CHIMERA_ERR_TIMEOUT;
 }

@@ -47,7 +47,11 @@ build:
 	@cd $(BUILD_DIR) && cmake -DCMAKE_TOOLCHAIN_FILE=../../$(TOOLCHAIN) \
 		-DCMAKE_BUILD_TYPE=$(BUILD_TYPE) $(CMAKE_VERBOSE_FLAG) ../..
 	@cmake --build $(BUILD_DIR) --parallel $$(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 1)
-	@echo "[CHIMERA] Build complete: $(BUILD_DIR)/kernel/chimera_kernel.elf"
+	@if [ "$(ARCH)" = "x86_64" ]; then \
+		clang -target x86_64-unknown-windows -ffreestanding -fno-stack-protector -fshort-wchar -mno-red-zone -nostdlibinc -c boot/efi/efiloader.c -o build/efiloader.o; \
+		lld-link -subsystem:efi_application -entry:efi_main build/efiloader.o -out:bootx64.efi; \
+	fi
+	@echo "[CHIMERA] Build complete: $(BUILD_DIR)/kernel/mach_kernel"
 
 # ── Clean Target ─────────────────────────────────────────────────────────────
 clean:
@@ -65,18 +69,17 @@ recreate-disk: build
 
 # ── QEMU Target ──────────────────────────────────────────────────────────────
 # Boots the kernel in QEMU
-qemu: build disk
+qemu: build
 	@./scripts/run_qemu.sh $(ARCH) $(if $(filter -wserver --wserver wserver gui -gui,$(MAKECMDGOALS)),-wserver,$(WSERVER))
 
 run:
 	@./scripts/build_darwin.sh
 
-run-gui: build disk
+run-gui: build
 	@./scripts/run_qemu.sh $(ARCH) -wserver
 
 debug:
 	@$(MAKE) build BUILD_TYPE=Debug VERBOSE=1
-	@$(MAKE) disk
 	@./scripts/run_qemu.sh $(ARCH) 1
 
 debug-iso:
@@ -84,9 +87,10 @@ debug-iso:
 	@$(MAKE) iso
 
 # ── ISO Target ──────────────────────────────────────────────────────────────
-# Packages the kernel into a bootable ISO using Limine
-iso: build
-	@./scripts/make_iso.sh $(ARCH)
+# Kept as an explicit guard: Limine does not load the Mach-O kernel.
+iso:
+	@echo "[CHIMERA] ISO/Limine boot is disabled; Mach-O boots through UEFI (make qemu or make run)."
+	@false
 
 # ── Help Target ──────────────────────────────────────────────────────────────
 help:

@@ -3,7 +3,7 @@
 Chimera Operating System — FAT32 Disk Image Generator & In-Place Binary Updater
 scripts/make_disk.py
 Generates a 64MB FAT32 disk image containing system directories,
-configurations, and userland ELF binaries matching macOS/Darwin hierarchy.
+configurations, and userland Mach-O binaries matching macOS/Darwin hierarchy.
 """
 
 import os
@@ -385,8 +385,13 @@ def discover_binaries(bin_dir: str) -> list:
         if os.path.isfile(full_path) and not item.endswith((".a", ".o", ".obj", ".txt", ".cmake", ".json", ".ninja")):
             try:
                 with open(full_path, "rb") as f:
-                    magic = f.read(4)
-                if magic in (b"\xcf\xfa\xed\xfe", b"\xce\xfa\xed\xfe", b"\xfe\xed\xfa\xcf", b"\xfe\xed\xfa\xce", b"\x7fELF"):
+                    header = f.read(16)
+                # Only install native x86_64 MH_EXECUTE images. Relocatable
+                # Mach-O objects, fat images, and foreign formats are not
+                # runnable by the kernel's userspace loader.
+                if (len(header) == 16 and header[:4] == b"\xcf\xfa\xed\xfe" and
+                        int.from_bytes(header[4:8], "little") == 0x01000007 and
+                        int.from_bytes(header[12:16], "little") == 2):
                     discovered.append(item)
             except Exception:
                 pass

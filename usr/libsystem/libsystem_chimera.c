@@ -1104,6 +1104,20 @@ int execve(const char *path, char *const argv[], char *const envp[]) {
 
 // memory Management
 
+// malloc/free are process-global structures; guard them with a userspace
+// spinlock so multithreaded callers cannot corrupt the chunk lists
+static volatile int g_malloc_lock = 0;
+
+static void malloc_lock_acquire(void) {
+    while (__sync_lock_test_and_set(&g_malloc_lock, 1)) {
+        while (g_malloc_lock) {
+            __builtin_ia32_pause();
+        }
+    }
+}
+
+static void malloc_lock_release(void) { __sync_lock_release(&g_malloc_lock); }
+
 struct malloc_chunk {
   usize size;
   struct malloc_chunk *next;
@@ -1126,15 +1140,18 @@ static void split_chunk(struct malloc_chunk *chunk, usize size) {
 void *malloc(usize size) {
   if (size == 0) size = 16;
   if (size > 0x40000000ULL) return NULL;
-  
+
   // align to 16 bytes
   size = (size + 15) & ~15;
+
+  malloc_lock_acquire();
 
   struct malloc_chunk *curr = g_malloc_list;
   while (curr) {
     if (curr->free && curr->size >= size) {
       split_chunk(curr, size);
       curr->free = 0;
+      malloc_lock_release();
       return (void *)(curr + 1);
     }
     curr = curr->next;
@@ -1144,9 +1161,12 @@ void *malloc(usize size) {
   usize alloc_size = size + sizeof(struct malloc_chunk);
   if (alloc_size < 65536) alloc_size = 65536;
   alloc_size = (alloc_size + 4095) & ~4095;
-  
+
   void *ptr = mmap(NULL, alloc_size, 3, 0x22, -1, 0);
-  if (ptr == (void *)-1) return NULL;
+  if (ptr == (void *)-1) {
+    malloc_lock_release();
+    return NULL;
+  }
 
   struct malloc_chunk *chunk = (struct malloc_chunk *)ptr;
   chunk->size = alloc_size - sizeof(struct malloc_chunk);
@@ -1155,6 +1175,7 @@ void *malloc(usize size) {
   g_malloc_list = chunk;
 
   split_chunk(chunk, size);
+  malloc_lock_release();
   return (void *)(chunk + 1);
 }
 
@@ -1164,14 +1185,19 @@ void *realloc(void *ptr, usize size) {
     free(ptr);
     return NULL;
   }
-  
-  struct malloc_chunk *chunk = (struct malloc_chunk *)ptr - 1;
-  if (chunk->size >= size) return ptr;
+
+  // read the old size under the lock, then let malloc/free take it themselves
+  // (the lock is non-recursive — calling them while held would self-deadlock)
+  malloc_lock_acquire();
+  usize old_size = ((struct malloc_chunk *)ptr - 1)->size;
+  malloc_lock_release();
+
+  if (old_size >= size) return ptr;
 
   void *new_ptr = malloc(size);
   if (!new_ptr) return NULL;
-  
-  memcpy(new_ptr, ptr, chunk->size);
+
+  memcpy(new_ptr, ptr, old_size);
   free(ptr);
   return new_ptr;
 }
@@ -1198,6 +1224,7 @@ void *memmove(void *dest, const void *src, usize n) {
 
 void free(void *ptr) {
   if (!ptr) return;
+  malloc_lock_acquire();
   struct malloc_chunk *chunk = (struct malloc_chunk *)ptr - 1;
   chunk->free = 1;
 
@@ -1211,6 +1238,7 @@ void free(void *ptr) {
     }
     curr = curr->next;
   }
+  malloc_lock_release();
 }
 
 

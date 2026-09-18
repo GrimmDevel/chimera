@@ -4,9 +4,10 @@
 
 set -e
 
-EFI_IMG="build/disk.img"
-BOOTX_EFI="bootx64.efi"
-MACH_KERNEL="mach_kernel"
+EFI_IMG="${EFI_IMG:-build/disk.img}"
+BOOTX_EFI="${BOOTX_EFI:-bootx64.efi}"
+MACH_KERNEL="${MACH_KERNEL:-mach_kernel}"
+USR_BIN_DIR="${USR_BIN_DIR:-build/usr}"
 
 echo "[EFI] Creating FAT32 image..."
 rm -f "$EFI_IMG"
@@ -32,7 +33,7 @@ echo "[EFI] Success: $EFI_IMG created."
 # copy userspace binaries into /bin on the disk image
 echo "[EFI] Populating /bin with userspace binaries..."
 mmd -i "$EFI_IMG" ::/bin || true
-for f in build/usr/*; do
+for f in "$USR_BIN_DIR"/*; do
     [ -x "$f" ] && [ -f "$f" ] && ! [[ "$f" == *.a ]] && mcopy -i "$EFI_IMG" "$f" ::/bin/$(basename "$f")
 done
 echo "[EFI] Userspace binaries copied."

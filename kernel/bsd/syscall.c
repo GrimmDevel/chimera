@@ -33,8 +33,8 @@ extern const char *vfs_path_for_vnode(vnode_t *vp);
 extern u64 pmap_clone_user_space(u64 src_pml4_phys);
 extern void task_switch_to_user_frame(uptr entry, uptr stack, void *frame,
                                       u64 rax);
-extern void thread_init_fork_stack(chimera_thread_t *th, void *entry,
-                                   void *stack);
+extern int thread_init_fork_stack(chimera_thread_t *th, void *entry,
+                                  void *stack);
 extern void scheduler_yield(void);
 
 typedef struct syscall_user_frame {
@@ -501,6 +501,39 @@ static i64 sys_dup2(u64 oldfd_u, u64 newfd_u, u64 a3, u64 a4, u64 a5, u64 a6) {
   return (i64)newfd;
 }
 
+/* ── sys_fchdir ───────────────────────────────────────────────────────────── *
+ * Changes CWD to the directory referenced by an open file descriptor.
+ * Previously aliased to sys_chdir, which treated the fd number as a user
+ * pointer and could only fail with EFAULT.
+ * ─────────────────────────────────────────────────────────────────────────── */
+static i64 sys_fchdir(u64 fd_u, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
+  (void)a2;
+  (void)a3;
+  (void)a4;
+  (void)a5;
+  (void)a6;
+  chimera_task_t *task = current_task();
+  chimera_proc_t *proc = task ? task->ta_proc : nullptr;
+  if (!proc || fd_u >= CHIMERA_PROC_MAX_FDS)
+    return -9; // EBADF
+
+  chimera_fileproc_t *fp = proc_fd_lookup(proc, (int)fd_u);
+  if (!fp)
+    return -9;
+
+  vnode_t *vp = fp->fp_vnode;
+  if (!vp || vp->v_type != VDIR) {
+    fp_release(fp);
+    return -20; // ENOTDIR
+  }
+
+  irq_flags_t irq = spinlock_lock_irqsave(&proc->p_lock);
+  proc->p_cwd = vp;
+  spinlock_unlock_irqrestore(&proc->p_lock, irq);
+  fp_release(fp);
+  return 0;
+}
+
 static void resolve_relative_path(chimera_proc_t *proc, const char *path,
                                   char *out_buf, usize out_max) {
   (void)proc;
@@ -555,6 +588,10 @@ static i64 sys_open(u64 path_ptr, u64 flags, u64 mode, u64 a4, u64 a5, u64 a6) {
 
   if (flags & 0x0400 || (flags & 0x0200 && (flags & 1 || flags & 2))) {
     if (vp->v_op && __builtin_strcmp(vp->v_op->vop_name, "fat32_file") == 0) {
+      // real truncate: free the cluster chain and update the on-disk entry
+      extern chimera_error_t fat32_resize_node(void *node_data, u64 new_size);
+      fat32_resize_node(vp->v_data, 0);
+    } else if (vp->v_data) {
       typedef struct {
         u32 start_cluster;
         u32 file_size;
@@ -729,7 +766,7 @@ static i64 sys_pipe(u64 pipefd_ptr, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
 }
 
 /* ── sys_spawn ───────────────────────────────────────────────────────────── *
- * Creates and runs a new process from an ELF binary on the VFS.
+ * Creates and runs a Mach-O binary from the VFS.
  * The child inherits specified stdin/stdout vnodes.
  *
  * Signature: sys_spawn(path, argv, envp, stdin_vpath, stdout_vpath) → pid
@@ -737,10 +774,8 @@ static i64 sys_pipe(u64 pipefd_ptr, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
  *   stdout_vpath — path to slave PTY ("/dev/pts/0") for child stdout (fd 1)
  * ───────────────────────────────────────────────────────────────────────────
  */
-extern void elf_load(void *module_ptr, struct chimera_task *out_task,
-                     uintptr_t *entry_point, uintptr_t *user_stack);
-extern void scheduler_add_thread(chimera_thread_t *th);
-extern void thread_init_stack(chimera_thread_t *th, void *entry, void *stack);
+extern int scheduler_add_thread(chimera_thread_t *th);
+extern int thread_init_stack(chimera_thread_t *th, void *entry, void *stack);
 extern chimera_proc_t *proc_launchd;
 
 static i64 sys_spawn(u64 path_ptr, u64 argv_ptr, u64 envp_ptr,
@@ -771,25 +806,25 @@ static i64 sys_spawn(u64 path_ptr, u64 argv_ptr, u64 envp_ptr,
     dprintf("[sys_spawn] spawning '%s' (no stdio)\n", path);
   }
 
-  // 1. look up elf binary in vfs
-  vnode_t *elf_vp = nullptr;
-  if (vfs_lookup(path, &elf_vp) != CHIMERA_SUCCESS || !elf_vp) {
-    kprintf("[sys_spawn] ELF not found: %s\n", path);
+  // 1. look up Mach-O image in VFS
+  vnode_t *image_vp = nullptr;
+  if (vfs_lookup(path, &image_vp) != CHIMERA_SUCCESS || !image_vp) {
+    kprintf("[sys_spawn] Mach-O image not found: %s\n", path);
     return -1;
   }
 
-  static u8 s_elf_buf[512 * 1024];
+  static u8 s_image_buf[512 * 1024];
   struct uio uio;
-  uio.uio_buf = s_elf_buf;
-  uio.uio_resid = sizeof(s_elf_buf);
+  uio.uio_buf = s_image_buf;
+  uio.uio_resid = sizeof(s_image_buf);
   uio.uio_offset = 0;
-  if (!elf_vp->v_op || !elf_vp->v_op->vop_read) {
-    kprintf("[sys_spawn] ELF vnode has no vop_read, trying direct address\n");
+  if (!image_vp->v_op || !image_vp->v_op->vop_read) {
+    kprintf("[sys_spawn] Mach-O vnode has no vop_read, trying direct address\n");
   } else {
-    elf_vp->v_op->vop_read(elf_vp, &uio, 0, nullptr);
+    image_vp->v_op->vop_read(image_vp, &uio, 0, nullptr);
   }
 
-  void *elf_ptr = elf_vp->v_data ? elf_vp->v_data : (void *)s_elf_buf;
+  void *image_ptr = image_vp->v_data ? image_vp->v_data : (void *)s_image_buf;
 
   // 2. create child process
   chimera_proc_t *parent = proc_launchd ? proc_launchd : proc_kernel;
@@ -829,17 +864,17 @@ static i64 sys_spawn(u64 path_ptr, u64 argv_ptr, u64 envp_ptr,
 
   // 4. load mach-o into child address space
   uintptr_t entry = 0, user_stack = 0;
-  int load_rc = mach_load(elf_ptr, ctask, &entry, &user_stack);
+  int load_rc = mach_load(image_ptr, ctask, &entry, &user_stack);
   if (load_rc != 0 || entry == 0) {
     kprintf("[sys_spawn] Mach-O load failed (%d)\n", load_rc);
     return -1;
   }
 
   // 5. create and schedule child thread
-  static chimera_thread_t s_spawn_threads[64];
+  static chimera_thread_t s_spawn_threads[256];
   chimera_thread_t *th = nullptr;
 
-  for (u32 i = 0; i < 64; i++) {
+  for (u32 i = 0; i < 256; i++) {
     if (s_spawn_threads[i].th_signature != CHIMERA_THREAD_MAGIC ||
         s_spawn_threads[i].th_state == THREAD_STATE_HALTED) {
       th = &s_spawn_threads[i];
@@ -849,10 +884,19 @@ static i64 sys_spawn(u64 path_ptr, u64 argv_ptr, u64 envp_ptr,
 
   if (!th) {
     kprintf("[sys_spawn] ERROR: spawn thread pool exhausted\n");
+    proc_mark_exited(child, 255);
     return -1;
   }
 
+  // keep the slot's existing kernel stack so respawn doesn't leak 16 KiB
+  void *kstack_base = th->th_stack_base;
+  void *kstack = th->th_kernel_stack;
+  usize kstack_sz = th->th_stack_size;
   __builtin_memset(th, 0, sizeof(chimera_thread_t));
+  th->th_stack_base = kstack_base;
+  th->th_kernel_stack = kstack;
+  th->th_stack_size = kstack_sz;
+
   th->th_signature = CHIMERA_THREAD_MAGIC;
   th->th_task = ctask;
   th->th_state = THREAD_STATE_READY;
@@ -860,8 +904,19 @@ static i64 sys_spawn(u64 path_ptr, u64 argv_ptr, u64 envp_ptr,
   th->th_context = (void *)entry;
   ctask->ta_threads = th;
 
-  thread_init_stack(th, (void *)entry, (void *)user_stack);
-  scheduler_add_thread(th);
+  if (thread_init_stack(th, (void *)entry, (void *)user_stack) != 0) {
+    th->th_signature = 0;
+    th->th_state = THREAD_STATE_HALTED;
+    proc_mark_exited(child, 255);
+    return -1; // -EAGAIN: no memory for a kernel stack
+  }
+
+  if (scheduler_add_thread(th) != 0) {
+    th->th_signature = 0;
+    th->th_state = THREAD_STATE_HALTED;
+    proc_mark_exited(child, 255);
+    return -1; // -EAGAIN: scheduler refused (OOM)
+  }
 
   dprintf("[sys_spawn] spawned '%s' pid=%u entry=0x%llx\n", path, child->p_pid,
           (unsigned long long)entry);
@@ -931,12 +986,12 @@ static i64 sys_fork(u64 a1, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
   uptr child_rip = frame->rip;
   uptr child_rsp = frame->rsp; // user RSP from syscall frame
 
-  static chimera_thread_t s_fork_threads[64];
+  static chimera_thread_t s_fork_threads[256];
   static spinlock_t s_fork_threads_lock = SPINLOCK_INIT;
   chimera_thread_t *th = nullptr;
 
   irq_flags_t f_irq = spinlock_lock_irqsave(&s_fork_threads_lock);
-  for (u32 i = 0; i < 64; i++) {
+  for (u32 i = 0; i < 256; i++) {
     if (s_fork_threads[i].th_signature != CHIMERA_THREAD_MAGIC ||
         (s_fork_threads[i].th_state == THREAD_STATE_HALTED &&
          s_fork_threads[i].th_running_cpu == 0xFFFFFFFF)) {
@@ -949,6 +1004,7 @@ static i64 sys_fork(u64 a1, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
 
   if (!th) {
     kprintf("[sys_fork] ERROR: fork thread pool exhausted\n");
+    proc_mark_exited(child, 255);
     return -1;
   }
 
@@ -971,12 +1027,22 @@ static i64 sys_fork(u64 a1, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
   th->th_user_frame = (void *)th->th_fork_frame;
 
   child->p_task->ta_threads = th;
-  thread_init_fork_stack(th, (void *)child_rip, (void *)child_rsp);
+  if (thread_init_fork_stack(th, (void *)child_rip, (void *)child_rsp) != 0) {
+    th->th_signature = 0;
+    th->th_state = THREAD_STATE_HALTED;
+    proc_mark_exited(child, 255);
+    return -1; // -EAGAIN: no memory for a kernel stack
+  }
 
   th->th_fork_return_value = 0;
   th->th_is_fork_child = 1;
 
-  scheduler_add_thread(th);
+  if (scheduler_add_thread(th) != 0) {
+    th->th_signature = 0;
+    th->th_state = THREAD_STATE_HALTED;
+    proc_mark_exited(child, 255);
+    return -1; // -EAGAIN: scheduler refused (OOM)
+  }
 
   return child->p_pid;
 }
@@ -1042,18 +1108,18 @@ static i64 sys_execve(u64 path_ptr, u64 argv_ptr, u64 envp_ptr, u64 a4, u64 a5,
   }
   kenvp[envc] = nullptr;
 
-  vnode_t *elf_vp = nullptr;
+  vnode_t *image_vp = nullptr;
   const char *npath = normalize_path(path);
-  if (vfs_lookup(npath, &elf_vp) != CHIMERA_SUCCESS || !elf_vp) {
+  if (vfs_lookup(npath, &image_vp) != CHIMERA_SUCCESS || !image_vp) {
     return -2; // -ENOENT
   }
 
-  void *elf_ptr = elf_vp->v_data;
+  void *image_ptr = image_vp->v_data;
   chimera_paddr_t temp_phys = (chimera_paddr_t)-1;
   usize temp_pages = 0;
 
-  if (elf_vp->v_op &&
-      __builtin_strcmp(elf_vp->v_op->vop_name, "fat32_file") == 0) {
+  if (image_vp->v_op &&
+      __builtin_strcmp(image_vp->v_op->vop_name, "fat32_file") == 0) {
     typedef struct {
       u32 start_cluster;
       u32 file_size;
@@ -1061,7 +1127,7 @@ static i64 sys_execve(u64 path_ptr, u64 argv_ptr, u64 envp_ptr, u64 a4, u64 a5,
       char path[256];
     } fat32_node_info_t;
 
-    fat32_node_info_t *nd = (fat32_node_info_t *)elf_vp->v_data;
+    fat32_node_info_t *nd = (fat32_node_info_t *)image_vp->v_data;
     if (!nd || nd->file_size == 0) {
       kprintf("[sys_execve] ERROR: empty FAT32 file\n");
       return -1;
@@ -1071,28 +1137,28 @@ static i64 sys_execve(u64 path_ptr, u64 argv_ptr, u64 envp_ptr, u64 a4, u64 a5,
     temp_pages = (nd->file_size + 4095) / 4096;
     temp_phys = pmm_alloc_pages(temp_pages);
     if (temp_phys == (chimera_paddr_t)-1) {
-      kprintf("[sys_execve] ERROR: failed to alloc %zu pages for ELF\n",
+      kprintf("[sys_execve] ERROR: failed to alloc %zu pages for Mach-O\n",
               temp_pages);
       return -1;
     }
     extern u64 g_hhdm_base;
-    elf_ptr = (void *)(temp_phys + g_hhdm_base);
+    image_ptr = (void *)(temp_phys + g_hhdm_base);
     u32 actual_read = 0;
     extern chimera_error_t fat32_read_file(u32 start_cluster, u32 file_size,
                                            u32 offset, void *dst, u32 len,
                                            u32 *bytes_read);
     chimera_error_t err = fat32_read_file(nd->start_cluster, nd->file_size, 0,
-                                          elf_ptr, nd->file_size, &actual_read);
+                                          image_ptr, nd->file_size, &actual_read);
     if (err != CHIMERA_SUCCESS || actual_read == 0) {
-      kprintf("[sys_execve] ERROR: failed to read ELF from disk (err=%d)\n",
+      kprintf("[sys_execve] ERROR: failed to read Mach-O from disk (err=%d)\n",
               err);
       pmm_free_contiguous(temp_phys, temp_pages);
       return -1;
     }
   }
 
-  if (!elf_ptr) {
-    kprintf("[sys_execve] ERROR: elf_ptr is NULL\n");
+  if (!image_ptr) {
+    kprintf("[sys_execve] ERROR: image_ptr is NULL\n");
     return -1;
   }
 
@@ -1120,6 +1186,15 @@ static i64 sys_execve(u64 path_ptr, u64 argv_ptr, u64 envp_ptr, u64 a4, u64 a5,
 
   u64 old_pml4 = (u64)task->ta_vm_map;
   u64 new_pml4 = pmm_alloc_page();
+  // OOM must fail the exec, not zero physical page 0 and load cr3=0
+  if (new_pml4 == 0 || new_pml4 == (chimera_paddr_t)-1) {
+    if (temp_pages > 0) {
+      extern void pmm_free_contiguous(chimera_paddr_t base, usize count);
+      pmm_free_contiguous(temp_phys, temp_pages);
+    }
+    kprintf("[sys_execve] ERROR: out of memory for new PML4\n");
+    return -12; // -ENOMEM
+  }
   __builtin_memset(get_table_ptr_exec(new_pml4), 0, 4096);
 
   // copy kernel mappings
@@ -1140,7 +1215,7 @@ static i64 sys_execve(u64 path_ptr, u64 argv_ptr, u64 envp_ptr, u64 a4, u64 a5,
 
   uptr entry = 0, user_stack = 0;
   int load_rc =
-      mach_load_args(elf_ptr, task, &entry, &user_stack, path, kargv, kenvp);
+      mach_load_args(image_ptr, task, &entry, &user_stack, path, kargv, kenvp);
 
   if (temp_pages > 0) {
     extern void pmm_free_contiguous(chimera_paddr_t base, usize count);
@@ -1160,10 +1235,153 @@ static i64 sys_execve(u64 path_ptr, u64 argv_ptr, u64 envp_ptr, u64 a4, u64 a5,
 }
 
 extern u64 g_fb_phys_addr;
-extern u64 pmap_map_user_page(u64 pml4, u64 vaddr, u64 paddr, u32 flags);
+extern u64 pmap_map_user_page(u64 pml4, u64 vaddr, u64 paddr, u64 flags);
+extern void pmap_unmap_user_range_ex(u64 pml4_phys, u64 vaddr, usize len,
+                                     bool release_pages);
+extern void *kalloc(usize size);
+extern void kfree(void *ptr);
+extern u64 timer_get_uptime_ms(void);
+extern void pmm_retain_page(chimera_paddr_t addr);
+extern void pmm_release_page(chimera_paddr_t addr);
 
 #define PAGE_WRITE (1ULL << 1)
 #define PAGE_USER (1ULL << 2)
+
+// ── shared-page ownership (shm entries / window surfaces / framebuffer) ────
+// The tables below share physical pages between processes. Each table page
+// carries one PMM reference owned by the table; every mapping adds its own
+// reference (pmm_retain_page at mmap time, dropped by the munmap PTE sweep).
+// Without that split, sys_munmap freed pages other processes still had
+// mapped — a cross-process use-after-free. chimera_mmap_record_t in the task
+// tracks live mappings so pages are reclaimed when the last mapper leaves.
+typedef struct {
+  vnode_t *vp;
+  u32 page_count;
+  u32 map_count; // live mappings backed by this entry
+  chimera_paddr_t pages[2048];
+} chimera_shm_entry_t;
+
+static chimera_shm_entry_t s_shm_entries[64];
+static spinlock_t s_shm_lock = SPINLOCK_INIT;
+static u64 s_surface_phys[64][2000];
+static u32 s_surface_refs[64]; // live mappings per window
+
+static void mmap_shm_release(u32 idx) {
+  if (idx >= 64) return;
+  irq_flags_t f = spinlock_lock_irqsave(&s_shm_lock);
+  chimera_shm_entry_t *e = &s_shm_entries[idx];
+  if (e->map_count > 0) e->map_count--;
+  if (e->map_count == 0) {
+    for (u32 i = 0; i < 2048; i++) {
+      if (e->pages[i] && e->pages[i] != (chimera_paddr_t)-1)
+        pmm_release_page(e->pages[i]); // drop the table's own reference
+      e->pages[i] = 0;
+    }
+    e->vp = nullptr;
+    e->page_count = 0;
+  }
+  spinlock_unlock_irqrestore(&s_shm_lock, f);
+}
+
+static void mmap_surface_release(u32 wid) {
+  if (wid >= 64) return;
+  if (s_surface_refs[wid] > 0) s_surface_refs[wid]--;
+  if (s_surface_refs[wid] == 0) {
+    for (u32 i = 0; i < 2000; i++) {
+      if (s_surface_phys[wid][i] && s_surface_phys[wid][i] != (u64)-1)
+        pmm_release_page(s_surface_phys[wid][i]);
+      s_surface_phys[wid][i] = 0;
+    }
+  }
+}
+
+static void mmap_record_add(chimera_task_t *task, u64 start, u64 len, u16 kind,
+                            u16 index) {
+  if (!task || len == 0) return;
+  chimera_mmap_record_t *rec = (chimera_mmap_record_t *)kalloc(sizeof(*rec));
+  if (!rec) return; // reclamation degrades to a bounded leak, never a UAF
+  rec->start = start & ~0xFFFULL;
+  rec->len = (len + 0xFFF) & ~0xFFFULL;
+  rec->kind = kind;
+  rec->index = index;
+  irq_flags_t f = spinlock_lock_irqsave(&task->ta_lock);
+  rec->next = task->ta_mmap_records;
+  task->ta_mmap_records = rec;
+  spinlock_unlock_irqrestore(&task->ta_lock, f);
+}
+
+// munmap of [addr, addr+len): sweep this task's records first (fb pages with
+// release=false — they are not PMM-owned), reclaim shared pages whose last
+// mapping is gone, then blanket-sweep the rest with release=true.
+static void mmap_shared_unmap(chimera_task_t *task, u64 addr, u64 len) {
+  u64 pml4 = (u64)task->ta_vm_map;
+  u64 start = addr & ~0xFFFULL;
+  u64 end = (addr + len + 0xFFFULL) & ~0xFFFULL;
+
+  irq_flags_t f = spinlock_lock_irqsave(&task->ta_lock);
+  chimera_mmap_record_t **pp = &task->ta_mmap_records;
+  while (*pp) {
+    chimera_mmap_record_t *rec = *pp;
+    u64 rstart = rec->start;
+    u64 rend = rec->start + rec->len;
+    u64 ostart = (rstart > start) ? rstart : start;
+    u64 oend = (rend < end) ? rend : end;
+
+    if (ostart < oend) {
+      pmap_unmap_user_range_ex(pml4, ostart, oend - ostart,
+                               rec->kind != CHIMERA_MMAP_KIND_FB);
+      if (ostart == rstart && oend == rend) {
+        *pp = rec->next;
+        if (rec->kind == CHIMERA_MMAP_KIND_SHM)
+          mmap_shm_release(rec->index);
+        else if (rec->kind == CHIMERA_MMAP_KIND_SURFACE)
+          mmap_surface_release(rec->index);
+        spinlock_unlock_irqrestore(&task->ta_lock, f);
+        kfree(rec);
+        f = spinlock_lock_irqsave(&task->ta_lock);
+        continue; // *pp was updated
+      }
+      // partial unmap: shrink the record from the unmapped side
+      if (ostart == rstart) {
+        rec->start = oend;
+        rec->len = rend - oend;
+      } else {
+        rec->len = ostart - rstart;
+      }
+    }
+    pp = &rec->next;
+  }
+  spinlock_unlock_irqrestore(&task->ta_lock, f);
+
+  // anon pages, stack-window pages and any stale PTEs
+  pmap_unmap_user_range_ex(pml4, start, end - start, true);
+}
+
+// process teardown: drop every mapping record of the task. FB PTEs must be
+// cleared with release=false before pmap_destroy_user_space's blanket sweep
+// runs, otherwise device pages would be handed to the buddy allocator.
+void mmap_records_destroy(chimera_task_t *task) {
+  if (!task) return;
+  irq_flags_t f = spinlock_lock_irqsave(&task->ta_lock);
+  chimera_mmap_record_t *rec = task->ta_mmap_records;
+  task->ta_mmap_records = nullptr;
+  spinlock_unlock_irqrestore(&task->ta_lock, f);
+
+  while (rec) {
+    chimera_mmap_record_t *next = rec->next;
+    if (rec->kind == CHIMERA_MMAP_KIND_FB) {
+      if (task->ta_vm_map)
+        pmap_unmap_user_range_ex((u64)task->ta_vm_map, rec->start, rec->len,
+                                 false);
+    } else if (rec->kind == CHIMERA_MMAP_KIND_SHM) {
+      mmap_shm_release(rec->index);
+    } else if (rec->kind == CHIMERA_MMAP_KIND_SURFACE) {
+      mmap_surface_release(rec->index);
+    }
+    kfree(rec);
+    rec = next;
+  }
+}
 
 static i64 sys_mmap(u64 addr, u64 len, u64 prot, u64 flags, u64 fd,
                     u64 offset) {
@@ -1237,44 +1455,56 @@ static i64 sys_mmap(u64 addr, u64 len, u64 prot, u64 flags, u64 fd,
     pg_flags |= 0;
 
   extern chimera_paddr_t pmm_alloc_page(void);
+  extern void pmm_retain_page(chimera_paddr_t addr);
   extern u64 g_hhdm_base;
 
-  typedef struct {
-    vnode_t *vp;
-    u32 page_count;
-    chimera_paddr_t pages[2048];
-  } chimera_shm_entry_t;
-  static chimera_shm_entry_t s_shm_entries[64];
-  static spinlock_t s_shm_lock = {0};
-
-  chimera_shm_entry_t *shm = nullptr;
+  int shm_idx = -1;
   if (file_vp && !is_fb) {
     irq_flags_t sf = spinlock_lock_irqsave(&s_shm_lock);
     for (int i = 0; i < 64; i++) {
       if (s_shm_entries[i].vp == file_vp) {
-        shm = &s_shm_entries[i];
+        shm_idx = i;
         break;
       }
     }
-    if (!shm) {
+    if (shm_idx < 0) {
       for (int i = 0; i < 64; i++) {
         if (s_shm_entries[i].vp == nullptr) {
-          shm = &s_shm_entries[i];
-          shm->vp = file_vp;
-          shm->page_count = 0;
-          __builtin_memset(shm->pages, 0, sizeof(shm->pages));
+          shm_idx = i;
+          s_shm_entries[i].vp = file_vp;
+          s_shm_entries[i].page_count = 0;
+          s_shm_entries[i].map_count = 0;
+          __builtin_memset(s_shm_entries[i].pages, 0,
+                           sizeof(s_shm_entries[i].pages));
           break;
         }
       }
     }
     spinlock_unlock_irqrestore(&s_shm_lock, sf);
   }
-
-  static u64 s_surface_phys[64][2000];
+  chimera_shm_entry_t *shm = (shm_idx >= 0) ? &s_shm_entries[shm_idx] : nullptr;
 
   if (is_fb) {
     extern void console_fb_set_active(bool active);
     console_fb_set_active(false);
+  }
+
+  // track the mapping before committing pages: a mid-loop allocation failure
+  // then still leaves a record behind, so munmap/exit can reclaim everything
+  // that was actually mapped (and drop the map counts)
+  if (is_fb) {
+    mmap_record_add(task, vaddr, len, CHIMERA_MMAP_KIND_FB, 0);
+  } else if (shm) {
+    irq_flags_t sf = spinlock_lock_irqsave(&s_shm_lock);
+    shm->map_count++;
+    spinlock_unlock_irqrestore(&s_shm_lock, sf);
+    mmap_record_add(task, vaddr, len, CHIMERA_MMAP_KIND_SHM, (u16)shm_idx);
+  } else if (vaddr >= 0xA0000000ULL && vaddr < 0xB0000000ULL) {
+    u64 wid = (vaddr - 0xA0000000ULL) / 0x800000ULL;
+    if (wid < 64) {
+      s_surface_refs[wid]++;
+      mmap_record_add(task, vaddr, len, CHIMERA_MMAP_KIND_SURFACE, (u16)wid);
+    }
   }
 
   for (u64 off = 0; off < len; off += 4096) {
@@ -1289,10 +1519,20 @@ static i64 sys_mmap(u64 addr, u64 len, u64 prot, u64 flags, u64 fd,
       if (page_idx < 2048) {
         if (shm->pages[page_idx] == 0) {
           shm->pages[page_idx] = pmm_alloc_page();
-          if (g_hhdm_base && shm->pages[page_idx] != (u64)-1) {
+          if (shm->pages[page_idx] == 0 || shm->pages[page_idx] == (chimera_paddr_t)-1) {
+            shm->pages[page_idx] = 0;
+            kprintf("[mmap] ERROR: shm page allocation failed at offset %llu\n",
+                    (unsigned long long)off);
+            return -1;
+          }
+          if (g_hhdm_base) {
             __builtin_memset((void *)(g_hhdm_base + shm->pages[page_idx]), 0,
                              4096);
           }
+          // the table holds this page's first reference
+        } else {
+          // an existing shared page: take this mapping's own reference
+          pmm_retain_page(shm->pages[page_idx]);
         }
         paddr = shm->pages[page_idx];
         mapped_special = true;
@@ -1304,10 +1544,19 @@ static i64 sys_mmap(u64 addr, u64 len, u64 prot, u64 flags, u64 fd,
       if (wid < 64 && page_idx < 2000) {
         if (s_surface_phys[wid][page_idx] == 0) {
           s_surface_phys[wid][page_idx] = pmm_alloc_page();
-          if (g_hhdm_base && s_surface_phys[wid][page_idx] != (u64)-1) {
+          if (s_surface_phys[wid][page_idx] == 0 ||
+              s_surface_phys[wid][page_idx] == (u64)-1) {
+            s_surface_phys[wid][page_idx] = 0;
+            kprintf("[mmap] ERROR: surface page allocation failed at offset %llu\n",
+                    (unsigned long long)off);
+            return -1;
+          }
+          if (g_hhdm_base) {
             __builtin_memset(
                 (void *)(g_hhdm_base + s_surface_phys[wid][page_idx]), 0, 4096);
           }
+        } else {
+          pmm_retain_page(s_surface_phys[wid][page_idx]);
         }
         paddr = s_surface_phys[wid][page_idx];
         mapped_special = true;
@@ -1354,8 +1603,7 @@ static i64 sys_munmap(u64 addr, u64 len, u64 a3, u64 a4, u64 a5, u64 a6) {
   if (!task || !task->ta_vm_map)
     return -1;
 
-  extern void pmap_unmap_user_range(u64 pml4_phys, u64 vaddr, usize len);
-  pmap_unmap_user_range((u64)task->ta_vm_map, addr, (usize)len);
+  mmap_shared_unmap(task, addr, (usize)len);
   return 0;
 }
 
@@ -1560,11 +1808,13 @@ static i64 sys_mach_lookup_service(u64 name_ptr, u64 name_out_ptr, u64 a3,
   if (!port)
     return -1;
 
-  // we need to insert a send right for this port into the caller's space
+  // insert a send right for this port into the caller's space
   mach_port_name_t name;
-  // simplified for Stage 5: allocate a name and give it a send right
   name = space_alloc_name(task->ta_ipc_space);
-  ipc_entry_t *entry = &task->ta_ipc_space->is_table[name];
+  if (name == MACH_PORT_NAME_NULL)
+    return -1; // space table full
+  ipc_entry_t *entry =
+      &task->ta_ipc_space->is_table[ipc_name_index(name)];
   entry->ie_object = port;
   entry->ie_bits = MACH_PORT_TYPE_SEND;
   entry->ie_urefs = 1;
@@ -1871,6 +2121,12 @@ static i64 sys_wait4(u64 pid_u, u64 status_ptr, u64 options, u64 rusage, u64 a5,
       extern void proc_reap(chimera_proc_t * proc);
       proc_reap(child);
 
+      // The reaped child's exit notification is consumed by this wait:
+      // drop one pending SIGCHLD so a handler delivery cannot race the
+      // caller's own harvest (BSD-style counting semantics). Signal-based
+      // harvesting still works for children reaped by the handler itself.
+      proc->p_sigpending &= ~(1U << 20);
+
       if (status_ptr)
         copyout(&status, (void *)status_ptr, sizeof(status));
       if (rusage) {
@@ -1888,13 +2144,17 @@ static i64 sys_wait4(u64 pid_u, u64 status_ptr, u64 options, u64 rusage, u64 a5,
       return 0;
     }
 
-    /* Re-check if we still have children before yielding.
+    /* Re-check if we still have children before sleeping.
      * A child might have exited and been reaped by another thread. */
     if (!proc_has_children(proc)) {
       return -10; // ECHILD
     }
 
-    scheduler_yield();
+    // sleep instead of spinning; proc_mark_exited sends SIGCHLD which
+    // thread_wake()s this sleeper immediately, so exit latency is not
+    // tied to the 200 ms re-check bound
+    extern void thread_sleep_until(u64 deadline_ms);
+    thread_sleep_until(timer_get_uptime_ms() + 200);
   }
 }
 
@@ -1935,17 +2195,27 @@ static i64 sys_nanosleep(u64 req_ptr, u64 rem_ptr, u64 a3, u64 a4, u64 a5,
     return -22; // EINVAL
   }
 
+  chimera_task_t *task = current_task();
+  chimera_proc_t *proc = task ? task->ta_proc : nullptr;
+
   extern u64 timer_get_uptime_ms(void);
-  extern void scheduler_yield(void);
+  extern void thread_sleep_until(u64 deadline_ms);
 
   u64 target_ms = (u64)ts.tv_sec * 1000 + (u64)ts.tv_nsec / 1000000ULL;
   if (target_ms == 0 && (ts.tv_sec > 0 || ts.tv_nsec > 0)) {
     target_ms = 1;
   }
 
-  u64 start_ms = timer_get_uptime_ms();
-  while ((timer_get_uptime_ms() - start_ms) < target_ms) {
-    scheduler_yield();
+  // sleep on the kernel timer list instead of burning scheduler quanta;
+  // woken early by signals (POSIX EINTR) or by the PIT once the deadline
+  // has passed
+  u64 target = timer_get_uptime_ms() + target_ms;
+  for (;;) {
+    if (proc && (proc->p_sigpending & ~proc->p_sigmask))
+      return -4; // EINTR
+    if ((i64)(target - timer_get_uptime_ms()) <= 0)
+      break;
+    thread_sleep_until(target);
   }
 
   return 0;
@@ -2030,7 +2300,7 @@ typedef struct {
   char name[32];
 } chimera_procinfo_t;
 
-#define PROC_POOL_SIZE 64
+#define PROC_POOL_SIZE 256
 extern chimera_proc_t *proc_kernel;
 
 static i64 sys_proclist(u64 buf_ptr, u64 max_count, u64 a3, u64 a4, u64 a5,
@@ -2340,10 +2610,14 @@ static i64 sys_listen(u64 fd_u, u64 backlog, u64 a3, u64 a4, u64 a5, u64 a6) {
   return (err == CHIMERA_SUCCESS) ? 0 : -1;
 }
 
+/* ── sys_accept ───────────────────────────────────────────────────────────── *
+ * Pops an established connection from the listening socket's accept queue
+ * and installs it as a new file descriptor. Blocks (20 ms timer sleeps,
+ * RX polled each iteration) until a connection arrives; O_NONBLOCK callers
+ * get -EWOULDBLOCK. Optional peer address is copied out on success.
+ * ─────────────────────────────────────────────────────────────────────────── */
 static i64 sys_accept(u64 fd_u, u64 addr_out, u64 addrlen_out, u64 a4, u64 a5,
                       u64 a6) {
-  (void)addr_out;
-  (void)addrlen_out;
   (void)a4;
   (void)a5;
   (void)a6;
@@ -2354,9 +2628,59 @@ static i64 sys_accept(u64 fd_u, u64 addr_out, u64 addrlen_out, u64 a4, u64 a5,
 
   chimera_fileproc_t *fp = proc_fd_lookup(proc, (int)fd_u);
   if (!fp)
-    return -1;
+    return -9; // EBADF
+  if (fp->fp_type != DTYPE_SOCKET || !fp->fp_socket) {
+    fp_release(fp);
+    return -88; // ENOTSOCK
+  }
+
+  bool nonblock = (fp->fp_flags & FP_NONBLOCK) != 0;
+  socket_t *listen_so = fp->fp_socket;
   fp_release(fp);
-  return -1; // enotsup
+
+  extern void e1000_poll_rx(void);
+  extern void thread_sleep_until(u64 deadline_ms);
+  extern u64 timer_get_uptime_ms(void);
+  extern chimera_error_t soaccept(socket_t * so, struct sockaddr **nam,
+                                  socket_t **new_so);
+  extern void tcp_fill_peer(socket_t *so, struct sockaddr_in *sin);
+
+  for (;;) {
+    e1000_poll_rx(); // no NIC interrupts yet: pump the receive ring
+
+    socket_t *conn = nullptr;
+    if (soaccept(listen_so, nullptr, &conn) == CHIMERA_SUCCESS && conn) {
+      chimera_fileproc_t *cfp =
+          fp_alloc_socket(conn, FP_READABLE | FP_WRITABLE);
+      if (!cfp) {
+        extern void so_free(socket_t * so);
+        soclose(conn);
+        return -24; // EMFILE
+      }
+      int nfd = proc_fd_install(proc, cfp);
+      fp_release(cfp);
+      if (nfd < 0) {
+        soclose(conn);
+        return -24; // EMFILE
+      }
+
+      // optional peer address
+      if (addr_out) {
+        struct sockaddr_in sin;
+        tcp_fill_peer(conn, &sin);
+        u32 len = sizeof(sin);
+        if (addrlen_out)
+          copyout(&len, (void *)addrlen_out, sizeof(len));
+        copyout(&sin, (void *)addr_out, sizeof(sin));
+      }
+      return (i64)nfd;
+    }
+
+    if (nonblock)
+      return -35; // EWOULDBLOCK
+
+    thread_sleep_until(timer_get_uptime_ms() + 20);
+  }
 }
 
 static i64 sys_sendto(u64 fd_u, u64 buf_ptr, u64 len, u64 flags_u, u64 dest_ptr,
@@ -2375,11 +2699,6 @@ static i64 sys_sendto(u64 fd_u, u64 buf_ptr, u64 len, u64 flags_u, u64 dest_ptr,
   }
 
   char kbuf[1500];
-  usize clen = (len > sizeof(kbuf)) ? sizeof(kbuf) : len;
-  if (copyin((const void *)buf_ptr, kbuf, clen) != CHIMERA_SUCCESS) {
-    fp_release(fp);
-    return -1;
-  }
 
   struct sockaddr_in sin;
   struct sockaddr *saddr_ptr = nullptr;
@@ -2389,10 +2708,47 @@ static i64 sys_sendto(u64 fd_u, u64 buf_ptr, u64 len, u64 flags_u, u64 dest_ptr,
     }
   }
 
+  if (fp->fp_socket->so_type == SOCK_STREAM) {
+    // stream payloads larger than one kernel buffer were silently
+    // truncated; feed them MTU-sized chunks instead
+    usize sent = 0;
+    while (sent < len) {
+      usize chunk = len - sent;
+      if (chunk > sizeof(kbuf))
+        chunk = sizeof(kbuf);
+      if (copyin((const void *)(buf_ptr + sent), kbuf, chunk) !=
+          CHIMERA_SUCCESS) {
+        fp_release(fp);
+        return (sent > 0) ? (i64)sent : -14;
+      }
+      chimera_error_t serr =
+          sosend(fp->fp_socket, saddr_ptr, kbuf, chunk, (int)flags_u);
+      if (serr != CHIMERA_SUCCESS) {
+        fp_release(fp);
+        return (sent > 0) ? (i64)sent : -1;
+      }
+      sent += chunk;
+    }
+    fp_release(fp);
+    return (i64)sent;
+  }
+
+  // datagrams: there is no IP fragmentation, so an oversized datagram must
+  // be an error rather than a silent 1500-byte truncation
+  if (len > 1472) {
+    fp_release(fp);
+    return -90; // EMSGSIZE
+  }
+
+  if (copyin((const void *)buf_ptr, kbuf, (usize)len) != CHIMERA_SUCCESS) {
+    fp_release(fp);
+    return -1;
+  }
+
   chimera_error_t err =
-      sosend(fp->fp_socket, saddr_ptr, kbuf, clen, (int)flags_u);
+      sosend(fp->fp_socket, saddr_ptr, kbuf, (usize)len, (int)flags_u);
   fp_release(fp);
-  return (err == CHIMERA_SUCCESS) ? (i64)clen : -1;
+  return (err == CHIMERA_SUCCESS) ? (i64)len : -1;
 }
 
 static i64 sys_recvfrom(u64 fd_u, u64 buf_ptr, u64 len, u64 flags_u,
@@ -2413,6 +2769,41 @@ static i64 sys_recvfrom(u64 fd_u, u64 buf_ptr, u64 len, u64 flags_u,
   }
 
   char kbuf[1500];
+
+  if (fp->fp_socket->so_type == SOCK_STREAM) {
+    // a stream read larger than one kernel buffer no longer truncates:
+    // drain the receive buffer chunk by chunk straight into user memory
+    usize got = 0;
+    while (got < len) {
+      usize want = len - got;
+      if (want > sizeof(kbuf))
+        want = sizeof(kbuf);
+      usize bytes_read = 0;
+      chimera_error_t rerr = soreceive(fp->fp_socket, nullptr, kbuf, want,
+                                       &bytes_read, (int)flags_u);
+      if (rerr != CHIMERA_SUCCESS) {
+        if (got > 0)
+          break;
+        fp_release(fp);
+        return -1; // WOULDBLOCK with nothing read
+      }
+      if (bytes_read > 0) {
+        if (copyout(kbuf, (void *)(buf_ptr + got), bytes_read) !=
+            CHIMERA_SUCCESS) {
+          fp_release(fp);
+          return (got > 0) ? (i64)got : -14;
+        }
+        got += bytes_read;
+      }
+      if (bytes_read < want || got >= len)
+        break; // buffer drained or request satisfied
+    }
+    fp_release(fp);
+    return (i64)got;
+  }
+
+  // datagram: one-shot read; a datagram larger than the caller's buffer is
+  // truncated by the caller's len, larger than MTU never arrives (see sendto)
   usize clen = (len > sizeof(kbuf)) ? sizeof(kbuf) : len;
   usize bytes_read = 0;
   chimera_error_t err =
@@ -2644,25 +3035,31 @@ static i64 sys_readv(u64 fd_u, u64 iov_ptr, u64 iovcnt_u, u64 a4, u64 a5,
   if (!iov_ptr || iovcnt_u == 0 || iovcnt_u > 1024)
     return -22; // EINVAL
 
+  // copyin in batches of 16 so every iovec the caller passes is honored
   struct chimera_iovec iov[16];
-  usize cnt = (iovcnt_u > 16) ? 16 : (usize)iovcnt_u;
-  if (copyin((const void *)iov_ptr, iov, cnt * sizeof(struct chimera_iovec)) !=
-      CHIMERA_SUCCESS)
-    return -14;
-
   i64 total = 0;
-  for (usize i = 0; i < cnt; i++) {
-    if (iov[i].iov_len == 0)
-      continue;
-    i64 ret = sys_read(fd_u, iov[i].iov_base, iov[i].iov_len, 0, 0, 0);
-    if (ret < 0) {
-      if (total > 0)
-        return total;
-      return ret;
+  bool stop = false;
+  for (usize done = 0; done < (usize)iovcnt_u && !stop; done += 16) {
+    usize cnt = (usize)iovcnt_u - done;
+    if (cnt > 16)
+      cnt = 16;
+    if (copyin((const void *)(iov_ptr + done * sizeof(struct chimera_iovec)),
+               iov, cnt * sizeof(struct chimera_iovec)) != CHIMERA_SUCCESS)
+      return (total > 0) ? total : -14;
+
+    for (usize i = 0; i < cnt; i++) {
+      if (iov[i].iov_len == 0)
+        continue;
+      i64 ret = sys_read(fd_u, iov[i].iov_base, iov[i].iov_len, 0, 0, 0);
+      if (ret < 0) {
+        return (total > 0) ? total : ret;
+      }
+      total += ret;
+      if ((usize)ret < iov[i].iov_len) {
+        stop = true; // short read ends the vector operation
+        break;
+      }
     }
-    total += ret;
-    if ((usize)ret < iov[i].iov_len)
-      break;
   }
   return total;
 }
@@ -2676,24 +3073,29 @@ static i64 sys_writev(u64 fd_u, u64 iov_ptr, u64 iovcnt_u, u64 a4, u64 a5,
     return -22; // EINVAL
 
   struct chimera_iovec iov[16];
-  usize cnt = (iovcnt_u > 16) ? 16 : (usize)iovcnt_u;
-  if (copyin((const void *)iov_ptr, iov, cnt * sizeof(struct chimera_iovec)) !=
-      CHIMERA_SUCCESS)
-    return -14;
-
   i64 total = 0;
-  for (usize i = 0; i < cnt; i++) {
-    if (iov[i].iov_len == 0)
-      continue;
-    i64 ret = sys_write(fd_u, iov[i].iov_base, iov[i].iov_len, 0, 0, 0);
-    if (ret < 0) {
-      if (total > 0)
-        return total;
-      return ret;
+  bool stop = false;
+  for (usize done = 0; done < (usize)iovcnt_u && !stop; done += 16) {
+    usize cnt = (usize)iovcnt_u - done;
+    if (cnt > 16)
+      cnt = 16;
+    if (copyin((const void *)(iov_ptr + done * sizeof(struct chimera_iovec)),
+               iov, cnt * sizeof(struct chimera_iovec)) != CHIMERA_SUCCESS)
+      return (total > 0) ? total : -14;
+
+    for (usize i = 0; i < cnt; i++) {
+      if (iov[i].iov_len == 0)
+        continue;
+      i64 ret = sys_write(fd_u, iov[i].iov_base, iov[i].iov_len, 0, 0, 0);
+      if (ret < 0) {
+        return (total > 0) ? total : ret;
+      }
+      total += ret;
+      if ((usize)ret < iov[i].iov_len) {
+        stop = true;
+        break;
+      }
     }
-    total += ret;
-    if ((usize)ret < iov[i].iov_len)
-      break;
   }
   return total;
 }
@@ -2827,6 +3229,11 @@ static i64 sys_chmod(u64 path_ptr, u64 mode, u64 a3, u64 a4, u64 a5, u64 a6) {
   vnode_t *vp = nullptr;
   if (vfs_lookup(norm, &vp) != CHIMERA_SUCCESS || !vp)
     return -2;
+
+  // only the file owner (or root) may change permissions
+  if (proc->p_euid != 0 && proc->p_euid != vp->v_attr.va_uid)
+    return -1; // EPERM
+
   vp->v_attr.va_mode = (u16)(mode & 0777);
   return 0;
 }
@@ -2844,8 +3251,15 @@ static i64 sys_fchmod(u64 fd_u, u64 mode, u64 a3, u64 a4, u64 a5, u64 a6) {
   chimera_fileproc_t *fp = proc_fd_lookup(proc, fd);
   if (!fp)
     return -9;
-  if (fp->fp_vnode)
-    fp->fp_vnode->v_attr.va_mode = (u16)(mode & 0777);
+  vnode_t *vp = fp->fp_vnode;
+  if (vp) {
+    // only the file owner (or root) may change permissions
+    if (proc->p_euid != 0 && proc->p_euid != vp->v_attr.va_uid) {
+      fp_release(fp);
+      return -1; // EPERM
+    }
+    vp->v_attr.va_mode = (u16)(mode & 0777);
+  }
   fp_release(fp);
   return 0;
 }
@@ -2866,6 +3280,11 @@ static i64 sys_chown(u64 path_ptr, u64 uid, u64 gid, u64 a4, u64 a5, u64 a6) {
   vnode_t *vp = nullptr;
   if (vfs_lookup(norm, &vp) != CHIMERA_SUCCESS || !vp)
     return -2;
+
+  // changing ownership is a root-only operation (POSIX-simplified)
+  if (proc->p_euid != 0)
+    return -1; // EPERM
+
   vp->v_attr.va_uid = (chimera_uid_t)uid;
   vp->v_attr.va_gid = (chimera_gid_t)gid;
   return 0;
@@ -2883,9 +3302,15 @@ static i64 sys_fchown(u64 fd_u, u64 uid, u64 gid, u64 a4, u64 a5, u64 a6) {
   chimera_fileproc_t *fp = proc_fd_lookup(proc, fd);
   if (!fp)
     return -9;
-  if (fp->fp_vnode) {
-    fp->fp_vnode->v_attr.va_uid = (chimera_uid_t)uid;
-    fp->fp_vnode->v_attr.va_gid = (chimera_gid_t)gid;
+  vnode_t *vp = fp->fp_vnode;
+  if (vp) {
+    // root-only operation (POSIX-simplified)
+    if (proc->p_euid != 0) {
+      fp_release(fp);
+      return -1; // EPERM
+    }
+    vp->v_attr.va_uid = (chimera_uid_t)uid;
+    vp->v_attr.va_gid = (chimera_gid_t)gid;
   }
   fp_release(fp);
   return 0;
@@ -2902,6 +3327,9 @@ static i64 sys_truncate(u64 path_ptr, u64 length, u64 a3, u64 a4, u64 a5,
   if (!proc || !path_ptr)
     return -14;
 
+  if (length > 0xFFFFFFFFULL)
+    return -27; // -EFBIG (FAT32 limit)
+
   char path[256];
   if (copyin((const void *)path_ptr, path, sizeof(path)) != CHIMERA_SUCCESS)
     return -14;
@@ -2914,6 +3342,12 @@ static i64 sys_truncate(u64 path_ptr, u64 length, u64 a3, u64 a4, u64 a5,
   if (vfs_lookup(norm_path, &vp) != CHIMERA_SUCCESS || !vp)
     return -2;
 
+  extern chimera_error_t fat32_resize_node(void *node_data, u64 new_size);
+  if (vp->v_op && __builtin_strcmp(vp->v_op->vop_name, "fat32_file") == 0) {
+    return (fat32_resize_node(vp->v_data, length) == CHIMERA_SUCCESS) ? 0 : -1;
+  }
+
+  // non-FAT32 files (devfs, ramfs modules): update the cached size only
   vp->v_attr.va_size = length;
   return 0;
 }
@@ -2929,14 +3363,26 @@ static i64 sys_ftruncate(u64 fd_u, u64 length, u64 a3, u64 a4, u64 a5, u64 a6) {
   if (!proc || fd < 0 || fd >= CHIMERA_PROC_MAX_FDS)
     return -9;
 
+  if (length > 0xFFFFFFFFULL)
+    return -27; // -EFBIG (FAT32 limit)
+
   chimera_fileproc_t *fp = proc_fd_lookup(proc, fd);
   if (!fp)
     return -9;
-  if (fp->fp_vnode) {
-    fp->fp_vnode->v_attr.va_size = length;
+
+  chimera_error_t err = CHIMERA_SUCCESS;
+  vnode_t *vp = fp->fp_vnode;
+  if (vp) {
+    extern chimera_error_t fat32_resize_node(void *node_data, u64 new_size);
+    if (vp->v_op && __builtin_strcmp(vp->v_op->vop_name, "fat32_file") == 0) {
+      err = fat32_resize_node(vp->v_data, length);
+    } else {
+      // non-FAT32 files (devfs, ramfs modules): update the cached size only
+      vp->v_attr.va_size = length;
+    }
   }
   fp_release(fp);
-  return 0;
+  return (err == CHIMERA_SUCCESS) ? 0 : -1;
 }
 
 static i64 sys_rename(u64 old_ptr, u64 new_ptr, u64 a3, u64 a4, u64 a5,
@@ -3424,17 +3870,23 @@ static i64 sys_poll(u64 fds_ptr, u64 nfds_u, u64 timeout_ms_u, u64 a4, u64 a5,
   (void)a5;
   (void)a6;
   if (!fds_ptr && nfds_u > 0)
-    return -14; // EFAULT
+    return -14; // EFAULT (buffer not yet allocated)
   u32 nfds = (u32)nfds_u;
   if (nfds > 256)
     return -22; // EINVAL
 
-  struct chimera_pollfd fds[32];
-  u32 count = (nfds > 32) ? 32 : nfds;
+  // one kernel buffer for the whole poll set (was: silent clamp to 32 fds)
+  struct chimera_pollfd *fds = nullptr;
+  u32 count = nfds;
   if (count > 0) {
+    fds = (struct chimera_pollfd *)kalloc(count * sizeof(struct chimera_pollfd));
+    if (!fds)
+      return -12; // ENOMEM
     if (copyin((const void *)fds_ptr, fds,
-               count * sizeof(struct chimera_pollfd)) != CHIMERA_SUCCESS)
+               count * sizeof(struct chimera_pollfd)) != CHIMERA_SUCCESS) {
+      kfree(fds);
       return -14;
+    }
   }
 
   chimera_task_t *task = current_task();
@@ -3481,6 +3933,7 @@ static i64 sys_poll(u64 fds_ptr, u64 nfds_u, u64 timeout_ms_u, u64 a4, u64 a5,
     if (ready_count > 0 || timeout_ms == 0) {
       if (count > 0) {
         copyout(fds, (void *)fds_ptr, count * sizeof(struct chimera_pollfd));
+        kfree(fds);
       }
       return ready_count;
     }
@@ -3489,12 +3942,16 @@ static i64 sys_poll(u64 fds_ptr, u64 nfds_u, u64 timeout_ms_u, u64 a4, u64 a5,
         (timer_get_uptime_ms() - start_ms) >= (u64)timeout_ms) {
       if (count > 0) {
         copyout(fds, (void *)fds_ptr, count * sizeof(struct chimera_pollfd));
+        kfree(fds);
       }
       return 0;
     }
 
     chimerakit_hid_poll();
-    scheduler_yield();
+    // sleep between scans instead of spinning; woken early by wait-queue
+    // wakeups (pipe/pty data) or after 20 ms to re-poll devices
+    extern void thread_sleep_until(u64 deadline_ms);
+    thread_sleep_until(timer_get_uptime_ms() + 20);
   }
 }
 
@@ -3613,7 +4070,8 @@ static i64 sys_select(u64 nfds_u, u64 readfds_ptr, u64 writefds_ptr,
     }
 
     chimerakit_hid_poll();
-    scheduler_yield();
+    extern void thread_sleep_until(u64 deadline_ms);
+    thread_sleep_until(timer_get_uptime_ms() + 20);
   }
 }
 
@@ -3816,6 +4274,53 @@ static i64 sys_sysctl(u64 name_ptr, u64 namelen, u64 oldp, u64 oldlenp,
   return 0;
 }
 
+/* ── sys_sigreturn ───────────────────────────────────────────────────────── *
+ * The kernel signal trampoline calls this with rdi = &sigctx written to the
+ * user stack at delivery time. Restores the interrupted user registers and
+ * the signal mask; returns the interrupted syscall's rax so the caller sees
+ * the original syscall result.
+ * ─────────────────────────────────────────────────────────────────────────── */
+static i64 sys_sigreturn(u64 ctx_ptr, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
+  (void)a2;
+  (void)a3;
+  (void)a4;
+  (void)a5;
+  (void)a6;
+  chimera_thread_t *th = current_thread();
+  if (!th || !th->th_syscall_frame || !ctx_ptr)
+    return -1;
+
+  sigctx_t ctx;
+  __builtin_memset(&ctx, 0, sizeof(ctx));
+  if (copyin((const void *)ctx_ptr, &ctx, sizeof(ctx)) != CHIMERA_SUCCESS ||
+      ctx.magic != SIGCTX_MAGIC || ctx.sig <= 0 || ctx.sig >= 32) {
+    kprintf("[SIGNAL] PID corrupted sigreturn context — killing\n");
+    extern void sys_exit_direct(u64 code);
+    sys_exit_direct(139);
+  }
+
+  syscall_user_frame_t *frame = (syscall_user_frame_t *)th->th_syscall_frame;
+  frame->r15 = ctx.regs[0];
+  frame->r14 = ctx.regs[1];
+  frame->r13 = ctx.regs[2];
+  frame->r12 = ctx.regs[3];
+  frame->rbx = ctx.regs[4];
+  frame->rbp = ctx.regs[5];
+  frame->rip = ctx.regs[6];
+  frame->rflags = ctx.regs[7];
+  frame->rsp = ctx.regs[8];
+
+  chimera_task_t *task = current_task();
+  chimera_proc_t *proc = task ? task->ta_proc : nullptr;
+  if (proc) {
+    irq_flags_t irq = spinlock_lock_irqsave(&proc->p_lock);
+    proc->p_sigmask = ctx.old_mask;
+    spinlock_unlock_irqrestore(&proc->p_lock, irq);
+  }
+
+  return (i64)ctx.rax;
+}
+
 static i64 sys_sigpending(u64 set_ptr, u64 a2, u64 a3, u64 a4, u64 a5, u64 a6) {
   (void)a2;
   (void)a3;
@@ -3877,7 +4382,7 @@ const syscall_fn_t g_syscall_table[512] = {
     [SYS_link] = sys_link,
     [SYS_unlink] = sys_unlink,
     [SYS_chdir] = sys_chdir,
-    [SYS_fchdir] = sys_chdir,
+    [SYS_fchdir] = sys_fchdir,
     [SYS_mknod] = sys_mknod,
     [SYS_chmod] = sys_chmod,
     [SYS_chown] = sys_chown,
@@ -3900,6 +4405,7 @@ const syscall_fn_t g_syscall_table[512] = {
     [SYS_setlogin] = sys_setlogin,
     [SYS_sigpending] = sys_sigpending,
     [SYS_sigaltstack] = sys_sigaltstack,
+    [SYS_sigreturn] = sys_sigreturn,
     [SYS_ioctl] = sys_ioctl,
     [SYS_execve] = sys_execve,
     [SYS_umask] = sys_umask,
@@ -3995,8 +4501,8 @@ i64 syscall_dispatch(u64 num, u64 arg1, u64 arg2, u64 arg3, u64 arg4, u64 arg5,
   i64 ret = g_syscall_table[num](arg1, arg2, arg3, arg4, arg5, arg6);
 
   if (frame) {
-    extern void proc_deliver_signals(void *frame_ptr);
-    proc_deliver_signals((void *)frame);
+    extern void proc_deliver_signals(void *frame_ptr, i64 syscall_ret);
+    proc_deliver_signals((void *)frame, ret);
   }
 
   return ret;

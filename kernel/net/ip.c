@@ -102,7 +102,11 @@ chimera_error_t ip_output(mbuf_t *m, struct in_addr src_ip, struct in_addr dst_i
     if (!m) return CHIMERA_ERR_INVALID;
 
     ifnet_t *ifp = nullptr;
-    if (dst_ip.s_addr == htonl(INADDR_LOOPBACK)) {
+    // loopback wins if EITHER side of the connection is 127.0.0.1: a
+    // destination-only check sent replies from loopback-local sockets out
+    // through the physical NIC, where they vanish
+    if (dst_ip.s_addr == htonl(INADDR_LOOPBACK) ||
+        src_ip.s_addr == htonl(INADDR_LOOPBACK)) {
         ifp = if_lookup("lo0");
     } else {
         ifp = if_get_default();
@@ -142,7 +146,32 @@ chimera_error_t ip_output(mbuf_t *m, struct in_addr src_ip, struct in_addr dst_i
     hdr->m_next = m;
 
     if (ifp->if_flags & IFF_LOOPBACK) {
-        return ifp->if_output(ifp, hdr, dst_ip);
+        // loopback: the packet is a hdr+payload mbuf chain, but the local
+        // input path expects one contiguous IP packet (lo0 has no ethernet
+        // header) — flatten the chain into a single cluster first
+        usize total = (usize)hdr->m_pkthdr.len;
+        if (total > MCLBYTES) {
+            m_freem(hdr);
+            return CHIMERA_ERR_OVERFLOW;
+        }
+        mbuf_t *pkt = m_getcl(MT_DATA);
+        if (!pkt) {
+            m_freem(hdr);
+            return CHIMERA_ERR_NOMEM;
+        }
+        u8 *dstbuf = pkt->m_data;
+        __builtin_memcpy(dstbuf, hdr->m_data, (usize)hdr->m_len);
+        dstbuf += hdr->m_len;
+        for (mbuf_t *seg = hdr->m_next; seg; seg = seg->m_next) {
+            __builtin_memcpy(dstbuf, seg->m_data, (usize)seg->m_len);
+            dstbuf += seg->m_len;
+        }
+        pkt->m_len = (i32)total;
+        pkt->m_pkthdr.len = (i32)total;
+        pkt->m_pkthdr.rcvif = ifp;
+        m_freem(hdr);
+        ip_input(ifp, pkt);
+        return CHIMERA_SUCCESS;
     }
 
     extern chimera_error_t ethernet_output(ifnet_t *ifp, mbuf_t *m, struct in_addr dest_ip, u16 ethertype);

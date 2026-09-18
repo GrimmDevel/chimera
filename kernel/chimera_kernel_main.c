@@ -31,7 +31,7 @@ extern void vm_object_init(void);
 extern void zone_init(void);
 extern void *kalloc(usize size);
 extern void kfree(void *ptr);
-extern void scheduler_add_thread(chimera_thread_t *th);
+extern int scheduler_add_thread(chimera_thread_t *th);
 
 // phase 4: Mach IPC
 extern void ipc_init(void);
@@ -126,6 +126,7 @@ chimera_boot_info_t *g_boot_info = &g_boot_info_storage;
 
 // global physical address for devfs mmap
 u64 g_fb_phys_addr = 0;
+u64 g_boot_rsdp_base = 0;
 // higher Half Direct Map base — used by sys_mmap to zero anonymous pages
 u64 g_hhdm_base = 0;
 // global CPU count from SMP
@@ -192,7 +193,7 @@ static bool spawn_user_process(const char *path, const char *name) {
     return false;
   }
 
-  void *elf_addr = vp->v_data;
+  void *image_addr = vp->v_data;
   chimera_paddr_t temp_phys = (chimera_paddr_t)-1;
   usize temp_pages = 0;
 
@@ -211,18 +212,18 @@ static bool spawn_user_process(const char *path, const char *name) {
       temp_pages = (nd->file_size + 4095) / 4096;
       temp_phys = pmm_alloc_pages(temp_pages);
       if (temp_phys != (chimera_paddr_t)-1) {
-        elf_addr = (void *)(temp_phys + g_hhdm_base);
+        image_addr = (void *)(temp_phys + g_hhdm_base);
         u32 actual = 0;
         extern chimera_error_t fat32_read_file(u32 start_cluster, u32 file_size,
                                            u32 offset, void *dst, u32 len,
                                            u32 *bytes_read);
-        fat32_read_file(nd->start_cluster, nd->file_size, 0, elf_addr,
+        fat32_read_file(nd->start_cluster, nd->file_size, 0, image_addr,
                         nd->file_size, &actual);
       }
     }
   }
 
-  if (elf_addr) {
+  if (image_addr) {
     uptr entry_point = 0;
     uptr user_stack = 0;
 
@@ -255,7 +256,7 @@ static bool spawn_user_process(const char *path, const char *name) {
         "PS1=%n@%m %~ %# ",
         nullptr
     };
-    int load_rc = mach_load_args(elf_addr, task, &entry_point, &user_stack, path, (char *const *)argv, (char *const *)envp);
+    int load_rc = mach_load_args(image_addr, task, &entry_point, &user_stack, path, (char *const *)argv, (char *const *)envp);
     if (load_rc != 0 || entry_point == 0) {
         kprintf("[CHIMERA] ERROR: Failed to load %s (%s): rc=%d\n", name, path, load_rc);
         if (temp_pages > 0) {
@@ -266,10 +267,26 @@ static bool spawn_user_process(const char *path, const char *name) {
     }
     thread->th_context = (void *)entry_point;
 
-    scheduler_add_thread(thread);
+    if (scheduler_add_thread(thread) != 0) {
+      kprintf("[CHIMERA] Spawn of %s failed: run queue refusal\n", name);
+      proc_mark_exited(proc, 255);
+      if (temp_pages > 0) {
+        extern void pmm_free_contiguous(chimera_paddr_t base, usize count);
+        pmm_free_contiguous(temp_phys, temp_pages);
+      }
+      return false;
+    }
 
-    extern void thread_init_stack(chimera_thread_t * th, void *entry, void *stack);
-    thread_init_stack(thread, (void *)entry_point, (void *)user_stack);
+    extern int thread_init_stack(chimera_thread_t * th, void *entry, void *stack);
+    if (thread_init_stack(thread, (void *)entry_point, (void *)user_stack) != 0) {
+      kprintf("[CHIMERA] Spawn of %s failed: no kernel stack\n", name);
+      proc_mark_exited(proc, 255);
+      if (temp_pages > 0) {
+        extern void pmm_free_contiguous(chimera_paddr_t base, usize count);
+        pmm_free_contiguous(temp_phys, temp_pages);
+      }
+      return false;
+    }
 
     extern void scheduler_set_initial(chimera_thread_t * th);
     scheduler_set_initial(thread);
@@ -281,7 +298,7 @@ static bool spawn_user_process(const char *path, const char *name) {
     pmm_free_contiguous(temp_phys, temp_pages);
   }
 
-  return (elf_addr != nullptr);
+  return (image_addr != nullptr);
 }
 
 void chimera_kernel_main(chimera_boot_info_t *info) {
@@ -298,6 +315,7 @@ void chimera_kernel_main(chimera_boot_info_t *info) {
   if (info != nullptr && info->magic == CHIMERA_BOOT_MAGIC) {
     __builtin_memcpy(g_boot_info, info, sizeof(chimera_boot_info_t));
     g_fb_phys_addr = g_boot_info->fb_base;
+    g_boot_rsdp_base = g_boot_info->rsdp_base;
     kprintf("[CHIMERA] Kernel loaded via XIU EFI Bootloader\n");
   } else {
     // translate Limine info into chimera_boot_info_t
@@ -320,14 +338,56 @@ void chimera_kernel_main(chimera_boot_info_t *info) {
     g_boot_info->magic = CHIMERA_BOOT_MAGIC;
 
     if (memmap_request.response) {
-      g_boot_info->memmap_base = (chimera_paddr_t)memmap_request.response->entries;
-      g_boot_info->memmap_count = memmap_request.response->entry_count;
+      // Translate Limine memmap types into chimera types. The two enums are
+      // NOT aligned (Limine USABLE=0 vs chimera RESERVED=0): without this
+      // translation the fallback path hands reserved RAM to the allocator
+      // and marks usable RAM reserved. Also copy into our own storage —
+      // Limine-owned memory must not be depended on after boot.
+      static chimera_memmap_entry_t s_limine_map[128];
+      u32 n = 0;
+      for (u64 i = 0; i < memmap_request.response->entry_count && n < 128;
+           i++) {
+        struct limine_memmap_entry *le = memmap_request.response->entries[i];
+        u32 t;
+        switch (le->type) {
+          case LIMINE_MEMMAP_USABLE:
+            t = CHIMERA_MEM_USABLE;
+            break;
+          case LIMINE_MEMMAP_BOOTLOADER_RECLAIMABLE:
+            t = CHIMERA_MEM_BOOTLOADER_RECLAIM;
+            break;
+          case LIMINE_MEMMAP_ACPI_RECLAIMABLE:
+            t = CHIMERA_MEM_ACPI_RECLAIM;
+            break;
+          case LIMINE_MEMMAP_ACPI_NVS:
+            t = CHIMERA_MEM_ACPI_NVS;
+            break;
+          case 6: // EXECUTABLE_AND_MODULES (API rev >= 2) / KERNEL_AND_MODULES
+            t = CHIMERA_MEM_KERNEL;
+            break;
+          case LIMINE_MEMMAP_FRAMEBUFFER:
+            t = CHIMERA_MEM_FRAMEBUFFER;
+            break;
+          default:
+            t = CHIMERA_MEM_RESERVED; // RESERVED, BAD_MEMORY
+            break;
+        }
+        s_limine_map[n].base = le->base;
+        s_limine_map[n].length = le->length;
+        s_limine_map[n].type = t;
+        s_limine_map[n].reserved_pad = 0;
+        n++;
+      }
+      g_boot_info->memmap_base = (chimera_paddr_t)(uptr)s_limine_map;
+      g_boot_info->memmap_count = n;
+      g_boot_info->memmap_desc_size = sizeof(chimera_memmap_entry_t);
     } else {
       kprintf("[CHIMERA] Warning: No memory map from bootloader.\n");
     }
 
     if (rsdp_request.response) {
       g_boot_info->rsdp_base = (chimera_paddr_t)rsdp_request.response->address;
+      g_boot_rsdp_base = g_boot_info->rsdp_base;
     }
 
     if (smp_request.response) {
@@ -509,12 +569,20 @@ void chimera_kernel_main(chimera_boot_info_t *info) {
       }
     }
   } else {
-    // Console boot mode (interactive zsh)
+    // Console boot mode (interactive zsh) — launchd (PID 1) runs as the
+    // orphan reaper alongside; it does NOT spawn the shell (the kernel does)
     if (!spawn_user_process("/bin/zsh", "zsh")) {
       if (!spawn_user_process("/bin/sh", "sh")) {
         kprintf("[CHIMERA] WARNING: /bin/zsh and /bin/sh not found in VFS or on disk!\n");
       }
     }
+  }
+
+  // Signal the APs that all subsystems are ready — they can now enter
+  // the scheduler and start pulling threads from the run queue.
+  {
+    extern volatile bool g_smp_ready;
+    __atomic_store_n(&g_smp_ready, true, __ATOMIC_RELEASE);
   }
 
   /*

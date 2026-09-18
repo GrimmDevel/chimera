@@ -8,4 +8,4 @@ System documentation index for Chimera OS.
 - [VFS](vfs.md) — Vnodes, DevFS (`/dev`), FAT32 persistent storage, pipes, pseudoterminals
 - [Networking](networking.md) — mbufs, ifnet, Intel e1000 driver, ARP, IPv4, ICMP, UDP, TCP, DHCP, BSD sockets
 - [ChimeraKit](chimerakit.md) — PCI enumeration, xHCI USB 3.0 controller, AppleHIDDriver, framebuffer console
-- [Userspace](userspace.md) — libsystem, Mach-O/ELF loader, process lifecycle, Darwin hierarchy, userland tools
+- [Userspace](userspace.md) — libsystem, Mach-O loader, process lifecycle, Darwin hierarchy, userland tools

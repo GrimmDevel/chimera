@@ -12,42 +12,59 @@ struct ipc_port *ipc_port_kernel_bootstrap = nullptr;
 
 #define IPC_PORT_ARENA_SIZE  4096
 static ipc_port_struct_t  s_port_arena[IPC_PORT_ARENA_SIZE];
-static _Atomic(u32) s_port_arena_next = 0;
+static u32 s_port_arena_next = 0;         // high-water mark of never-used slots
+static ipc_port_struct_t *s_port_free_list = nullptr; // recycled slots (via ip_next)
+static spinlock_t s_port_arena_lock = SPINLOCK_INIT;
 
 static struct ipc_port *port_arena_alloc(void) {
-    u32 idx = atomic_fetch_add_explicit(&s_port_arena_next, 1,
-                                        memory_order_relaxed);
-    if (CHIMERA_UNLIKELY(idx >= IPC_PORT_ARENA_SIZE)) {
-        chimera_panic("ipc_port: port arena exhausted (max %u ports)\n",
-                  IPC_PORT_ARENA_SIZE);
+    irq_flags_t f = spinlock_lock_irqsave(&s_port_arena_lock);
+    ipc_port_struct_t *p = s_port_free_list;
+    if (p) {
+        s_port_free_list = p->ip_next;
+        p->ip_next = nullptr;
+    } else if (s_port_arena_next < IPC_PORT_ARENA_SIZE) {
+        p = &s_port_arena[s_port_arena_next++];
     }
-    return &s_port_arena[idx];
+    spinlock_unlock_irqrestore(&s_port_arena_lock, f);
+    return p; // nullptr when the arena is genuinely exhausted
+}
+
+static void port_arena_free(struct ipc_port *p) {
+    if (!p || p < &s_port_arena[0] || p >= &s_port_arena[IPC_PORT_ARENA_SIZE])
+        return;
+    irq_flags_t f = spinlock_lock_irqsave(&s_port_arena_lock);
+    p->ip_next = s_port_free_list;
+    s_port_free_list = p;
+    spinlock_unlock_irqrestore(&s_port_arena_lock, f);
 }
 
 // name table helpers
 mach_port_name_t space_alloc_name(ipc_space_t *space) {
-    // scan free list first
+    // scan free list first (free-list "next" is smuggled through ie_object)
     if (space->is_free_count > 0 && space->is_free_head != MACH_PORT_NAME_NULL) {
-        mach_port_name_t name = space->is_free_head;
-        space->is_free_head = (mach_port_name_t)
-            (uptr)space->is_table[name].ie_object; // free list next
+        u32 idx = ipc_name_index(space->is_free_head);
+        ipc_entry_t *e = &space->is_table[idx];
+        space->is_free_head = (mach_port_name_t)(uptr)space->is_table[ipc_name_index(space->is_free_head)].ie_object;
         space->is_free_count--;
-        return name;
+        e->ie_gen++; // new generation invalidates stale names for this index
+        return ipc_name_make(e->ie_gen, idx);
     }
-    // linear growth: next unused slot
+    // linear growth: next unused slot; MACH_PORT_NAME_NULL signals exhaustion
+    // (caller must handle it — panicking from a syscall is never acceptable)
     if (space->is_table_used >= space->is_table_size) {
-        // todo Phase 2: grow table via kalloc
-        chimera_panic("ipc_space: table full (size=%u)\n", space->is_table_size);
+        return MACH_PORT_NAME_NULL;
     }
-    return (mach_port_name_t)space->is_table_used++;
+    u32 idx = space->is_table_used++;
+    return ipc_name_make(space->is_table[idx].ie_gen, idx);
 }
 
-static void space_free_name(ipc_space_t *space, mach_port_name_t name) {
-    ipc_entry_t *entry = &space->is_table[name];
+static void space_free_name(ipc_space_t *space, u32 idx) {
+    ipc_entry_t *entry = &space->is_table[idx];
     entry->ie_object = (struct ipc_port *)(uptr)space->is_free_head; // chain
     entry->ie_bits   = MACH_PORT_TYPE_NONE;
     entry->ie_urefs  = 0;
-    space->is_free_head = name;
+    entry->ie_gen++; // stale names referencing (old gen, idx) now fail
+    space->is_free_head = (mach_port_name_t)(uptr)ipc_name_make(entry->ie_gen, idx);
     space->is_free_count++;
 }
 
@@ -96,7 +113,10 @@ chimera_error_t ipc_space_create(struct chimera_task *task, ipc_space_t **space_
     static _Atomic(u32) s_space_next = 0;
     u32 idx = atomic_fetch_add(&s_space_next, 1);
     if (idx >= 256) {
-        chimera_panic("ipc_space_create: static pool exhausted\n");
+        // pin the counter so a failed allocation can never wrap around
+        // and hand out a live slot
+        atomic_store(&s_space_next, 256);
+        return CHIMERA_ERR_NOMEM;
     }
     ipc_space_t *space = &s_space_pool[idx];
 
@@ -166,17 +186,25 @@ chimera_error_t ipc_port_alloc(ipc_space_t *space,
     CHIMERA_ASSERT(name_out != nullptr);
 
     struct ipc_port *port = port_arena_alloc();
+    if (!port)
+        return CHIMERA_ERR_NOMEM;
     ipc_port_init_internal(port, label);
 
     irq_flags_t f = spinlock_lock_irqsave(&space->is_lock);
 
     if (!space->is_active) {
         spinlock_unlock_irqrestore(&space->is_lock, f);
+        port_arena_free(port);
         return CHIMERA_ERR_INVALID;
     }
 
     mach_port_name_t name = space_alloc_name(space);
-    ipc_entry_t *entry    = &space->is_table[name];
+    if (name == MACH_PORT_NAME_NULL) {
+        spinlock_unlock_irqrestore(&space->is_lock, f);
+        port_arena_free(port);
+        return CHIMERA_ERR_NOMEM;
+    }
+    ipc_entry_t *entry    = &space->is_table[ipc_name_index(name)];
     entry->ie_object = port;
     entry->ie_bits   = MACH_PORT_TYPE_SEND_RECEIVE;
     entry->ie_urefs  = 1;
@@ -222,8 +250,11 @@ void ipc_port_destroy(struct ipc_port *port) {
     if (space) {
         irq_flags_t fs = spinlock_lock_irqsave(&space->is_lock);
         mach_port_name_t name = port->ip_receiver_name;
-        if (name != MACH_PORT_NAME_NULL && name < space->is_table_size) {
-            space_free_name(space, name);
+        if (name != MACH_PORT_NAME_NULL &&
+            ipc_name_index(name) < space->is_table_size &&
+            ipc_name_gen(name) ==
+                space->is_table[ipc_name_index(name)].ie_gen) {
+            space_free_name(space, ipc_name_index(name));
         }
         spinlock_unlock_irqrestore(&space->is_lock, fs);
         port->ip_receiver      = nullptr;
@@ -233,8 +264,10 @@ void ipc_port_destroy(struct ipc_port *port) {
     port->ip_state = IPC_PORT_STATE_DEAD;
     spinlock_unlock_irqrestore(&port->ip_lock, f);
 
-    // wake any blocked receivers with an error
+    // wake blocked waiters with an error: receivers and senders re-check
+    // port state after waking and return CHIMERA_ERR_PORT_DEAD
     wait_queue_wakeup_one(&mq->imq_recv_waiters);
+    wait_queue_wakeup_all(&mq->imq_send_waiters);
 
     ipc_port_release(port);
 }
@@ -245,19 +278,29 @@ void ipc_port_destroy(struct ipc_port *port) {
 struct ipc_port *ipc_port_lookup(ipc_space_t *space,
                              mach_port_name_t name,
                              mach_port_type_t required_right) {
-    (void)required_right;
     if (!space || name == MACH_PORT_NAME_NULL || name == MACH_PORT_NAME_DEAD)
+        return nullptr;
+
+    u32 idx = ipc_name_index(name);
+    if (idx >= space->is_table_size || idx >= space->is_table_used)
         return nullptr;
 
     irq_flags_t f = spinlock_lock_irqsave(&space->is_lock);
 
-    if (!space->is_active || name >= space->is_table_used) {
+    if (!space->is_active) {
         spinlock_unlock_irqrestore(&space->is_lock, f);
         return nullptr;
     }
 
-    ipc_entry_t *entry = &space->is_table[name];
-    if (entry->ie_bits == MACH_PORT_TYPE_NONE || !entry->ie_object) {
+    ipc_entry_t *entry = &space->is_table[idx];
+    // stale generation => the name belonged to a since-freed right
+    if (entry->ie_bits == MACH_PORT_TYPE_NONE || !entry->ie_object ||
+        ipc_name_gen(name) != entry->ie_gen) {
+        spinlock_unlock_irqrestore(&space->is_lock, f);
+        return nullptr;
+    }
+    // enforce the requested right: a SEND-only name must not receive, etc.
+    if (required_right != 0 && !(entry->ie_bits & required_right)) {
         spinlock_unlock_irqrestore(&space->is_lock, f);
         return nullptr;
     }
@@ -287,6 +330,9 @@ void ipc_port_release(struct ipc_port *port) {
                                          memory_order_acq_rel);
     if (prev == 1) {
         port->ip_signature = 0xDEADDEADDEADDEADULL;
+        // recycle the slot: without this the arena would leak one port per
+        // allocation until an avoidable exhaustion
+        port_arena_free(port);
     }
 }
 
@@ -296,14 +342,20 @@ static struct {
     struct ipc_port *port;
 } s_services[MAX_SERVICES];
 static u32 s_service_count = 0;
+static spinlock_t s_services_lock = SPINLOCK_INIT;
 
 chimera_error_t mach_register_service(const char *name, struct ipc_port *port) {
-    if (s_service_count >= MAX_SERVICES) return CHIMERA_ERR_OVERFLOW;
+    irq_flags_t f = spinlock_lock_irqsave(&s_services_lock);
+    if (s_service_count >= MAX_SERVICES) {
+        spinlock_unlock_irqrestore(&s_services_lock, f);
+        return CHIMERA_ERR_OVERFLOW;
+    }
     
     // check if already exists
     for (u32 i = 0; i < s_service_count; i++) {
         if (__builtin_strcmp(s_services[i].name, name) == 0) {
             s_services[i].port = port;
+            spinlock_unlock_irqrestore(&s_services_lock, f);
             return CHIMERA_SUCCESS;
         }
     }
@@ -312,15 +364,20 @@ chimera_error_t mach_register_service(const char *name, struct ipc_port *port) {
     s_services[s_service_count].name[63] = '\0';
     s_services[s_service_count].port = port;
     s_service_count++;
+    spinlock_unlock_irqrestore(&s_services_lock, f);
     return CHIMERA_SUCCESS;
 }
 
 struct ipc_port *mach_lookup_service(const char *name) {
+    irq_flags_t f = spinlock_lock_irqsave(&s_services_lock);
     for (u32 i = 0; i < s_service_count; i++) {
         if (__builtin_strcmp(s_services[i].name, name) == 0) {
-            return s_services[i].port;
+            struct ipc_port *p = s_services[i].port;
+            spinlock_unlock_irqrestore(&s_services_lock, f);
+            return p;
         }
     }
+    spinlock_unlock_irqrestore(&s_services_lock, f);
     return nullptr;
 }
 
@@ -340,7 +397,7 @@ void ipc_init(void) {
     CHIMERA_ASSERT(CHIMERA_SUCCEEDED(err));
 
     ipc_port_kernel_bootstrap =
-        task_kernel->ta_ipc_space->is_table[name].ie_object;
+        task_kernel->ta_ipc_space->is_table[ipc_name_index(name)].ie_object;
     CHIMERA_ASSERT(ipc_port_kernel_bootstrap != nullptr);
 
     // the bootstrap port is special — pin it
@@ -379,7 +436,11 @@ mach_port_name_t ipc_port_copyout_send(ipc_space_t *space, struct ipc_port *port
 
     // 3. Allocate a new name for the send right
     mach_port_name_t name = space_alloc_name(space);
-    ipc_entry_t *entry = &space->is_table[name];
+    if (name == MACH_PORT_NAME_NULL) {
+        spinlock_unlock_irqrestore(&space->is_lock, f);
+        return MACH_PORT_NAME_NULL;
+    }
+    ipc_entry_t *entry = &space->is_table[ipc_name_index(name)];
     entry->ie_object = port;
     entry->ie_bits   = MACH_PORT_TYPE_SEND;
     entry->ie_urefs  = 1;
@@ -405,7 +466,11 @@ chimera_error_t mach_port_allocate_kernel(ipc_space_t *space, mach_port_right_t 
     } else if (right == MACH_PORT_RIGHT_PORT_SET) {
         irq_flags_t f = spinlock_lock_irqsave(&space->is_lock);
         mach_port_name_t name = space_alloc_name(space);
-        ipc_entry_t *entry = &space->is_table[name];
+        if (name == MACH_PORT_NAME_NULL) {
+            spinlock_unlock_irqrestore(&space->is_lock, f);
+            return CHIMERA_ERR_NOMEM;
+        }
+        ipc_entry_t *entry = &space->is_table[ipc_name_index(name)];
         entry->ie_object = nullptr;
         entry->ie_bits = MACH_PORT_TYPE_PORT_SET;
         entry->ie_urefs = 1;
@@ -415,7 +480,11 @@ chimera_error_t mach_port_allocate_kernel(ipc_space_t *space, mach_port_right_t 
     } else if (right == MACH_PORT_RIGHT_DEAD_NAME) {
         irq_flags_t f = spinlock_lock_irqsave(&space->is_lock);
         mach_port_name_t name = space_alloc_name(space);
-        ipc_entry_t *entry = &space->is_table[name];
+        if (name == MACH_PORT_NAME_NULL) {
+            spinlock_unlock_irqrestore(&space->is_lock, f);
+            return CHIMERA_ERR_NOMEM;
+        }
+        ipc_entry_t *entry = &space->is_table[ipc_name_index(name)];
         entry->ie_object = nullptr;
         entry->ie_bits = MACH_PORT_TYPE_DEAD_NAME;
         entry->ie_urefs = 1;
@@ -431,12 +500,14 @@ chimera_error_t mach_port_deallocate_kernel(ipc_space_t *space, mach_port_name_t
     if (!space || name == MACH_PORT_NAME_NULL || name == MACH_PORT_NAME_DEAD) return CHIMERA_ERR_INVALID;
 
     irq_flags_t f = spinlock_lock_irqsave(&space->is_lock);
-    if (name >= space->is_table_used) {
+    u32 idx = ipc_name_index(name);
+    if (idx >= space->is_table_used ||
+        ipc_name_gen(name) != space->is_table[idx].ie_gen) {
         spinlock_unlock_irqrestore(&space->is_lock, f);
-        return CHIMERA_ERR_INVALID;
+        return CHIMERA_ERR_INVALID; // stale or forged name
     }
 
-    ipc_entry_t *entry = &space->is_table[name];
+    ipc_entry_t *entry = &space->is_table[idx];
     if (entry->ie_bits == MACH_PORT_TYPE_NONE || entry->ie_urefs == 0) {
         spinlock_unlock_irqrestore(&space->is_lock, f);
         return CHIMERA_ERR_INVALID;
@@ -447,7 +518,7 @@ chimera_error_t mach_port_deallocate_kernel(ipc_space_t *space, mach_port_name_t
         struct ipc_port *port = entry->ie_object;
         mach_port_type_t bits = entry->ie_bits;
 
-        space_free_name(space, name);
+        space_free_name(space, idx);
         spinlock_unlock_irqrestore(&space->is_lock, f);
 
         if (port) {
@@ -473,12 +544,14 @@ chimera_error_t mach_port_type_kernel(ipc_space_t *space, mach_port_name_t name,
     if (!space || !ptype || name == MACH_PORT_NAME_NULL) return CHIMERA_ERR_INVALID;
 
     irq_flags_t f = spinlock_lock_irqsave(&space->is_lock);
-    if (name >= space->is_table_used) {
+    u32 idx = ipc_name_index(name);
+    if (idx >= space->is_table_used ||
+        ipc_name_gen(name) != space->is_table[idx].ie_gen) {
         spinlock_unlock_irqrestore(&space->is_lock, f);
-        return CHIMERA_ERR_INVALID;
+        return CHIMERA_ERR_INVALID; // stale or forged name
     }
 
-    ipc_entry_t *entry = &space->is_table[name];
+    ipc_entry_t *entry = &space->is_table[idx];
     *ptype = entry->ie_bits;
     spinlock_unlock_irqrestore(&space->is_lock, f);
     return CHIMERA_SUCCESS;

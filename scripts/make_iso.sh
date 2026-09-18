@@ -6,9 +6,13 @@
 
 set -e
 
+echo "[CHIMERA] ISO/Limine packaging is disabled: the kernel and userspace are Mach-O."
+echo "          Use the custom UEFI path via 'make qemu' or 'make run'."
+exit 1
+
 ARCH=${1:-x86_64}
 CMDLINE_ARG=${2:-""}
-KERNEL="build/${ARCH}/kernel/chimera_kernel.elf"
+KERNEL="build/${ARCH}/kernel/mach_kernel"
 ISO="build/chimera-${ARCH}.iso"
 ISO_ROOT="build/iso_root"
 
@@ -21,7 +25,7 @@ echo "[CHIMERA] Preparing ISO root..."
 rm -rf "$ISO_ROOT"
 mkdir -p "$ISO_ROOT"
 
-cp "$KERNEL" "$ISO_ROOT/kernel.elf"
+cp "$KERNEL" "$ISO_ROOT/mach_kernel"
 # Copy core userspace binaries into ISO according to Darwin hierarchy
 mkdir -p "$ISO_ROOT/bin" "$ISO_ROOT/sbin" "$ISO_ROOT/usr/bin" "$ISO_ROOT/usr/sbin"
 mkdir -p "$ISO_ROOT/private/etc" "$ISO_ROOT/private/var" "$ISO_ROOT/private/tmp"
@@ -31,7 +35,7 @@ for bin_path in build/${ARCH}/usr/*; do
     if [ -f "$bin_path" ]; then
         name="$(basename "$bin_path")"
         case "$name" in
-            *.a|*.o|*.obj|*.txt|*.cmake|*.ninja|*.json|Makefile|CMakeFiles|cmake_install.cmake|elf) ;;
+            *.a|*.o|*.obj|*.txt|*.cmake|*.ninja|*.json|Makefile|CMakeFiles|cmake_install.cmake) ;;
             sh|dash|zsh|ls|cat|cp|mv|rm|mkdir|pwd|date|sleep|kill|chmod|df|echo|clear|true|false)
                 cp "$bin_path" "$ISO_ROOT/bin/"
                 cp "$bin_path" "$ISO_ROOT/usr/bin/"
@@ -83,7 +87,7 @@ timeout: 0
 
 /Chimera Operating System
     protocol: limine
-    kernel_path: boot():/kernel.elf
+    kernel_path: boot():/mach_kernel
 EOF
 
 if [ -n "$CMDLINE_ARG" ]; then

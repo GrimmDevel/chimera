@@ -52,6 +52,38 @@ void PCIDevice::configWrite32(u8 offset, u32 value) {
     outl(PCI_CONFIG_DATA, value);
 }
 
+u16 PCIDevice::configRead16(u8 offset) {
+    u32 id = 0x80000000u | ((u32)m_bus << 16) | ((u32)m_dev << 11) | ((u32)m_func << 8) | (offset & 0xFC);
+    outl(PCI_CONFIG_ADDRESS, id);
+    u32 v = inl(PCI_CONFIG_DATA);
+    return (u16)((v >> ((offset & 2) * 8)) & 0xFFFF);
+}
+
+void PCIDevice::configWrite16(u8 offset, u16 value) {
+    u32 id = 0x80000000u | ((u32)m_bus << 16) | ((u32)m_dev << 11) | ((u32)m_func << 8) | (offset & 0xFC);
+    outl(PCI_CONFIG_ADDRESS, id);
+    u32 v = inl(PCI_CONFIG_DATA);
+    u32 shift = (offset & 2) * 8;
+    v = (v & ~(0xFFFFu << shift)) | ((u32)value << shift);
+    outl(PCI_CONFIG_DATA, v);
+}
+
+u8 PCIDevice::configRead8(u8 offset) {
+    u32 id = 0x80000000u | ((u32)m_bus << 16) | ((u32)m_dev << 11) | ((u32)m_func << 8) | (offset & 0xFC);
+    outl(PCI_CONFIG_ADDRESS, id);
+    u32 v = inl(PCI_CONFIG_DATA);
+    return (u8)((v >> ((offset & 3) * 8)) & 0xFF);
+}
+
+void PCIDevice::configWrite8(u8 offset, u8 value) {
+    u32 id = 0x80000000u | ((u32)m_bus << 16) | ((u32)m_dev << 11) | ((u32)m_func << 8) | (offset & 0xFC);
+    outl(PCI_CONFIG_ADDRESS, id);
+    u32 v = inl(PCI_CONFIG_DATA);
+    u32 shift = (offset & 3) * 8;
+    v = (v & ~(0xFFu << shift)) | ((u32)value << shift);
+    outl(PCI_CONFIG_DATA, v);
+}
+
 chimera_paddr_t PCIDevice::getBAR(u8 index) {
     if (index >= 6) return 0;
     u32 bar = configRead32(0x10 + (index * 4));
@@ -71,6 +103,7 @@ PCIManager& PCIManager::getInstance() {
 }
 
 extern "C" u64 g_e1000_pci_bar0 = 0;
+extern "C" u32 g_e1000_pci_bdf = 0xFFFFFFFFu; // bus<<16 | dev<<8 | func
 extern "C" void chimerakit_xhci_init(u64 pci_bar0);
 extern "C" void chimerakit_ahci_init(u64 abar_phys);
 
@@ -138,6 +171,7 @@ void PCIManager::probeAll() {
                         u32 cmd = device.configRead32(0x04);
                         device.configWrite32(0x04, cmd | 0x07);
                         g_e1000_pci_bar0 = device.getBAR(0);
+                        g_e1000_pci_bdf = ((u32)bus << 16) | ((u32)dev << 8) | (u32)func;
                     }
 
                     // usb 3.0 / xhci host controller
@@ -203,6 +237,49 @@ void PCIManager::probeAll() {
 
 } // namespace XIUKit
 
+extern "C" {
+
+// Program an MSI capability so the device delivers its interrupt as a fixed
+// LAPIC message with the given vector (no IOAPIC/PIRQ routing needed).
+bool pci_enable_msi(u8 bus, u8 dev, u8 func, u8 vector) {
+    XIUKit::PCIDevice device(bus, dev, func);
+
+    u16 cmd = device.configRead16(0x04);
+    cmd |= 0x0002; // bus master (devices must DMA the MSI? no — but masters need it anyway)
+    device.configWrite16(0x04, cmd);
+
+    u8 cap = device.configRead8(0x34) & 0xFC;
+    for (int hops = 0; hops < 16 && cap != 0; hops++) {
+        u8 cap_id = device.configRead8(cap);
+        if (cap_id == 0x05) { // MSI capability
+            u16 msg_ctrl = device.configRead16(cap + 2);
+            bool is64 = (msg_ctrl >> 7) & 1;
+
+            // address: LAPIC message — dest mode physical, dest APIC id 0 (BSP)
+            device.configWrite32(cap + 4, 0xFEE00000u);
+            u16 data_off = is64 ? 0x0C : 0x08;
+            if (is64)
+                device.configWrite32(cap + 8, 0);
+
+            // data: edge-triggered, fixed delivery, vector
+            device.configWrite16(cap + data_off, (u16)vector);
+
+            msg_ctrl |= 0x0001; // MSI enable
+            device.configWrite16(cap + 2, msg_ctrl);
+
+            // disable legacy INTx# pin
+            u16 cmd2 = device.configRead16(0x04);
+            cmd2 |= 0x0400; // INTx disable
+            device.configWrite16(0x04, cmd2);
+            return true;
+        }
+        cap = device.configRead8(cap + 1) & 0xFC;
+    }
+    return false;
+}
+
+} // extern "C"
+
 extern "C" void chimerakit_pci_init(void) {
     XIUKit::PCIManager::getInstance().probeAll();
 }
@@ -258,3 +335,36 @@ extern "C" void chimera_kit_start_matching(void) {
 
     kprintf("[ChimeraKit] Driver matching complete: %u active driver instances bound to hardware\n", matched_count);
 }
+
+extern "C" bool pci_enable_msi(u8 bus, u8 dev, u8 func, u8 vector);  // declared here for C callers
+
+extern "C" void chimerakit_xhci_init(u64 pci_bar0);
+extern "C" void chimerakit_ahci_init(u64 abar_phys);
+
+struct DiscoveredPCIDevice {
+    u8  bus, dev, func;
+    u16 vendor_id, device_id;
+    u8  class_code, subclass_code;
+    u64 bar0;
+};
+
+#define MAX_DISCOVERED_PCI 32
+static DiscoveredPCIDevice s_discovered_pci[MAX_DISCOVERED_PCI];
+static u32 s_discovered_count = 0;
+
+struct DriverPersonality {
+    const char *driver_name;
+    const char *device_class_name;
+    u16 vendor_id;
+    u16 device_id;
+    u8  class_code;
+    u8  subclass_code;
+};
+
+static const DriverPersonality s_registered_drivers[] = {
+    { "AppleIntel8254XEthernet", "Ethernet Controller",     0x8086, 0x10d3, 0x02, 0x00 },
+    { "AppleIntel8254XEthernet", "Ethernet Controller",     0x8086, 0x100e, 0x02, 0x00 },
+    { "AppleUSBxHCI",            "USB 3.0 Host Controller", 0,      0,      0x0c, 0x03 },
+    { "AppleVGAFramebuffer",     "Display Controller",      0x1234, 0x1111, 0x03, 0x00 },
+    { "AppleSATAController",     "AHCI/SATA Controller",    0x8086, 0x2922, 0x01, 0x06 },
+};

@@ -31,7 +31,7 @@ Implements the xHCI 1.1 specification for low-speed, full-speed, high-speed, and
 - Direct integration into virtual console line discipline (`console_in_push()`) and `/dev/mouse`.
 
 ## Framebuffer & Display Driver
-`kernel/console.c` renders graphics and text onto the linear Limine framebuffer:
+`kernel/console.c` renders graphics and text onto the linear UEFI framebuffer:
 - 8x16 VGA bitmap glyph rasterizer with ANSI color parsing.
 - Double-buffered shadow RAM (`s_fb_shadow`) avoids un-cached VRAM reads during scrolling.
 - 1000-line scrollback buffer with Shift+PageUp / Shift+PageDown viewport navigation.

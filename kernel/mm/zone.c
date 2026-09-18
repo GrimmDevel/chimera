@@ -58,9 +58,11 @@ zone_t zinit(vm_size_t size, vm_size_t max, vm_size_t alloc, const char *name) {
     (void)max;
     if (size == 0) return ZONE_NULL;
 
-    // align element size to 8 bytes minimum
+    // align element size to 64 bytes: kalloc'd objects may embed
+    // 64-byte-aligned hardware regions (xsave areas), and page carving
+    // preserves that alignment only if every element step is a multiple of 64
     if (size < sizeof(void *)) size = sizeof(void *);
-    size = (size + 7) & ~7ULL;
+    size = (size + 63) & ~63ULL;
 
     if (alloc == 0) alloc = 4096;
 
@@ -170,7 +172,10 @@ void *kalloc(usize size) {
         zone_init();
     }
 
-    usize needed = size + sizeof(zone_header_t);
+    // every kalloc'd pointer is 64-byte aligned: the allocator header lives
+    // in a 64-byte prefix so hardware-aligned regions inside the object
+    // (e.g. xsave areas) keep their alignment guarantees
+    usize needed = size + 64;
 
     if (needed <= 4096) {
         int zi = -1;
@@ -190,12 +195,12 @@ void *kalloc(usize size) {
             hdr->magic = ZONE_MAGIC;
             hdr->zone_idx = (u32)zi;
             hdr->alloc_size = (u32)size;
-            return (void *)(hdr + 1);
+            return (void *)((u8 *)mem + 64);
         }
     }
 
     // large allocation via whole pages
-    usize total = size + sizeof(large_header_t);
+    usize total = size + 64;
     usize pages = (total + 4095) / 4096;
     chimera_paddr_t phys = pmm_alloc_pages(pages);
     if (phys == (chimera_paddr_t)-1 || phys == 0) return nullptr;
@@ -205,7 +210,7 @@ void *kalloc(usize size) {
     lhdr->page_count = pages;
     lhdr->phys_base = phys;
 
-    void *ptr = (void *)(lhdr + 1);
+    void *ptr = (void *)((u8 *)(phys + g_hhdm_base) + 64);
     __builtin_memset(ptr, 0, size);
     return ptr;
 }
@@ -214,7 +219,7 @@ void kfree(void *ptr) {
     if (!ptr) return;
 
     u8 *raw = (u8 *)ptr;
-    zone_header_t *zh = (zone_header_t *)(raw - sizeof(zone_header_t));
+    zone_header_t *zh = (zone_header_t *)(raw - 64);
     if (zh->magic == ZONE_MAGIC) {
         u32 zi = zh->zone_idx;
         if (zi < KALLOC_ZONE_COUNT) {
@@ -224,12 +229,23 @@ void kfree(void *ptr) {
         }
     }
 
-    large_header_t *lh = (large_header_t *)(raw - sizeof(large_header_t));
+    large_header_t *lh = (large_header_t *)(raw - 64);
     if (lh->magic == LARGE_MAGIC) {
+        // validate the header before trusting it: kfree on a foreign
+        // pointer must never interpret stack garbage as a physical base
+        if (lh->page_count == 0 || lh->page_count > (1UL << 20) ||
+            (lh->phys_base & (CHIMERA_PAGE_SIZE - 1)) != 0) {
+            kprintf("kfree: corrupted large header for %p (count=%zu base=0x%llx)\n",
+                    ptr, lh->page_count, (unsigned long long)lh->phys_base);
+            return;
+        }
         usize pages = lh->page_count;
         chimera_paddr_t phys = lh->phys_base;
         lh->magic = 0;
         pmm_free_contiguous(phys, pages);
         return;
     }
+
+    // not ours: leak loudly instead of silently corrupting the PMM
+    kprintf("kfree: unrecognized pointer %p (double free or foreign free)\n", ptr);
 }

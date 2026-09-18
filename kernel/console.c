@@ -4,6 +4,9 @@
  */
 
 #include <kernel/panic.h>
+
+#include <kernel/spinlock.h>
+static spinlock_t s_console_lock = SPINLOCK_INIT;
 #include <kernel/proc.h>
 #include <kernel/spinlock.h>
 #include <kernel/video_console.h>
@@ -444,6 +447,7 @@ static inline void kv_emit_str(char *buf, usize *len, const char *s) {
 }
 
 void kvprintf(const char *fmt, va_list args) {
+  irq_flags_t _cl = spinlock_lock_irqsave(&s_console_lock);
   char out_buf[KVPRINTF_BUF_SIZE];
   usize out_len = 0;
 
@@ -572,6 +576,7 @@ void kvprintf(const char *fmt, va_list args) {
   if (out_len > 0) {
     console_write(out_buf, out_len);
   }
+  spinlock_unlock_irqrestore(&s_console_lock, _cl);
 }
 
 void kprintf(const char *fmt, ...) {

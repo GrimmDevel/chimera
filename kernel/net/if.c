@@ -4,6 +4,9 @@
  * ============================================================================= */
 
 #include <net/if.h>
+#include <kernel/spinlock.h>
+static spinlock_t s_net_input_lock = SPINLOCK_INIT;
+static void _net_input_inner(ifnet_t *ifp, mbuf_t *m);
 #include <net/protocols.h>
 #include <kernel/spinlock.h>
 #include <kernel/panic.h>
@@ -85,6 +88,17 @@ extern void ethernet_input(ifnet_t *ifp, mbuf_t *m);
 extern void ip_input(ifnet_t *ifp, mbuf_t *m);
 
 void if_input(ifnet_t *ifp, mbuf_t *m) {
+    // serialize packet processing: the net stack was designed for single-CPU
+    // polling and is not safe for concurrent entry from MSI + loopback + poll
+    irq_flags_t _nfl;
+    __asm__ volatile("pushfq; popq %0; cli" : "=r"(_nfl) :: "memory");
+    spinlock_lock(&s_net_input_lock);
+    _net_input_inner(ifp, m);
+    spinlock_unlock(&s_net_input_lock);
+    __asm__ volatile("pushq %0; popfq" :: "r"(_nfl) : "memory");
+}
+
+static void _net_input_inner(ifnet_t *ifp, mbuf_t *m) {
     if (!ifp || !m) return;
 
     if (ifp->if_flags & IFF_LOOPBACK) {

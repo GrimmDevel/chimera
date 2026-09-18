@@ -34,7 +34,7 @@ static inline u32 lapic_read(u32 reg) {
     return *(volatile u32 *)(s_lapic_base_va + reg);
 }
 
-static inline void lapic_write(u32 reg, u32 val) {
+void lapic_write(u32 reg, u32 val) {
     if (!s_lapic_base_va) return;
     *(volatile u32 *)(s_lapic_base_va + reg) = val;
 }
@@ -77,6 +77,9 @@ void lapic_init_ap(void) {
     lapic_write(LAPIC_ESR, 0);
     lapic_write(LAPIC_LVT_LINT0, 0x00010000); // masked on APs
     lapic_write(LAPIC_LVT_LINT1, 0x00010000);
+    // ponytail: in Stage 2 AP timer remains disabled/masked until Stage 3 scheduler
+    lapic_write(LAPIC_LVT_TIMER, 0x00010000);
+    lapic_write(LAPIC_TIMER_INIT_CNT, 0);
     lapic_write(LAPIC_EOI, 0);
 }
 
@@ -105,8 +108,46 @@ void lapic_send_ipi_all_excluding_self(u8 vector) {
     }
 }
 
-void lapic_timer_init(u32 ticks) {
-    lapic_write(LAPIC_TIMER_DIV_CFG, 0x3);
-    lapic_write(LAPIC_LVT_TIMER, 0x20000 | 32);
+static u32 s_lapic_ticks_per_10ms = 0;
+
+u32 lapic_timer_get_ticks_per_10ms(void) {
+    return s_lapic_ticks_per_10ms;
+}
+
+void lapic_timer_stop(void) {
+    lapic_write(LAPIC_LVT_TIMER, 0x00010000); // masked
+    lapic_write(LAPIC_TIMER_INIT_CNT, 0);
+}
+
+void lapic_timer_start_periodic(u32 ticks) {
+    lapic_write(LAPIC_TIMER_DIV_CFG, 0x3); // divide by 16
+    // Local APIC timer uses vector 0xE0, separate from PIC vector 32
+    lapic_write(LAPIC_LVT_TIMER, 0x20000 | VECTOR_LAPIC_TIMER);
     lapic_write(LAPIC_TIMER_INIT_CNT, ticks);
+}
+
+void lapic_timer_init(u32 ticks) {
+    lapic_timer_start_periodic(ticks);
+}
+
+void lapic_timer_calibrate(void) {
+    extern void smp_delay_us(u32 us);
+    // 1. Divide by 16
+    lapic_write(LAPIC_TIMER_DIV_CFG, 0x3);
+    // 2. Mask timer while counting down
+    lapic_write(LAPIC_LVT_TIMER, 0x00010000);
+    // 3. Set initial count to max
+    lapic_write(LAPIC_TIMER_INIT_CNT, 0xFFFFFFFF);
+    // 4. Delay 10ms (10000 us) using calibrated TSC timer
+    smp_delay_us(10000);
+    // 5. Read current count and calculate ticks per 10ms
+    u32 curr = lapic_read(LAPIC_TIMER_CURR_CNT);
+    s_lapic_ticks_per_10ms = 0xFFFFFFFF - curr;
+    if (s_lapic_ticks_per_10ms == 0) {
+        // fallback in case of emulator instant count
+        s_lapic_ticks_per_10ms = 100000;
+    }
+    lapic_timer_stop();
+    kprintf("  [  OK  ]  LAPIC Timer calibrated (%u ticks/10ms, vector 0x%x)\n",
+            s_lapic_ticks_per_10ms, VECTOR_LAPIC_TIMER);
 }

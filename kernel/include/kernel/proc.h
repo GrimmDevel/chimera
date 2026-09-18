@@ -48,9 +48,20 @@ typedef struct chimera_thread {
   struct chimera_thread *th_task_next;
   struct chimera_thread *th_wait_next;
 
-  u8 th_fp_state[512] __attribute__((aligned(64)));
+  // xsave area: sized for x87+sse+avx(+opmask) state on max CPUs; the CPU
+  // writes only as many bytes as its XCR0 mask requires
+  u8 th_fp_state[2696] __attribute__((aligned(64)));
   u32 th_fp_initialized;
+
+  // timer-based sleep (keep at struct end: nothing below is asm-referenced)
+  u64 th_sleep_deadline; // uptime ms; valid while on the kernel sleep list
 } chimera_thread_t;
+
+// FP save configuration (gdt.c): XCR0 mask split for switch.S xsave/xrstor
+// and the CPU-reported xsave area size in bytes
+extern u32 g_fpu_mask_lo;
+extern u32 g_fpu_mask_hi;
+extern u32 g_fpu_area_size;
 
 #define CHIMERA_THREAD_MAGIC 0x5448524541442121ULL
 
@@ -69,6 +80,10 @@ typedef struct chimera_task {
   chimera_thread_t *ta_threads;
   u32 ta_thread_count;
 
+  // kernel-tracked shared mappings made by this task (fb/shm/surfaces);
+  // consumed by sys_munmap and by proc_mark_exited for cleanup
+  struct chimera_mmap_record *ta_mmap_records;
+
   spinlock_t ta_lock;
 } chimera_task_t;
 
@@ -76,6 +91,19 @@ typedef struct chimera_task {
 
 #define TASK_FLAG_KERNEL (1u << 0)
 #define TASK_FLAG_64BIT (1u << 1)
+
+// kinds of kernel-tracked shared mappings (see chimera_mmap_record_t)
+#define CHIMERA_MMAP_KIND_SHM     0 // file-backed shared memory entry
+#define CHIMERA_MMAP_KIND_SURFACE 1 // GUI window surface (0xA0000000 window)
+#define CHIMERA_MMAP_KIND_FB      2 // framebuffer MMIO (not owned by the PMM)
+
+typedef struct chimera_mmap_record {
+  u64 start;      // page-aligned mapping base
+  u64 len;        // page-aligned mapping length
+  u16 kind;       // CHIMERA_MMAP_KIND_*
+  u16 index;      // shm entry index or surface window id
+  struct chimera_mmap_record *next;
+} chimera_mmap_record_t;
 
 #define CHIMERA_PROC_NAME_MAX 32
 #define CHIMERA_PROC_MAX_FDS 256
@@ -128,6 +156,19 @@ typedef struct chimera_proc {
 
 #define CHIMERA_PROC_MAGIC 0x50524F4321212121ULL
 
+// ── signal delivery context (kernel-private ABI with mach_loader frame) ────
+// Written to the user stack by proc_deliver_signals(); sys_sigreturn reads
+// it back to restore the interrupted user context. reg order matches
+// syscall_user_frame_t in bsd/syscall.c.
+#define SIGCTX_MAGIC 0x5349474354585F31ULL
+typedef struct CHIMERA_PACKED sigctx {
+  u64 magic;
+  i32 sig;
+  u32 old_mask;
+  u64 rax;       // interrupted syscall's return value
+  u64 regs[9];   // r15,r14,r13,r12,rbx,rbp,rip,rflags,rsp
+} sigctx_t;
+
 typedef struct cpu_local {
   chimera_thread_t *cpu_current_thread; // offset 0x00
   void *cpu_user_rsp_save;          // offset 0x08
@@ -139,10 +180,12 @@ typedef struct cpu_local {
   chimera_thread_t *cpu_idle_thread;    // offset 0x28
   void *cpu_gdt_ptr;                // offset 0x30
   void *cpu_tss_ptr;                // offset 0x38
+  _Atomic(u32) cpu_need_resched;    // offset 0x40
 } cpu_local_t;
 
 #define CPU_LOCAL_CURRENT_THREAD 0x0
 #define CPU_LOCAL_USER_RSP_SAVE 0x8
+#define CPU_LOCAL_NEED_RESCHED  0x40
 #define THREAD_KERNEL_STACK_OFFSET 0x30
 
 extern chimera_proc_t *proc_kernel;
@@ -160,7 +203,7 @@ void proc_mark_exited(chimera_proc_t *proc, u32 code);
 chimera_proc_t *proc_find_by_pid(chimera_pid_t pid);
 chimera_proc_t *proc_find_waitable_child(chimera_proc_t *parent, chimera_pid_t pid);
 chimera_error_t proc_signal(chimera_proc_t *proc, int sig);
-void proc_deliver_signals(void *frame);
+void proc_deliver_signals(void *frame, i64 syscall_ret);
 
 void thread_wake(chimera_thread_t *thread);
 void scheduler_remove_thread(chimera_thread_t *th);

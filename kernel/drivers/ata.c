@@ -43,29 +43,48 @@ static void ata_400ns_delay(void) {
     }
 }
 
-static bool ata_wait_bsy_clear(void) {
-    u32 timeout = 1000000;
-    while (timeout--) {
-        u8 status = inb(ATA_PRIMARY_STATUS_CMD);
-        if (!(status & ATA_STATUS_BSY)) {
-            return true;
-        }
-    }
+static inline u64 ata_rdtsc(void) {
+    u32 lo, hi;
+    __asm__ volatile("rdtsc" : "=a"(lo), "=d"(hi));
+    return ((u64)hi << 32) | lo;
+}
+
+// absolute TSC deadline `ms` from now; 0 when the TSC is not calibrated yet
+// (pre-calibration callers fall back to a bounded spin below)
+static u64 ata_deadline_ticks(u32 ms) {
+    extern u64 timer_tsc_hz(void);
+    u64 hz = timer_tsc_hz();
+    if (hz == 0) return 0;
+    return ata_rdtsc() + (hz / 1000ULL) * ms;
+}
+
+static bool ata_timed_out(u64 deadline, u32 *spin_fallback) {
+    if (deadline != 0) return ata_rdtsc() > deadline;
+    if (--(*spin_fallback) == 0) return true;
     return false;
 }
 
-static bool ata_wait_drq(void) {
-    u32 timeout = 1000000;
-    while (timeout--) {
+static bool ata_wait_bsy_clear(u32 timeout_ms) {
+    u64 deadline = ata_deadline_ticks(timeout_ms);
+    u32 spin = 100000000; // ~seconds of fallback if TSC is uncalibrated
+    for (;;) {
         u8 status = inb(ATA_PRIMARY_STATUS_CMD);
-        if (status & ATA_STATUS_ERR) {
-            return false;
-        }
-        if (!(status & ATA_STATUS_BSY) && (status & ATA_STATUS_DRQ)) {
-            return true;
-        }
+        if (!(status & ATA_STATUS_BSY)) return true;
+        if (ata_timed_out(deadline, &spin)) return false;
+        __asm__ volatile("pause");
     }
-    return false;
+}
+
+static bool ata_wait_drq(u32 timeout_ms) {
+    u64 deadline = ata_deadline_ticks(timeout_ms);
+    u32 spin = 100000000;
+    for (;;) {
+        u8 status = inb(ATA_PRIMARY_STATUS_CMD);
+        if (status & ATA_STATUS_ERR) return false;
+        if (!(status & ATA_STATUS_BSY) && (status & ATA_STATUS_DRQ)) return true;
+        if (ata_timed_out(deadline, &spin)) return false;
+        __asm__ volatile("pause");
+    }
 }
 
 chimera_error_t ata_init(void) {
@@ -98,7 +117,7 @@ chimera_error_t ata_init(void) {
         return CHIMERA_ERR_NOTFOUND;
     }
 
-    if (!ata_wait_bsy_clear()) {
+    if (!ata_wait_bsy_clear(10000)) {
         spinlock_unlock_irqrestore(&s_ata_lock, irq);
         kprintf("[ATA] Drive timeout during identify.\n");
         return CHIMERA_ERR_TIMEOUT;
@@ -112,7 +131,7 @@ chimera_error_t ata_init(void) {
         return CHIMERA_ERR_NOTSUP;
     }
 
-    if (!ata_wait_drq()) {
+    if (!ata_wait_drq(5000)) {
         spinlock_unlock_irqrestore(&s_ata_lock, irq);
         kprintf("[ATA] DRQ not set after IDENTIFY.\n");
         return CHIMERA_ERR_GENERIC;
@@ -169,17 +188,41 @@ u64 ata_get_sector_count(void) {
     return g_ata_drive.sector_count;
 }
 
-static chimera_error_t ata_read_single_sector_lba28(u32 lba, void *buf) {
-    if (!ata_wait_bsy_clear()) return CHIMERA_ERR_TIMEOUT;
+// sector I/O with automatic LBA28/LBA48 selection. LBA48 support is
+// detected at IDENTIFY time; using it removes the 128 GiB ceiling — a
+// silent 28-bit LBA truncation on a larger disk corrupts the filesystem.
+static chimera_error_t ata_read_sector(u64 lba, void *buf) {
+    bool use48 = g_ata_drive.lba48_supported;
+    if (!use48 && lba > 0x0FFFFFFFULL) return CHIMERA_ERR_OVERFLOW;
 
-    outb(ATA_PRIMARY_DRIVE_HEAD, 0xE0 | ((lba >> 24) & 0x0F));
-    outb(ATA_PRIMARY_SEC_COUNT, 1);
-    outb(ATA_PRIMARY_LBA_LO, (u8)lba);
-    outb(ATA_PRIMARY_LBA_MID, (u8)(lba >> 8));
-    outb(ATA_PRIMARY_LBA_HI, (u8)(lba >> 16));
-    outb(ATA_PRIMARY_STATUS_CMD, ATA_CMD_READ_SECTORS);
+    if (!ata_wait_bsy_clear(1000)) return CHIMERA_ERR_TIMEOUT;
 
-    if (!ata_wait_drq()) return CHIMERA_ERR_GENERIC;
+    if (use48) {
+        outb(ATA_PRIMARY_DRIVE_HEAD, 0x40); // LBA mode, master
+        outb(ATA_PRIMARY_SEC_COUNT, 0);     // count high byte
+        outb(ATA_PRIMARY_LBA_LO, (u8)(lba >> 24));
+        outb(ATA_PRIMARY_LBA_MID, (u8)(lba >> 32));
+        outb(ATA_PRIMARY_LBA_HI, (u8)(lba >> 40));
+        outb(ATA_PRIMARY_SEC_COUNT, 1);     // count low byte
+        outb(ATA_PRIMARY_LBA_LO, (u8)lba);
+        outb(ATA_PRIMARY_LBA_MID, (u8)(lba >> 8));
+        outb(ATA_PRIMARY_LBA_HI, (u8)(lba >> 16));
+        outb(ATA_PRIMARY_STATUS_CMD, ATA_CMD_READ_SECTORS_EXT);
+    } else {
+        outb(ATA_PRIMARY_DRIVE_HEAD, 0xE0 | ((lba >> 24) & 0x0F));
+        outb(ATA_PRIMARY_SEC_COUNT, 1);
+        outb(ATA_PRIMARY_LBA_LO, (u8)lba);
+        outb(ATA_PRIMARY_LBA_MID, (u8)(lba >> 8));
+        outb(ATA_PRIMARY_LBA_HI, (u8)(lba >> 16));
+        outb(ATA_PRIMARY_STATUS_CMD, ATA_CMD_READ_SECTORS);
+    }
+
+    if (!ata_wait_drq(5000)) {
+        u8 err = inb(ATA_PRIMARY_ERR_FEATURES);
+        kprintf("[ATA] read lba=%llu failed: status error, err=0x%02x\n",
+                (unsigned long long)lba, err);
+        return CHIMERA_ERR_GENERIC;
+    }
 
     u16 *ptr = (u16 *)buf;
     for (int i = 0; i < 256; i++) {
@@ -188,26 +231,52 @@ static chimera_error_t ata_read_single_sector_lba28(u32 lba, void *buf) {
     return CHIMERA_SUCCESS;
 }
 
-static chimera_error_t ata_write_single_sector_lba28(u32 lba, const void *buf) {
-    if (!ata_wait_bsy_clear()) return CHIMERA_ERR_TIMEOUT;
+static chimera_error_t ata_write_sector(u64 lba, const void *buf) {
+    bool use48 = g_ata_drive.lba48_supported;
+    if (!use48 && lba > 0x0FFFFFFFULL) return CHIMERA_ERR_OVERFLOW;
 
-    outb(ATA_PRIMARY_DRIVE_HEAD, 0xE0 | ((lba >> 24) & 0x0F));
-    outb(ATA_PRIMARY_SEC_COUNT, 1);
-    outb(ATA_PRIMARY_LBA_LO, (u8)lba);
-    outb(ATA_PRIMARY_LBA_MID, (u8)(lba >> 8));
-    outb(ATA_PRIMARY_LBA_HI, (u8)(lba >> 16));
-    outb(ATA_PRIMARY_STATUS_CMD, ATA_CMD_WRITE_SECTORS);
+    if (!ata_wait_bsy_clear(1000)) return CHIMERA_ERR_TIMEOUT;
 
-    if (!ata_wait_drq()) return CHIMERA_ERR_GENERIC;
+    if (use48) {
+        outb(ATA_PRIMARY_DRIVE_HEAD, 0x40);
+        outb(ATA_PRIMARY_SEC_COUNT, 0);
+        outb(ATA_PRIMARY_LBA_LO, (u8)(lba >> 24));
+        outb(ATA_PRIMARY_LBA_MID, (u8)(lba >> 32));
+        outb(ATA_PRIMARY_LBA_HI, (u8)(lba >> 40));
+        outb(ATA_PRIMARY_SEC_COUNT, 1);
+        outb(ATA_PRIMARY_LBA_LO, (u8)lba);
+        outb(ATA_PRIMARY_LBA_MID, (u8)(lba >> 8));
+        outb(ATA_PRIMARY_LBA_HI, (u8)(lba >> 16));
+        outb(ATA_PRIMARY_STATUS_CMD, ATA_CMD_WRITE_SECTORS_EXT);
+    } else {
+        outb(ATA_PRIMARY_DRIVE_HEAD, 0xE0 | ((lba >> 24) & 0x0F));
+        outb(ATA_PRIMARY_SEC_COUNT, 1);
+        outb(ATA_PRIMARY_LBA_LO, (u8)lba);
+        outb(ATA_PRIMARY_LBA_MID, (u8)(lba >> 8));
+        outb(ATA_PRIMARY_LBA_HI, (u8)(lba >> 16));
+        outb(ATA_PRIMARY_STATUS_CMD, ATA_CMD_WRITE_SECTORS);
+    }
+
+    if (!ata_wait_drq(5000)) {
+        u8 err = inb(ATA_PRIMARY_ERR_FEATURES);
+        kprintf("[ATA] write lba=%llu failed: status error, err=0x%02x\n",
+                (unsigned long long)lba, err);
+        return CHIMERA_ERR_GENERIC;
+    }
 
     const u16 *ptr = (const u16 *)buf;
     for (int i = 0; i < 256; i++) {
         outw(ATA_PRIMARY_DATA, ptr[i]);
     }
+    return CHIMERA_SUCCESS;
+}
 
-    outb(ATA_PRIMARY_STATUS_CMD, ATA_CMD_FLUSH_CACHE);
-    ata_wait_bsy_clear();
-
+// flush write cache: FLUSH CACHE EXT for LBA48 drives, legacy otherwise
+static chimera_error_t ata_flush_cache(void) {
+    if (!ata_wait_bsy_clear(1000)) return CHIMERA_ERR_TIMEOUT;
+    outb(ATA_PRIMARY_DRIVE_HEAD, g_ata_drive.lba48_supported ? 0x40 : 0xE0);
+    outb(ATA_PRIMARY_STATUS_CMD, g_ata_drive.lba48_supported ? 0xEA : ATA_CMD_FLUSH_CACHE);
+    if (!ata_wait_bsy_clear(30000)) return CHIMERA_ERR_TIMEOUT;
     return CHIMERA_SUCCESS;
 }
 
@@ -225,7 +294,7 @@ chimera_error_t ata_read_sectors(u64 lba, u32 count, void *buf) {
 
     u8 *dst = (u8 *)buf;
     for (u32 i = 0; i < count; i++) {
-        chimera_error_t err = ata_read_single_sector_lba28((u32)(lba + i), dst + (i * ATA_SECTOR_SIZE));
+        chimera_error_t err = ata_read_sector(lba + i, dst + (i * ATA_SECTOR_SIZE));
         if (err != CHIMERA_SUCCESS) {
             spinlock_unlock_irqrestore(&s_ata_lock, irq);
             return err;
@@ -246,13 +315,15 @@ chimera_error_t ata_write_sectors(u64 lba, u32 count, const void *buf) {
 
     const u8 *src = (const u8 *)buf;
     for (u32 i = 0; i < count; i++) {
-        chimera_error_t err = ata_write_single_sector_lba28((u32)(lba + i), src + (i * ATA_SECTOR_SIZE));
+        chimera_error_t err = ata_write_sector(lba + i, src + (i * ATA_SECTOR_SIZE));
         if (err != CHIMERA_SUCCESS) {
             spinlock_unlock_irqrestore(&s_ata_lock, irq);
             return err;
         }
     }
 
+    // one cache flush per call instead of one per sector
+    chimera_error_t ferr = ata_flush_cache();
     spinlock_unlock_irqrestore(&s_ata_lock, irq);
-    return CHIMERA_SUCCESS;
+    return ferr;
 }

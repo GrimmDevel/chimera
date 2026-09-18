@@ -16,6 +16,9 @@ typedef struct vfs_entry {
   vnode_t *ve_vnode;
 } vfs_entry_t;
 
+// deleted entries keep path[0] = '\1' so probe chains stay reachable
+#define VFS_TOMBSTONE '\1'
+
 static vfs_entry_t s_registry[VFS_REGISTRY_SIZE];
 static spinlock_t s_registry_lock = SPINLOCK_INIT;
 
@@ -341,25 +344,33 @@ chimera_error_t vfs_register(const char *path, vnode_t *vp) {
 
   irq_flags_t irq = spinlock_lock_irqsave(&s_registry_lock);
 
+  // classic linear probing with tombstones: lookup and register probe until
+  // a truly empty slot, stepping over deleted entries. The old asymmetric
+  // probe limits (register: full table, lookup: 128 slots) made registered
+  // files unfindable once the probe chain grew past 128 collisions.
   u32 idx = vfs_hash(norm) % VFS_REGISTRY_SIZE;
-  u32 probe = 0;
+  int tombstone = -1;
 
-  while (probe < VFS_REGISTRY_SIZE) {
+  for (u32 probe = 0; probe < VFS_REGISTRY_SIZE; probe++) {
     vfs_entry_t *e = &s_registry[idx];
-    if (e->ve_vnode == nullptr) {
+    if (e->ve_path[0] == '\0') {
+      if (tombstone >= 0)
+        e = &s_registry[tombstone]; // reuse a deleted slot
       __builtin_strncpy(e->ve_path, norm, 255);
       e->ve_path[255] = '\0';
       e->ve_vnode = vp;
       spinlock_unlock_irqrestore(&s_registry_lock, irq);
       return CHIMERA_SUCCESS;
     }
-    if (__builtin_strcmp(e->ve_path, norm) == 0) {
+    if (e->ve_path[0] == VFS_TOMBSTONE) {
+      if (tombstone < 0)
+        tombstone = (int)idx;
+    } else if (__builtin_strcmp(e->ve_path, norm) == 0) {
       e->ve_vnode = vp;
       spinlock_unlock_irqrestore(&s_registry_lock, irq);
       return CHIMERA_SUCCESS;
     }
     idx = (idx + 1) % VFS_REGISTRY_SIZE;
-    probe++;
   }
 
   spinlock_unlock_irqrestore(&s_registry_lock, irq);
@@ -380,7 +391,7 @@ chimera_error_t vfs_unregister(const char *path) {
     if (e->ve_vnode && __builtin_strcmp(e->ve_path, norm) == 0) {
       vnode_t *vp_unreg = e->ve_vnode;
       e->ve_vnode = nullptr;
-      e->ve_path[0] = '\0';
+      e->ve_path[0] = VFS_TOMBSTONE; // tombstone: probe chains stay intact
 
       if (vp_unreg && vp_unreg->v_parent) {
         vnode_t *dvp = vp_unreg->v_parent;
@@ -502,39 +513,37 @@ chimera_error_t vfs_lookup(const char *path, vnode_t **vp_out) {
   irq_flags_t irq = spinlock_lock_irqsave(&s_registry_lock);
 
   u32 idx = vfs_hash(norm) % VFS_REGISTRY_SIZE;
-  u32 probe = 0;
 
-  while (probe < 128) {
+  for (u32 probe = 0; probe < VFS_REGISTRY_SIZE; probe++) {
     vfs_entry_t *e = &s_registry[idx];
-    if (e->ve_vnode == nullptr && e->ve_path[0] == '\0') {
-      break;
+    if (e->ve_path[0] == '\0') {
+      break; // end of probe chain: not registered
     }
-    if (e->ve_vnode && __builtin_strcmp(e->ve_path, norm) == 0) {
+    if (e->ve_path[0] != VFS_TOMBSTONE && e->ve_vnode &&
+        __builtin_strcmp(e->ve_path, norm) == 0) {
       *vp_out = e->ve_vnode;
       spinlock_unlock_irqrestore(&s_registry_lock, irq);
       return CHIMERA_SUCCESS;
     }
     idx = (idx + 1) % VFS_REGISTRY_SIZE;
-    probe++;
   }
 
   char path83[256];
   vfs_path_to_83(norm, path83, sizeof(path83));
   if (__builtin_strcmp(norm, path83) != 0) {
     idx = vfs_hash(path83) % VFS_REGISTRY_SIZE;
-    probe = 0;
-    while (probe < 128) {
+    for (u32 probe = 0; probe < VFS_REGISTRY_SIZE; probe++) {
       vfs_entry_t *e = &s_registry[idx];
-      if (e->ve_vnode == nullptr && e->ve_path[0] == '\0') {
+      if (e->ve_path[0] == '\0') {
         break;
       }
-      if (e->ve_vnode && __builtin_strcmp(e->ve_path, path83) == 0) {
+      if (e->ve_path[0] != VFS_TOMBSTONE && e->ve_vnode &&
+          __builtin_strcmp(e->ve_path, path83) == 0) {
         *vp_out = e->ve_vnode;
         spinlock_unlock_irqrestore(&s_registry_lock, irq);
         return CHIMERA_SUCCESS;
       }
       idx = (idx + 1) % VFS_REGISTRY_SIZE;
-      probe++;
     }
   }
 

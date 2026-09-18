@@ -1,5 +1,5 @@
 # XIU Kernel — Core Subsystem Build
-add_executable(chimera_kernel
+add_executable(mach_kernel
     chimera_kernel_main.c
     console.c
     video_console.c
@@ -52,17 +52,19 @@ add_executable(chimera_kernel
     arch/x86_64/smp.c
     arch/x86_64/interrupt.S
     arch/x86_64/syscall_entry.S
+    arch/x86_64/madt.c
+    arch/x86_64/ap_trampoline.S
     arch/x86_64/scheduler.c
     arch/x86_64/switch.S
 )
 
-target_include_directories(chimera_kernel PRIVATE
+target_include_directories(mach_kernel PRIVATE
     ${CMAKE_SOURCE_DIR}/kernel/include
     ${CMAKE_SOURCE_DIR}/kernel
     ${CMAKE_SOURCE_DIR}/drivers
 )
 
-target_link_options(chimera_kernel PRIVATE 
+target_link_options(mach_kernel PRIVATE
     "-nostdlib"
     "-Wl,-e,_chimera_kernel_main"
     "-Wl,-pagezero_size,0"
@@ -73,19 +75,18 @@ target_link_options(chimera_kernel PRIVATE
 )
 
 # Enable C++ for ChimeraKit
-set_target_properties(chimera_kernel PROPERTIES LINKER_LANGUAGE CXX)
-target_compile_options(chimera_kernel PRIVATE
+set_target_properties(mach_kernel PROPERTIES LINKER_LANGUAGE CXX)
+target_compile_options(mach_kernel PRIVATE
     -nostdlib -nostdlibinc -fno-builtin -fno-stack-protector -O2 -Wall -Wextra
+    -fno-omit-frame-pointer
     $<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions -fno-rtti -fno-threadsafe-statics -std=c++20>
 )
 
 option(CHIMERA_VERBOSE "Enable verbose kernel and syscall debug logs" OFF)
 if(CHIMERA_VERBOSE)
-    target_compile_definitions(chimera_kernel PRIVATE CHIMERA_VERBOSE=1)
+    target_compile_definitions(mach_kernel PRIVATE CHIMERA_VERBOSE=1)
 endif()
 
-# All linker flags are handled by the toolchain bypass on macOS
-# to ensure ELF compatibility.
-
-# Ensure symbols are not stripped for debugging
-set_target_properties(chimera_kernel PROPERTIES SUFFIX ".elf")
+# The Darwin toolchain emits a native x86_64 Mach-O executable. Keep the
+# canonical kernel filename in the target itself.
+set_target_properties(mach_kernel PROPERTIES SUFFIX "")

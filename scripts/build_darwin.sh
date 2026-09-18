@@ -4,10 +4,24 @@
 
 set -e
 
+# Stage-0 multicore baseline: keep one vCPU by default.  Explicit higher
+# values are reserved for controlled SMP bring-up tests.
+CHIMERA_VCPUS="${CHIMERA_VCPUS:-1}"
+case "$CHIMERA_VCPUS" in
+    ''|*[!0-9]*|0)
+        echo "[QEMU] Error: CHIMERA_VCPUS must be an integer from 1 to 16."
+        exit 1
+        ;;
+esac
+if [ "$CHIMERA_VCPUS" -gt 16 ]; then
+    echo "[QEMU] Error: CHIMERA_VCPUS must not exceed 16."
+    exit 1
+fi
+
 echo "[BUILD] Compiling kernel + userspace (CMake)..."
 cmake -B build -DCMAKE_TOOLCHAIN_FILE=$(pwd)/cmake/toolchain-x86_64.cmake . 2>/dev/null
 cmake --build build -j$(sysctl -n hw.ncpu 2>/dev/null || nproc)
-cp build/kernel/chimera_kernel.elf mach_kernel
+cp build/kernel/mach_kernel mach_kernel
 
 echo "[BUILD] Compiling standalone efiloader to BOOTX64.EFI..."
 clang -target x86_64-unknown-windows \
@@ -21,6 +35,7 @@ mkdir -p build
 ./scripts/make_efi_img.sh
 
 echo "[QEMU] Booting via UEFI (OVMF)..."
+echo "[QEMU] vCPUs: $CHIMERA_VCPUS"
 
 # Locate OVMF
 OVMF_PATH=""
@@ -39,11 +54,17 @@ else
     QEMU_BIOS="-drive if=pflash,format=raw,readonly=on,file=$OVMF_PATH"
 fi
 
+# The SMP scheduler is still under bring-up; one vCPU avoids concurrent
+# context switches while preserving deterministic interactive boot.
 qemu-system-x86_64 \
-    -m 2G -smp 4 \
+    -no-reboot \
+    -m 2G -smp "$CHIMERA_VCPUS" \
     -M q35 -cpu max \
     $QEMU_BIOS \
     -drive format=raw,file=build/disk.img \
     -serial stdio \
     -display cocoa,zoom-to-fit=on \
-    -device virtio-vga
+    -device virtio-vga \
+    -device qemu-xhci,id=xhci \
+    -device usb-kbd,bus=xhci.0 \
+    -device usb-mouse,bus=xhci.0

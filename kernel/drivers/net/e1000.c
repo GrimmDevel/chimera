@@ -4,6 +4,7 @@
 #include <net/protocols.h>
 #include <kernel/panic.h>
 #include <kernel/spinlock.h>
+#include <kernel/panic.h>
 
 extern chimera_paddr_t pmm_alloc_pages(usize count);
 extern u64 g_hhdm_base;
@@ -53,6 +54,11 @@ extern u64 g_hhdm_base;
 
 #define RDESC_STAT_DD   (1u << 0)
 #define RDESC_STAT_EOP  (1u << 1)
+
+#define E1000_VECTOR    0x50
+#define ICR_TXDW        (1u << 0)
+#define ICR_LSC         (1u << 2)
+#define ICR_RXT0        (1u << 7)
 
 #define TDESC_CMD_EOP   (1u << 0)
 #define TDESC_CMD_IFCS  (1u << 1)
@@ -245,6 +251,26 @@ static chimera_error_t e1000_ifnet_output(ifnet_t *ifp, mbuf_t *m, struct in_add
     return e1000_transmit_frame(packet_buf, total_len);
 }
 
+// interrupt service routine (MSI vector E1000_VECTOR): drain the RX ring and
+// acknowledge the device. Called from interrupt_handler with lapic EOI after.
+void e1000_isr(void) {
+    if (!g_e1000_present) return;
+    e1000_softc_t *sc = &g_e1000;
+    u32 icr = e1000_read(sc, REG_ICR);
+    if (icr == 0) return;
+
+    if (icr & (ICR_RXT0 | ICR_TXDW)) {
+        e1000_poll_rx(); // ring drain under sc->lock (irqsave, ISR-safe)
+    }
+    e1000_write(sc, REG_ICR, icr); // write-back clears the raised causes
+
+    static bool s_first_irq = false;
+    if (!s_first_irq) {
+        s_first_irq = true;
+        kprintf("[e1000] interrupt path active (MSI)\n");
+    }
+}
+
 chimera_error_t e1000_init(u64 bar0_phys) {
     e1000_softc_t *sc = &g_e1000;
     __builtin_memset(sc, 0, sizeof(*sc));
@@ -331,6 +357,23 @@ chimera_error_t e1000_init(u64 bar0_phys) {
 
     if_attach(&sc->ifnet);
     g_e1000_present = true;
+
+    // switch the device to MSI and arm receive/transmit interrupts
+    extern bool pci_enable_msi(u8 bus, u8 dev, u8 func, u8 vector);
+    extern u32 g_e1000_pci_bdf;
+    if (g_e1000_pci_bdf != 0xFFFFFFFFu) {
+        bool ok = pci_enable_msi((u8)(g_e1000_pci_bdf >> 16),
+                                 (u8)((g_e1000_pci_bdf >> 8) & 0xFF),
+                                 (u8)(g_e1000_pci_bdf & 0xFF), E1000_VECTOR);
+        if (ok) {
+            // RX timer expire + TX descriptor writeback; LSC left off to
+            // avoid link-change storms during init
+            e1000_write(sc, REG_IMS, ICR_RXT0 | ICR_TXDW);
+            kprintf("[e1000] MSI enabled (vector 0x%x)\n", E1000_VECTOR);
+        } else {
+            kprintf("[e1000] MSI capability not found — staying on polling\n");
+        }
+    }
 
     kprintf("  [  OK  ]  Intel e1000 Gigabit Ethernet (en0 attached)\n");
     return CHIMERA_SUCCESS;

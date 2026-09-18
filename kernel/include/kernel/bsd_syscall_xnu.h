@@ -40,6 +40,7 @@ extern "C" {
 #define SYS_pipe            42
 #define SYS_getegid         43
 #define SYS_sigaction       46
+#define SYS_sigreturn       184
 #define SYS_getgid          47
 #define SYS_sigprocmask     48
 #define SYS_getlogin        49

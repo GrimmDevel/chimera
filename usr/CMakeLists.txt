@@ -6,9 +6,15 @@
 cmake_minimum_required(VERSION 3.20)
 project(chimera_user)
 
-# Configure compiler flags for Darwin Mach-O x86_64
+# Configure compiler flags for native Darwin Mach-O userspace.
+if(CMAKE_SYSTEM_PROCESSOR STREQUAL "aarch64")
+    set(CHIMERA_USER_TARGET "aarch64-apple-darwin")
+else()
+    set(CHIMERA_USER_TARGET "x86_64-apple-darwin")
+endif()
+
 add_compile_options(
-    --target=x86_64-apple-darwin
+    --target=${CHIMERA_USER_TARGET}
     -static
     -nostdlib
     -fno-stack-protector
@@ -21,7 +27,7 @@ add_compile_options(
 
 # Custom link command for static Mach-O executables via Clang / Apple ld
 set(CMAKE_C_LINK_EXECUTABLE 
-    "${CMAKE_C_COMPILER} --target=x86_64-apple-darwin -static -nostdlib -Wl,-e,_start -Wl,-pagezero_size,0x1000 <OBJECTS> -o <TARGET> <LINK_LIBRARIES> <LINK_FLAGS>")
+    "${CMAKE_C_COMPILER} --target=${CHIMERA_USER_TARGET} -static -nostdlib -Wl,-e,_start -Wl,-pagezero_size,0x1000 <OBJECTS> -o <TARGET> <LINK_LIBRARIES> <LINK_FLAGS>")
 
 include_directories(
     libsystem/include
@@ -447,6 +453,14 @@ target_link_libraries(ping system_chimera)
 add_executable(nc bin/nc.c)
 chimera_add_user_crt(nc)
 target_link_libraries(nc system_chimera)
+
+add_executable(srv bin/srv.c)
+chimera_add_user_crt(srv)
+target_link_libraries(srv system_chimera)
+
+add_executable(launchd bin/launchd.c)
+chimera_add_user_crt(launchd)
+target_link_libraries(launchd system_chimera)
 
 add_executable(curl bin/curl.c)
 chimera_add_user_crt(curl)
@@ -1152,5 +1166,4 @@ target_compile_definitions(flashfetch PRIVATE
     -DFASTFETCH_DATATEXT_JSON_HELP="{}"
 )
 target_compile_options(flashfetch PRIVATE -std=c23 -Wno-everything)
-
 

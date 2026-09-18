@@ -139,16 +139,125 @@ chimera_error_t soconnect(socket_t *so, struct sockaddr *nam) {
     return CHIMERA_ERR_NOT_SUPPORTED;
 }
 
+void so_free(socket_t *so);
+socket_t *so_new_child(socket_t *head);
+socket_t *tcp_child_socket(socket_t *head);
+
 chimera_error_t solisten(socket_t *so, int backlog) {
     if (!so) return CHIMERA_ERR_INVALID;
-    so->so_qlimit = (i16)(backlog > 0 ? backlog : 5);
-    return CHIMERA_SUCCESS;
+    if (so->so_type != SOCK_STREAM) return CHIMERA_ERR_NOT_SUPPORTED;
+    so->so_qlimit = (i16)(backlog > 0 ? (backlog > 16 ? 16 : backlog) : 5);
+    so->so_head = so; // self: this socket is a listening head
+    extern chimera_error_t tcp_listen(socket_t *so);
+    return tcp_listen(so);
+}
+
+// ── BSD-style incomplete/complete accept queues (so_q0 / so_q) ──────────────
+socket_t *tcp_child_socket(socket_t *head) { return so_new_child(head); }
+
+socket_t *so_new_child(socket_t *head) {
+    if (!head) return nullptr;
+
+    irq_flags_t flags = spinlock_lock_irqsave(&s_so_pool_lock);
+    socket_t *so = nullptr;
+    for (int i = 0; i < MAX_SOCKETS; i++) {
+        if (s_socket_pool[i].so_signature != CHIMERA_SOCKET_MAGIC) {
+            so = &s_socket_pool[i];
+            break;
+        }
+    }
+    if (!so) {
+        spinlock_unlock_irqrestore(&s_so_pool_lock, flags);
+        return nullptr;
+    }
+
+    __builtin_memset(so, 0, sizeof(*so));
+    so->so_signature = CHIMERA_SOCKET_MAGIC;
+    so->so_type = head->so_type;
+    so->so_refcount = 1;
+    so->so_head = head;
+    spinlock_init(&so->so_lock);
+    spinlock_init(&so->so_snd.sb_lock);
+    spinlock_init(&so->so_rcv.sb_lock);
+    so->so_snd.sb_hiwat = SB_MAX;
+    so->so_rcv.sb_hiwat = SB_MAX;
+    spinlock_unlock_irqrestore(&s_so_pool_lock, flags);
+
+    // incomplete-connection queue (syn received, not yet established)
+    irq_flags_t hflags = spinlock_lock_irqsave(&head->so_lock);
+    so->so_q0 = head->so_q0;
+    head->so_q0 = so;
+    spinlock_unlock_irqrestore(&head->so_lock, hflags);
+    return so;
+}
+
+// handshake finished: move a child from the incomplete queue to the accept queue
+void so_q0_to_q(socket_t *child) {
+    if (!child || !child->so_head) return;
+    socket_t *head = child->so_head;
+
+    irq_flags_t hflags = spinlock_lock_irqsave(&head->so_lock);
+    // unlink from so_q0
+    socket_t **pp = &head->so_q0;
+    while (*pp && *pp != child) pp = &(*pp)->so_q0;
+    if (*pp == child) {
+        *pp = child->so_q0;
+        child->so_q0 = nullptr;
+        // append to the complete queue (so_q links via so_q of each? BSD uses
+        // so_q as the "next" link inside the complete queue)
+        socket_t *tail = head->so_q;
+        if (!tail) {
+            head->so_q = child;
+        } else {
+            while (tail->so_q) tail = tail->so_q;
+            tail->so_q = child;
+        }
+        child->so_q = nullptr;
+        head->so_qlen++;
+    }
+    spinlock_unlock_irqrestore(&head->so_lock, hflags);
+}
+
+void so_discard_child(socket_t *child) {
+    if (!child) return;
+    socket_t *head = child->so_head;
+    if (head) {
+        irq_flags_t hflags = spinlock_lock_irqsave(&head->so_lock);
+        socket_t **pp = &head->so_q0;
+        while (*pp && *pp != child) pp = &(*pp)->so_q0;
+        if (*pp == child) *pp = child->so_q0;
+        spinlock_unlock_irqrestore(&head->so_lock, hflags);
+    }
+    so_free(child);
+}
+
+void so_free(socket_t *so) {
+    if (!so || so->so_signature != CHIMERA_SOCKET_MAGIC) return;
+    irq_flags_t flags = spinlock_lock_irqsave(&s_so_pool_lock);
+    if (so->so_signature == CHIMERA_SOCKET_MAGIC) {
+        so->so_signature = 0;
+        so->so_pcb = nullptr;
+    }
+    spinlock_unlock_irqrestore(&s_so_pool_lock, flags);
 }
 
 chimera_error_t soaccept(socket_t *so, struct sockaddr **nam, socket_t **new_so) {
     (void)nam;
     if (!so || !new_so) return CHIMERA_ERR_INVALID;
-    return CHIMERA_ERR_NOT_SUPPORTED;
+
+    irq_flags_t flags = spinlock_lock_irqsave(&so->so_lock);
+    socket_t *conn = so->so_q;
+    if (conn) {
+        so->so_q = conn->so_q;
+        conn->so_q = nullptr;
+        conn->so_head = nullptr;
+        if (so->so_qlen > 0) so->so_qlen--;
+    }
+    spinlock_unlock_irqrestore(&so->so_lock, flags);
+
+    if (!conn) return CHIMERA_ERR_WOULDBLOCK;
+    *new_so = conn;
+    return CHIMERA_SUCCESS;
 }
 
 chimera_error_t sosend(socket_t *so, struct sockaddr *addr, const void *buf, usize len, int flags) {

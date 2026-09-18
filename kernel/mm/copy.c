@@ -17,9 +17,16 @@
 #define USER_STACK_MAX      0x00007FFFFFFFFFFFULL
 
 extern u64 pmap_extract(u64 pml4_phys, u64 vaddr);
-extern u64 pmap_map_user_page(u64 target_pml4_phys, u64 vaddr, u64 paddr, u32 flags);
+extern u64 pmap_map_user_page(u64 target_pml4_phys, u64 vaddr, u64 paddr, u64 flags);
+extern u64 *pmap_get_pte_ptr(u64 pml4_phys, u64 vaddr);
+extern bool pmap_handle_cow_fault(u64 pml4_phys, u64 fault_va);
 extern chimera_paddr_t pmm_alloc_page(void);
 extern void pmm_release_page(chimera_paddr_t paddr);
+
+#define COPY_PAGE_PRESENT (1ULL << 0)
+#define COPY_PAGE_WRITE   (1ULL << 1)
+#define COPY_PAGE_COW     (1ULL << 9)
+#define COPY_PTE_PHYS     0x000FFFFFFFFFF000ULL
 
 static inline u64 get_active_pml4(void) {
     u64 cr3;
@@ -78,8 +85,15 @@ chimera_error_t copyout(const void *kaddr, void *uaddr, usize len) {
     usize remaining = len;
 
     while (remaining > 0) {
-        u64 phys = pmap_extract(pml4_phys, curr_uaddr);
-        if (!phys) {
+        u64 phys = 0;
+
+        // Resolve the raw PTE so permission bits are honored: writing to a
+        // read-only page through the physical map would bypass COW and
+        // silently corrupt the parent's memory after fork().
+        u64 *pte_ptr = pmap_get_pte_ptr(pml4_phys, curr_uaddr);
+        u64 pte = pte_ptr ? *pte_ptr : 0;
+
+        if (!(pte & COPY_PAGE_PRESENT)) {
             u64 page_vaddr = curr_uaddr & ~0xFFFULL;
             if (page_vaddr >= USER_STACK_MIN && page_vaddr <= USER_STACK_MAX) {
                 u64 new_paddr = pmm_alloc_page();
@@ -87,21 +101,39 @@ chimera_error_t copyout(const void *kaddr, void *uaddr, usize len) {
                     return CHIMERA_ERR_INVALID;
                 void *hhdm = (void *)(new_paddr + HHDM_BASE);
                 __builtin_memset(hhdm, 0, 4096);
-                if (pmap_map_user_page(pml4_phys, page_vaddr, new_paddr, 0x01 | 0x02 | 0x04) == 0) {
+                // stack pages are data: W^X, never executable
+                if (pmap_map_user_page(pml4_phys, page_vaddr, new_paddr,
+                                       0x01 | 0x02 | 0x04 | (1ULL << 63)) == 0) {
                     pmm_release_page(new_paddr);
                     return CHIMERA_ERR_INVALID;
                 }
-                phys = new_paddr | (curr_uaddr & 0xFFF);
+                phys = new_paddr;
             } else {
                 return CHIMERA_ERR_INVALID;
             }
+        } else if (!(pte & COPY_PAGE_WRITE)) {
+            if (pte & COPY_PAGE_COW) {
+                // COW page: break copy-on-write first, then re-read the PTE
+                if (!pmap_handle_cow_fault(pml4_phys, curr_uaddr & ~0xFFFULL))
+                    return CHIMERA_ERR_INVALID;
+                pte_ptr = pmap_get_pte_ptr(pml4_phys, curr_uaddr);
+                pte = pte_ptr ? *pte_ptr : 0;
+                if (!(pte & COPY_PAGE_PRESENT) || !(pte & COPY_PAGE_WRITE))
+                    return CHIMERA_ERR_INVALID;
+                phys = pte & COPY_PTE_PHYS;
+            } else {
+                // genuinely read-only mapping
+                return CHIMERA_ERR_INVALID;
+            }
+        } else {
+            phys = pte & COPY_PTE_PHYS;
         }
 
         uptr page_offset = curr_uaddr & 0xFFF;
         usize chunk = 4096 - page_offset;
         if (chunk > remaining) chunk = remaining;
 
-        void *hhdm_ptr = (void *)((phys & ~0xFFFULL) + HHDM_BASE + page_offset);
+        void *hhdm_ptr = (void *)(phys + HHDM_BASE + page_offset);
         __builtin_memcpy(hhdm_ptr, (const void *)curr_kaddr, chunk);
 
         curr_uaddr += chunk;

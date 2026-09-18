@@ -12,6 +12,8 @@ extern void kprintf(const char *fmt, ...);
 
 #define PAGE_PRESENT (1ULL << 0)
 #define PAGE_WRITE   (1ULL << 1)
+#define PAGE_PWT     (1ULL << 3)
+#define PAGE_PCD     (1ULL << 4)
 #define PAGE_USER    (1ULL << 2)
 #define PAGE_COW     (1ULL << 9)  /* Available for OS: Copy-on-Write bit */
 #define PTE_PHYS_MASK 0x000FFFFFFFFFF000ULL
@@ -21,6 +23,63 @@ extern void pmm_release_page(chimera_paddr_t addr);
 
 static u64 s_kernel_pml4_phys = 0;
 static spinlock_t s_pmap_lock = SPINLOCK_INIT;
+
+// ── signal trampoline ("mini-vdso") ──────────────────────────────────────────
+// One global physical page holding a static entry stub, mapped USER+RX into
+// every address space at a fixed VA. Signal delivery only places DATA (sig,
+// handler, ctx pointer) on the user's (NX) stack and redirects execution to
+// this page; executable code must never live on the stack itself.
+static u64 s_tramp_phys = 0;
+
+// static stub, reads everything from the per-delivery stack slots:
+//   mov rdi, [rsp]        ; sig
+//   call qword [rsp+8]    ; handler(sig)
+//   mov rdi, [rsp+16]     ; &sigctx
+//   mov eax, 184          ; SYS_sigreturn
+//   syscall
+static const u8 s_tramp_code[] = {
+    0x48, 0x8B, 0x3C, 0x24,
+    0xFF, 0x54, 0x24, 0x08,
+    0x48, 0x8B, 0x7C, 0x24, 0x10,
+    0xB8, 0xB8, 0x00, 0x00, 0x00,
+    0x0F, 0x05
+};
+
+static u64 pmap_map_user_page_unlocked(u64 target_pml4_phys, u64 vaddr,
+                                       u64 paddr, u64 flags);
+static inline u64 *get_table_ptr(u64 phys);
+
+static inline u64 va_of(u64 pml4_i, u64 pdpt_i, u64 pd_i, u64 pt_i) {
+    return (pml4_i << 39) | (pdpt_i << 30) | (pd_i << 21) | (pt_i << 12);
+}
+
+bool pmap_is_trampoline_va(u64 va) {
+    return (va & ~0xFFFULL) == SIGNAL_TRAMP_VA;
+}
+
+void pmap_trampoline_install(u64 pml4_phys) {
+    irq_flags_t irq = spinlock_lock_irqsave(&s_pmap_lock);
+
+    if (s_tramp_phys == 0) {
+        u64 phys = pmm_alloc_page();
+        if (phys == 0 || phys == (u64)-1) {
+            spinlock_unlock_irqrestore(&s_pmap_lock, irq);
+            kprintf("pmap: out of memory for signal trampoline page\n");
+            return;
+        }
+        u8 *dst = (u8 *)(phys + g_hhdm_base);
+        __builtin_memset(dst, 0x90, 4096); // nop-fill for safe overruns
+        __builtin_memcpy(dst, s_tramp_code, sizeof(s_tramp_code));
+        s_tramp_phys = phys;
+        // one permanent reference: the page is never released via PTE sweeps
+        pmm_retain_page(phys);
+    }
+
+    // USER+RX: present, no write, no NX
+    pmap_map_user_page_unlocked(pml4_phys, SIGNAL_TRAMP_VA, s_tramp_phys,
+                                PAGE_USER);
+    spinlock_unlock_irqrestore(&s_pmap_lock, irq);
+}
 
 void pmap_bootstrap(void) {
     u64 cr3;
@@ -33,6 +92,69 @@ void pmap_bootstrap(void) {
 
 u64 pmap_kernel_pml4(void) {
     return s_kernel_pml4_phys;
+}
+
+/*
+ * Map device memory into the kernel's direct-map address range.  Firmware
+ * commonly places PCI BARs above installed RAM; those addresses are not part
+ * of the bootloader-created HHDM and must be explicitly mapped before a
+ * driver dereferences them.
+ */
+void *pmap_map_kernel_mmio(u64 paddr, usize size) {
+    if (!s_kernel_pml4_phys || size == 0) return nullptr;
+
+    const u64 page_offset = paddr & 0xFFFULL;
+    const u64 phys_start = paddr & PTE_PHYS_MASK;
+    const u64 page_count = (page_offset + size + 0xFFFULL) >> 12;
+    const u64 virt_start = g_hhdm_base + phys_start;
+    irq_flags_t irq = spinlock_lock_irqsave(&s_pmap_lock);
+
+    u64 *pml4 = get_table_ptr(s_kernel_pml4_phys);
+    for (u64 page = 0; page < page_count; page++) {
+        u64 va = virt_start + (page << 12);
+        u64 pa = phys_start + (page << 12);
+        u64 *pml4e = &pml4[(va >> 39) & 0x1FF];
+        if (!(*pml4e & PAGE_PRESENT)) {
+            u64 table_phys = pmm_alloc_page();
+            if (table_phys == 0 || table_phys == (u64)-1) goto failed;
+            __builtin_memset(get_table_ptr(table_phys), 0, 4096);
+            *pml4e = table_phys | PAGE_PRESENT | PAGE_WRITE;
+        }
+
+        u64 *pdpt = get_table_ptr(*pml4e);
+        u64 *pdpte = &pdpt[(va >> 30) & 0x1FF];
+        if (!(*pdpte & PAGE_PRESENT)) {
+            u64 table_phys = pmm_alloc_page();
+            if (table_phys == 0 || table_phys == (u64)-1) goto failed;
+            __builtin_memset(get_table_ptr(table_phys), 0, 4096);
+            *pdpte = table_phys | PAGE_PRESENT | PAGE_WRITE;
+        } else if (*pdpte & (1ULL << 7)) {
+            continue;
+        }
+
+        u64 *pd = get_table_ptr(*pdpte);
+        u64 *pde = &pd[(va >> 21) & 0x1FF];
+        if (!(*pde & PAGE_PRESENT)) {
+            u64 table_phys = pmm_alloc_page();
+            if (table_phys == 0 || table_phys == (u64)-1) goto failed;
+            __builtin_memset(get_table_ptr(table_phys), 0, 4096);
+            *pde = table_phys | PAGE_PRESENT | PAGE_WRITE;
+        } else if (*pde & (1ULL << 7)) {
+            continue;
+        }
+
+        u64 *pt = get_table_ptr(*pde);
+        pt[(va >> 12) & 0x1FF] = pa | PAGE_PRESENT | PAGE_WRITE |
+                                  PAGE_PWT | PAGE_PCD;
+        __asm__ volatile("invlpg (%0)" : : "r"(va) : "memory");
+    }
+
+    spinlock_unlock_irqrestore(&s_pmap_lock, irq);
+    return (void *)(virt_start + page_offset);
+
+failed:
+    spinlock_unlock_irqrestore(&s_pmap_lock, irq);
+    return nullptr;
 }
 
 static inline u64 *get_table_ptr(u64 phys) {
@@ -57,6 +179,8 @@ u64 pmap_create(void) {
     }
 
     spinlock_unlock_irqrestore(&s_pmap_lock, irq);
+
+    pmap_trampoline_install(pml4_phys);
     return pml4_phys;
 }
 
@@ -78,7 +202,7 @@ u64 *pmap_get_pte_ptr(u64 pml4_phys, u64 vaddr) {
     return &pt[(vaddr >> 12) & 0x1FF];
 }
 
-static u64 pmap_map_user_page_unlocked(u64 target_pml4_phys, u64 vaddr, u64 paddr, u32 flags) {
+static u64 pmap_map_user_page_unlocked(u64 target_pml4_phys, u64 vaddr, u64 paddr, u64 flags) {
     if (!target_pml4_phys || vaddr < 0x1000 || vaddr >= 0x0000800000000000ULL)
         return 0;
 
@@ -121,11 +245,19 @@ static u64 pmap_map_user_page_unlocked(u64 target_pml4_phys, u64 vaddr, u64 padd
     }
 
     u64 *pt = get_table_ptr(pd[pd_idx]);
+    // Replacing an already-present PTE: drop the old mapping's reference so
+    // fixed-address remaps stop leaking physical pages. Skip when remapping
+    // the very same frame (e.g. framebuffer re-mmap).
+    u64 old_pte = pt[pt_idx];
+    if ((old_pte & PAGE_PRESENT) && (old_pte & PTE_PHYS_MASK) != (paddr & PTE_PHYS_MASK) &&
+        !pmap_is_trampoline_va(vaddr)) {
+        pmm_release_page(old_pte & PTE_PHYS_MASK);
+    }
     pt[pt_idx] = (paddr & PTE_PHYS_MASK) | flags | PAGE_PRESENT | PAGE_USER;
     return paddr;
 }
 
-u64 pmap_map_user_page(u64 target_pml4_phys, u64 vaddr, u64 paddr, u32 flags) {
+u64 pmap_map_user_page(u64 target_pml4_phys, u64 vaddr, u64 paddr, u64 flags) {
     irq_flags_t irq = spinlock_lock_irqsave(&s_pmap_lock);
     u64 ret = pmap_map_user_page_unlocked(target_pml4_phys, vaddr, paddr, flags);
     spinlock_unlock_irqrestore(&s_pmap_lock, irq);
@@ -310,7 +442,9 @@ void pmap_destroy_user_space(u64 pml4_phys) {
 
                     u64 phys = pte & PTE_PHYS_MASK;
                     pt[pt_i] = 0;
-                    pmm_release_page(phys);
+                    if (!pmap_is_trampoline_va(
+                            va_of(pml4_i, pdpt_i, pd_i, pt_i)))
+                        pmm_release_page(phys);
                 }
 
                 // free PT page
@@ -336,7 +470,7 @@ void pmap_destroy_user_space(u64 pml4_phys) {
     spinlock_unlock_irqrestore(&s_pmap_lock, irq);
 }
 
-void pmap_unmap_user_range(u64 pml4_phys, u64 vaddr, usize len) {
+void pmap_unmap_user_range_ex(u64 pml4_phys, u64 vaddr, usize len, bool release_pages) {
     if (!pml4_phys || len == 0) return;
     irq_flags_t irq = spinlock_lock_irqsave(&s_pmap_lock);
 
@@ -348,13 +482,20 @@ void pmap_unmap_user_range(u64 pml4_phys, u64 vaddr, usize len) {
         if (pte_ptr && (*pte_ptr & PAGE_PRESENT)) {
             u64 phys = *pte_ptr & PTE_PHYS_MASK;
             *pte_ptr = 0;
-            pmm_release_page(phys);
+            // release_pages=false for pages not owned by the PMM:
+            // framebuffer MMIO and the shared signal trampoline page
+            if (release_pages && !pmap_is_trampoline_va(va))
+                pmm_release_page(phys);
         }
     }
 
     smp_tlb_flush_range(start, end - start);
 
     spinlock_unlock_irqrestore(&s_pmap_lock, irq);
+}
+
+void pmap_unmap_user_range(u64 pml4_phys, u64 vaddr, usize len) {
+    pmap_unmap_user_range_ex(pml4_phys, vaddr, len, true);
 }
 
 void pmap_clear_user_mappings(u64 pml4_phys) {
@@ -387,7 +528,9 @@ void pmap_clear_user_mappings(u64 pml4_phys) {
 
                     u64 phys = pte & PTE_PHYS_MASK;
                     pt[pt_i] = 0;
-                    pmm_release_page(phys);
+                    if (!pmap_is_trampoline_va(
+                            va_of(pml4_i, pdpt_i, pd_i, pt_i)))
+                        pmm_release_page(phys);
                 }
 
                 pmm_release_page(pde & PTE_PHYS_MASK);
@@ -475,4 +618,3 @@ bool pmap_handle_cow_fault(u64 pml4_phys, u64 fault_va) {
     spinlock_unlock_irqrestore(&s_pmap_lock, irq);
     return true;
 }
-

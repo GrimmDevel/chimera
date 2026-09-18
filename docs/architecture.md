@@ -3,7 +3,7 @@
 Hybrid Mach/BSD kernel for x86_64, modeled after Apple XNU / Darwin.
 
 ## Memory Map
-- Limine protocol loads kernel to higher-half `-2GB` (`0xFFFFFFFF80000000`)
+- The custom UEFI loader maps the Mach-O kernel to the higher-half `-2GB` (`0xFFFFFFFF80000000`)
 - `g_hhdm_base` maps all physical memory 1:1 at `0xFFFF800000000000` (HHDM)
 - Userspace virtual address space covers `0x0000000000001000` to `0x00007FFFFFFFFFFF`
 - User stack grows down from `0x00007FFFFFFF0000`

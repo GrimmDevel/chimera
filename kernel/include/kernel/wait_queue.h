@@ -37,6 +37,19 @@ chimera_error_t wait_queue_sleep_irqrestore(wait_queue_t *wq, spinlock_t *lock,
                                         irq_flags_t flags);
 
 /*
+ * wait_queue_sleep_until_irqrestore — Bounded block: like
+ *   wait_queue_sleep_irqrestore, but the thread is also registered on the
+ *   kernel timer sleep list with an absolute uptime-ms deadline, so the wait
+ *   ends even when no explicit wakeup arrives (the PIT wakes expired
+ *   sleepers). Callers must re-check their condition and treat every wake
+ *   as possibly spurious.
+ */
+chimera_error_t wait_queue_sleep_until_irqrestore(wait_queue_t *wq,
+                                                  u64 deadline_ms,
+                                                  spinlock_t *lock,
+                                                  irq_flags_t flags);
+
+/*
  * wait_queue_wakeup_one — Wake the first thread in the queue.
  */
 void wait_queue_wakeup_one(wait_queue_t *wq);

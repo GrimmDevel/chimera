@@ -8,6 +8,7 @@
 extern "C" void kprintf(const char *fmt, ...);
 extern "C" chimera_paddr_t pmm_alloc_page(void);
 extern "C" chimera_paddr_t pmm_alloc_pages(usize count);
+extern "C" void *pmap_map_kernel_mmio(u64 paddr, usize size);
 extern "C" void console_in_push(char c);
 extern "C" void console_scroll_viewport(int delta);
 extern "C" void console_scroll_to_bottom(void);
@@ -39,6 +40,8 @@ extern "C" void chimerakit_hid_push_mouse_event(i32 dx, i32 dy, i32 dz,
 #define XHCI_CMD_RS (1U << 0)
 #define XHCI_CMD_HCRST (1U << 1)
 #define XHCI_CMD_INTE (1U << 2)
+
+#define XHCI_IMAN_IE (1U << 1)
 
 #define XHCI_STS_HCH (1U << 0)
 #define XHCI_STS_CNR (1U << 11)
@@ -154,6 +157,7 @@ private:
 
   xhci_device_t m_devices[XHCI_MAX_DEVICES];
   u32 m_num_devices = 0;
+  u32 m_hid_debug_events = 0;
 
   spinlock_t m_lock = {};
   bool m_initialized = false;
@@ -778,7 +782,14 @@ public:
     if (!pci_bar0 || m_initialized)
       return;
 
-    m_mmio_base = pci_bar0 + g_hhdm_base;
+    // QEMU and real firmware may assign a PCI BAR above installed RAM.  Such
+    // addresses are outside the bootloader's RAM-only HHDM and need a kernel
+    // page-table mapping before the capability registers are read.
+    m_mmio_base = (u64)pmap_map_kernel_mmio(pci_bar0, 0x10000);
+    if (!m_mmio_base) {
+      kprintf("[xHCI] Failed to map MMIO BAR at phys 0x%016llx\n", pci_bar0);
+      return;
+    }
     m_caplength = *(volatile u8 *)(m_mmio_base + XHCI_CAP_CAPLENGTH);
     m_op_base = m_mmio_base + m_caplength;
 
@@ -872,10 +883,15 @@ public:
     write_mmio32(m_interrupter0 + 0x08, 1);
     write_mmio64(m_interrupter0 + 0x10, m_erst_phys);
     write_mmio64(m_interrupter0 + 0x18, m_ev_ring_phys | (1ULL << 3));
-    write_mmio32(m_interrupter0 + 0x00, read_mmio32(m_interrupter0 + 0x00) | 2);
+    // HID events are serviced by chimerakit_hid_poll().  Do not enable the
+    // xHCI interrupt until an IRQ/MSI vector and handler are installed: an
+    // enabled, unacknowledged interrupt can hold the legacy IRQ line active
+    // and starve the scheduler.
+    u32 iman = read_mmio32(m_interrupter0 + 0x00);
+    write_mmio32(m_interrupter0 + 0x00, iman & ~XHCI_IMAN_IE);
 
     // must run controller before writing PP
-    write_mmio32(m_op_base + XHCI_OP_USBCMD, XHCI_CMD_RS | XHCI_CMD_INTE);
+    write_mmio32(m_op_base + XHCI_OP_USBCMD, XHCI_CMD_RS);
     for (int i = 0; i < 50; i++) {
       if (!(read_mmio32(m_op_base + XHCI_OP_USBSTS) & XHCI_STS_HCH))
         break;
@@ -1192,6 +1208,18 @@ public:
                 (const u8 *)(m_devices[i].report_buffer_phys + g_hhdm_base);
             // cc 1=Success, 13=Short Packet — both valid for HID interrupt IN
             if (cc == 1 || cc == 13) {
+              // Keep this bounded: poll_events() runs from the timer path.
+              // These lines distinguish missing QEMU focus/input from a
+              // failure to process xHCI transfer completions.
+              if (m_hid_debug_events < 32) {
+                kprintf("[xHCI] HID %s event #%u: slot=%u dci=%u cc=%u "
+                        "report=%02x %02x %02x %02x %02x %02x %02x %02x\n",
+                        m_devices[i].ep_type == 1 ? "keyboard" : "mouse",
+                        m_hid_debug_events + 1, slot, dci, cc, report[0],
+                        report[1], report[2], report[3], report[4], report[5],
+                        report[6], report[7]);
+                m_hid_debug_events++;
+              }
               if (m_devices[i].ep_type == 1) {
                 decode_usb_keyboard(&m_devices[i], report);
               } else {

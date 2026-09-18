@@ -14,7 +14,10 @@ extern "C" void console_scroll_to_bottom(void);
 #define PS2_CMD 0x64
 #define PS2_STATUS 0x64
 
+#include <kernel/spinlock.h>
 namespace XIUKit {
+static spinlock_t s_hid_lock = {};  // zero-init = unlocked ticket lock
+
 
 template <typename T, size_t Size> class RingBuffer {
 private:
@@ -495,8 +498,11 @@ extern "C" void chimerakit_hid_irq_handler(void) {
 }
 
 extern "C" void chimerakit_hid_poll(void) {
+  irq_flags_t _hl = spinlock_lock_irqsave(&XIUKit::s_hid_lock);
   XIUKit::s_hid.handle_irq();
   chimerakit_xhci_poll();
+
+  spinlock_unlock_irqrestore(&XIUKit::s_hid_lock, _hl);
 }
 
 extern "C" void chimerakit_hid_init() { XIUKit::s_hid.init(); }

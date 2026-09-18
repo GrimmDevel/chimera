@@ -12,6 +12,7 @@
 #include <kernel/proc.h>
 
 extern void kprintf(const char *fmt, ...);
+extern void *kalloc(usize size);
 extern chimera_error_t vfs_register(const char *path, vnode_t *vp);
 extern chimera_error_t vfs_lookup(const char *path, vnode_t **vp_out);
 extern chimera_error_t copyout(const void *kaddr, void *uaddr, usize len);
@@ -19,6 +20,34 @@ extern chimera_error_t copyin(const void *uaddr, void *kaddr, usize len);
 
 fat32_fs_t g_fat32;
 static spinlock_t s_fat_lock = SPINLOCK_INIT;
+
+// ── free-cluster bitmap (2.11.3) ─────────────────────────────────────────────
+// Built once at mount by a single pass over the FAT; bit=1 means free.
+// Replaces the per-allocation full-FAT scan that made every file create
+// cost thousands of synchronous PIO reads. bit c-2 covers data cluster c.
+#define FAT_BITMAP_MAX_BYTES (8u << 20) // cap: 64M clusters
+static u8 *s_free_bitmap = nullptr;
+static u32 s_bitmap_clusters = 0;
+static u32 s_free_hint = 2; // first possibly-free cluster
+static u32 s_free_count = 0;
+
+static inline int fat_bitmap_test_free(u32 cluster) {
+    u32 bit = cluster - 2;
+    return (s_free_bitmap[bit >> 3] >> (bit & 7)) & 1;
+}
+
+static inline void fat_bitmap_mark_used(u32 cluster) {
+    u32 bit = cluster - 2;
+    s_free_bitmap[bit >> 3] &= (u8)~(1u << (bit & 7));
+    if (s_free_count) s_free_count--;
+}
+
+static inline void fat_bitmap_mark_free(u32 cluster) {
+    u32 bit = cluster - 2;
+    s_free_bitmap[bit >> 3] |= (u8)(1u << (bit & 7));
+    s_free_count++;
+    if (cluster < s_free_hint) s_free_hint = cluster;
+}
 
 #define FAT32_MAX_VNODES 4096
 
@@ -75,6 +104,16 @@ static u32 fat32_get_next_cluster(u32 cluster) {
 static chimera_error_t fat32_set_fat_entry(u32 cluster, u32 val) {
     if (cluster < 2 || cluster >= 0x0FFFFFF8) return CHIMERA_ERR_INVALID;
 
+    // keep the free bitmap in sync at the single choke point where FAT
+    // entries change: val==0 frees the cluster, anything else uses it
+    if (s_free_bitmap && cluster - 2 < s_bitmap_clusters) {
+        if ((val & 0x0FFFFFFF) == 0x00000000) {
+            if (!fat_bitmap_test_free(cluster)) fat_bitmap_mark_free(cluster);
+        } else {
+            if (fat_bitmap_test_free(cluster)) fat_bitmap_mark_used(cluster);
+        }
+    }
+
     u32 fat_offset_bytes = cluster * 4;
     u32 fat_sector_idx = fat_offset_bytes / ATA_SECTOR_SIZE;
     u32 entry_offset = fat_offset_bytes % ATA_SECTOR_SIZE;
@@ -100,43 +139,69 @@ static chimera_error_t fat32_set_fat_entry(u32 cluster, u32 val) {
 
 static u32 fat32_alloc_cluster(void) {
     u32 total_clusters = (g_fat32.total_sectors - g_fat32.data_start_lba) / g_fat32.sectors_per_cluster;
-    u8 buf[ATA_SECTOR_SIZE];
 
-    for (u32 sec = 0; sec < g_fat32.sectors_per_fat; sec++) {
-        u32 lba = g_fat32.reserved_sectors + sec;
-        if (ata_read_sectors(lba, 1, buf) != CHIMERA_SUCCESS) break;
-
-        for (u32 off = 0; off < ATA_SECTOR_SIZE; off += 4) {
-            u32 cluster = (sec * ATA_SECTOR_SIZE + off) / 4;
-            if (cluster < 2 || cluster >= total_clusters + 2) continue;
-
-            u32 entry = *(u32 *)(buf + off) & 0x0FFFFFFF;
-            if (entry == 0x00000000) {
-                // free cluster found! Mark as end-of-chain
-                fat32_set_fat_entry(cluster, 0x0FFFFFFF);
-
-                // zero out cluster on disk
-                u8 zero_buf[512];
-                __builtin_memset(zero_buf, 0, sizeof(zero_buf));
-                u32 clba = fat32_cluster_to_lba(cluster);
-                for (u32 s = 0; s < g_fat32.sectors_per_cluster; s++) {
-                    ata_write_sectors(clba + s, 1, zero_buf);
+    u32 cluster = 0;
+    if (s_free_bitmap) {
+        // bitmap path: word-wise scan from the running hint, one wraparound
+        u32 start = (s_free_hint >= 2) ? (s_free_hint - 2) : 0;
+        for (u32 pass = 0; pass < 2 && cluster == 0; pass++) {
+            for (u32 i = (pass ? 0 : start); i < s_bitmap_clusters; i++) {
+                if (i == start && pass == 1) break;
+                u32 bit = i;
+                if ((s_free_bitmap[bit >> 3] >> (bit & 7)) & 1) {
+                    cluster = i + 2;
+                    break;
                 }
-
-                return cluster;
             }
         }
+        if (cluster == 0) return 0; // disk full
+        fat_bitmap_mark_used(cluster);
+    } else {
+        // fallback: legacy full-FAT scan (bitmap unavailable)
+        u8 buf[ATA_SECTOR_SIZE];
+        for (u32 sec = 0; sec < g_fat32.sectors_per_fat && cluster == 0; sec++) {
+            u32 lba = g_fat32.reserved_sectors + sec;
+            if (ata_read_sectors(lba, 1, buf) != CHIMERA_SUCCESS) break;
+            for (u32 off = 0; off < ATA_SECTOR_SIZE; off += 4) {
+                u32 c = (sec * ATA_SECTOR_SIZE + off) / 4;
+                if (c < 2 || c >= total_clusters + 2) continue;
+                if ((*(u32 *)(buf + off) & 0x0FFFFFFF) == 0) {
+                    cluster = c;
+                    break;
+                }
+            }
+        }
+        if (cluster == 0) return 0;
     }
-    return 0; // disk full
+
+    fat32_set_fat_entry(cluster, 0x0FFFFFFF);
+
+    // zero out cluster on disk
+    u8 zero_buf[ATA_SECTOR_SIZE];
+    __builtin_memset(zero_buf, 0, sizeof(zero_buf));
+    u32 clba = fat32_cluster_to_lba(cluster);
+    for (u32 s = 0; s < g_fat32.sectors_per_cluster; s++) {
+        ata_write_sectors(clba + s, 1, zero_buf);
+    }
+
+    if (cluster + 1 > s_free_hint) s_free_hint = cluster + 1;
+    return cluster;
 }
 
-static void fat32_free_cluster_chain(u32 start_cluster) {
+static void fat32_free_cluster_chain_unlocked(u32 start_cluster) {
+    // caller holds s_fat_lock: uses only lock-free FAT helpers
     u32 cluster = start_cluster;
     while (cluster >= 2 && cluster < 0x0FFFFFF8) {
-        u32 next = fat32_get_next_cluster(cluster);
+        u32 next = fat32_get_next_cluster_unlocked(cluster);
         fat32_set_fat_entry(cluster, 0x00000000);
         cluster = next;
     }
+}
+
+static void fat32_free_cluster_chain(u32 start_cluster) {
+    irq_flags_t irq = spinlock_lock_irqsave(&s_fat_lock);
+    fat32_free_cluster_chain_unlocked(start_cluster);
+    spinlock_unlock_irqrestore(&s_fat_lock, irq);
 }
 
 // name helpers
@@ -382,6 +447,119 @@ chimera_error_t fat32_write_node(void *node_data, u32 offset, const void *src, u
     return CHIMERA_SUCCESS;
 }
 
+// ── Resize (truncate / extend) ────────────────────────────────────────────── *
+// * Grows with zero-fill or shrinks by freeing the tail of the cluster chain,
+// * terminating the kept chain with an EOC marker and updating the on-disk
+// * directory entry. This is what sys_open(O_TRUNC), sys_truncate and
+// * sys_ftruncate must actually do — previously they only edited the cached
+// * size, leaking clusters and desynchronizing metadata from disk.
+// * Holds s_fat_lock; uses only the _unlocked FAT helpers inside.
+// * ─────────────────────────────────────────────────────────────────────────── */
+static chimera_error_t fat32_zero_cluster_tail(u32 cluster, u32 from_off) {
+    // zero [from_off, cluster_size) within one cluster via sector RMW
+    u32 lba = fat32_cluster_to_lba(cluster);
+    u32 off = from_off;
+    while (off < g_fat32.cluster_size_bytes) {
+        u32 sec_off = off % ATA_SECTOR_SIZE;
+        u32 sec_lba = lba + off / ATA_SECTOR_SIZE;
+        u8 sec[ATA_SECTOR_SIZE];
+        if (ata_read_sectors(sec_lba, 1, sec) != CHIMERA_SUCCESS)
+            return CHIMERA_ERR_GENERIC;
+        __builtin_memset(sec + sec_off, 0, ATA_SECTOR_SIZE - sec_off);
+        if (ata_write_sectors(sec_lba, 1, sec) != CHIMERA_SUCCESS)
+            return CHIMERA_ERR_GENERIC;
+        off += (ATA_SECTOR_SIZE - sec_off);
+    }
+    return CHIMERA_SUCCESS;
+}
+
+chimera_error_t fat32_resize_node(void *node_data, u64 new_size) {
+    fat32_node_data_t *nd = (fat32_node_data_t *)node_data;
+    if (!nd || !g_fat32.mounted) return CHIMERA_ERR_INVALID;
+    if (new_size > 0xFFFFFFFFULL) return CHIMERA_ERR_OVERFLOW; // FAT32 limit
+
+    irq_flags_t irq = spinlock_lock_irqsave(&s_fat_lock);
+
+    u32 cluster_size = g_fat32.cluster_size_bytes;
+    u64 old_size = nd->file_size;
+    u32 old_clusters = (u32)((old_size + cluster_size - 1) / cluster_size);
+    u32 needed = (u32)((new_size + cluster_size - 1) / cluster_size);
+    chimera_error_t err = CHIMERA_SUCCESS;
+
+    // ensure the file has a first cluster when growing from empty
+    if (needed > 0 && nd->start_cluster < 2) {
+        u32 c = fat32_alloc_cluster();
+        if (c < 2) {
+            spinlock_unlock_irqrestore(&s_fat_lock, irq);
+            return CHIMERA_ERR_NORESOURCE;
+        }
+        nd->start_cluster = c;
+    }
+
+    // grow: link freshly allocated (zeroed by the allocator) clusters
+    if (needed > old_clusters && nd->start_cluster >= 2) {
+        u32 cluster = nd->start_cluster;
+        u32 count = 1;
+        while (count < old_clusters) {
+            u32 next = fat32_get_next_cluster_unlocked(cluster);
+            if (next < 2 || next >= 0x0FFFFFF8) break; // shorter chain: extend from here
+            cluster = next;
+            count++;
+        }
+        while (count < needed && err == CHIMERA_SUCCESS) {
+            u32 next = fat32_alloc_cluster();
+            if (next < 2) {
+                err = CHIMERA_ERR_NORESOURCE;
+                break;
+            }
+            fat32_set_fat_entry(cluster, next);
+            cluster = next;
+            count++;
+        }
+    }
+
+    // grow: zero the partial tail of the cluster containing old_size
+    if (err == CHIMERA_SUCCESS && new_size > old_size &&
+        old_size > 0 && old_size % cluster_size != 0 && nd->start_cluster >= 2) {
+        u32 cluster = nd->start_cluster;
+        u32 idx = (u32)((old_size - 1) / cluster_size); // cluster index of last byte
+        for (u32 i = 0; i < idx; i++) {
+            u32 next = fat32_get_next_cluster_unlocked(cluster);
+            if (next < 2 || next >= 0x0FFFFFF8) break;
+            cluster = next;
+        }
+        err = fat32_zero_cluster_tail(cluster, (u32)(old_size % cluster_size));
+    }
+
+    // shrink: terminate the kept chain and free the tail
+    if (err == CHIMERA_SUCCESS && needed < old_clusters && nd->start_cluster >= 2) {
+        if (needed == 0) {
+            fat32_free_cluster_chain_unlocked(nd->start_cluster);
+            nd->start_cluster = 0;
+        } else {
+            u32 cluster = nd->start_cluster;
+            for (u32 i = 1; i < needed; i++) {
+                u32 next = fat32_get_next_cluster_unlocked(cluster);
+                if (next < 2 || next >= 0x0FFFFFF8) break;
+                cluster = next;
+            }
+            u32 tail = fat32_get_next_cluster_unlocked(cluster);
+            fat32_set_fat_entry(cluster, 0x0FFFFFFF);
+            if (tail >= 2 && tail < 0x0FFFFFF8)
+                fat32_free_cluster_chain_unlocked(tail);
+        }
+    }
+
+    if (err == CHIMERA_SUCCESS) {
+        nd->file_size = (u32)new_size;
+        if (nd->vnode) nd->vnode->v_attr.va_size = nd->file_size;
+        err = fat32_update_dir_entry(nd);
+    }
+
+    spinlock_unlock_irqrestore(&s_fat_lock, irq);
+    return err;
+}
+
 // vnode ops for fat32 files
 
 static chimera_error_t fat32_vop_read(vnode_t *vp, struct uio *uio, int flags, vfs_context_t *ctx) {
@@ -496,9 +674,19 @@ static void split_parent_child_path(const char *path, char *parent, char *child)
     }
 }
 
+static chimera_error_t fat32_create_file_locked(const char *path, vnode_t **out_vp);
+
 chimera_error_t fat32_create_file(const char *path, vnode_t **out_vp) {
     if (!path || !out_vp) return CHIMERA_ERR_INVALID;
     *out_vp = nullptr;
+    irq_flags_t irq = spinlock_lock_irqsave(&s_fat_lock);
+    chimera_error_t err = fat32_create_file_locked(path, out_vp);
+    spinlock_unlock_irqrestore(&s_fat_lock, irq);
+    return err;
+}
+
+static chimera_error_t fat32_create_file_locked(const char *path, vnode_t **out_vp) {
+    // caller holds s_fat_lock
 
     // check if already exists
     vnode_t *existing = nullptr;
@@ -547,7 +735,7 @@ chimera_error_t fat32_create_file(const char *path, vnode_t **out_vp) {
 
         if (!found_slot) {
             entry_offset_in_dir += g_fat32.cluster_size_bytes;
-            u32 next = fat32_get_next_cluster(cluster);
+            u32 next = fat32_get_next_cluster_unlocked(cluster);
             if (next >= 0x0FFFFFF8 || next < 2) {
                 // extend directory with new cluster
                 u32 new_c = fat32_alloc_cluster();
@@ -613,9 +801,19 @@ chimera_error_t fat32_create_file(const char *path, vnode_t **out_vp) {
     return CHIMERA_SUCCESS;
 }
 
+static chimera_error_t fat32_create_dir_locked(const char *path, vnode_t **out_vp);
+
 chimera_error_t fat32_create_dir(const char *path, vnode_t **out_vp) {
     if (!path || !out_vp) return CHIMERA_ERR_INVALID;
     *out_vp = nullptr;
+    irq_flags_t irq = spinlock_lock_irqsave(&s_fat_lock);
+    chimera_error_t err = fat32_create_dir_locked(path, out_vp);
+    spinlock_unlock_irqrestore(&s_fat_lock, irq);
+    return err;
+}
+
+static chimera_error_t fat32_create_dir_locked(const char *path, vnode_t **out_vp) {
+    // caller holds s_fat_lock
 
     char parent[256];
     char child[64];
@@ -681,7 +879,7 @@ chimera_error_t fat32_create_dir(const char *path, vnode_t **out_vp) {
         }
         if (!found_slot) {
             entry_offset_in_dir += g_fat32.cluster_size_bytes;
-            cluster = fat32_get_next_cluster(cluster);
+            cluster = fat32_get_next_cluster_unlocked(cluster);
         }
     }
 
@@ -731,7 +929,17 @@ chimera_error_t fat32_create_dir(const char *path, vnode_t **out_vp) {
     return CHIMERA_SUCCESS;
 }
 
+static chimera_error_t fat32_unlink_file_locked(const char *path);
+
 chimera_error_t fat32_unlink_file(const char *path) {
+    irq_flags_t irq = spinlock_lock_irqsave(&s_fat_lock);
+    chimera_error_t err = fat32_unlink_file_locked(path);
+    spinlock_unlock_irqrestore(&s_fat_lock, irq);
+    return err;
+}
+
+static chimera_error_t fat32_unlink_file_locked(const char *path) {
+    // caller holds s_fat_lock
     vnode_t *vp = nullptr;
     if (vfs_lookup(path, &vp) != CHIMERA_SUCCESS || !vp) return CHIMERA_ERR_NOTFOUND;
 
@@ -744,7 +952,7 @@ chimera_error_t fat32_unlink_file(const char *path) {
     u32 cluster_size = g_fat32.cluster_size_bytes;
 
     while (offset >= cluster_size && cluster >= 2 && cluster < 0x0FFFFFF8) {
-        cluster = fat32_get_next_cluster(cluster);
+        cluster = fat32_get_next_cluster_unlocked(cluster);
         offset -= cluster_size;
     }
 
@@ -760,7 +968,7 @@ chimera_error_t fat32_unlink_file(const char *path) {
 
     // free cluster chain
     if (nd->start_cluster >= 2) {
-        fat32_free_cluster_chain(nd->start_cluster);
+        fat32_free_cluster_chain_unlocked(nd->start_cluster);
         nd->start_cluster = 0;
     }
     nd->file_size = 0;
@@ -1028,6 +1236,40 @@ chimera_error_t fat32_init(void) {
             g_fat32.total_sectors, g_fat32.sectors_per_cluster, g_fat32.root_cluster);
 
     spinlock_unlock_irqrestore(&s_fat_lock, irq);
+
+    // ── build the free-cluster bitmap: one pass over FAT copy #1 at mount ──
+    // (replaces the per-allocation O(FAT) scan that cost thousands of PIO
+    // reads per created file)
+    s_bitmap_clusters =
+        (g_fat32.total_sectors - g_fat32.data_start_lba) / g_fat32.sectors_per_cluster;
+    u32 bitmap_bytes = (s_bitmap_clusters + 7) / 8;
+    if (s_bitmap_clusters >= 2 && bitmap_bytes <= FAT_BITMAP_MAX_BYTES) {
+        s_free_bitmap = kalloc(bitmap_bytes);
+        if (s_free_bitmap) {
+            __builtin_memset(s_free_bitmap, 0xFF, bitmap_bytes); // all free
+            s_free_count = s_bitmap_clusters;
+            s_free_hint = 2;
+
+            u8 buf[ATA_SECTOR_SIZE];
+            for (u32 sec = 0; sec < g_fat32.sectors_per_fat; sec++) {
+                u32 lba = g_fat32.reserved_sectors + sec;
+                if (ata_read_sectors(lba, 1, buf) != CHIMERA_SUCCESS) break;
+                for (u32 off = 0; off < ATA_SECTOR_SIZE; off += 4) {
+                    u32 c = (sec * ATA_SECTOR_SIZE + off) / 4;
+                    if (c < 2 || c >= s_bitmap_clusters + 2) continue;
+                    u32 entry = *(u32 *)(buf + off) & 0x0FFFFFFF;
+                    if (entry != 0x00000000) {
+                        // mark used; not counted in s_free_count
+                        s_free_count--;
+                        u32 bit = c - 2;
+                        s_free_bitmap[bit >> 3] &= (u8)~(1u << (bit & 7));
+                    }
+                }
+            }
+            kprintf("[FAT32] Free-cluster bitmap: %u/%u clusters free\n",
+                    s_free_count, s_bitmap_clusters);
+        }
+    }
 
     // scan and register all files and directories on disk into VFS
     fat32_scan_directory(g_fat32.root_cluster, "", 0);

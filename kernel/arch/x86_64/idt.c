@@ -1,11 +1,41 @@
 #include "idt.h"
 #include <kernel/io.h>
+#include <kernel/lapic.h>
 #include <kernel/panic.h>
 #include <kernel/proc.h>
+#include <kernel/smp.h>
 
 extern void kprintf(const char *fmt, ...);
 
 volatile u64 g_system_ticks = 0;
+static _Atomic(u64) s_monotonic_ticks = 0;
+static irq_stats_t s_irq_stats;
+
+u64 timer_get_monotonic_ticks(void) {
+  return atomic_load_explicit(&s_monotonic_ticks, memory_order_acquire);
+}
+
+void smp_get_irq_stats(irq_stats_t *out) {
+  if (!out) return;
+  out->count_pit = __atomic_load_n(&s_irq_stats.count_pit, __ATOMIC_RELAXED);
+  out->count_lapic_timer = __atomic_load_n(&s_irq_stats.count_lapic_timer, __ATOMIC_RELAXED);
+  out->count_ipi_sched = __atomic_load_n(&s_irq_stats.count_ipi_sched, __ATOMIC_RELAXED);
+  out->count_ipi_tlb = __atomic_load_n(&s_irq_stats.count_ipi_tlb, __ATOMIC_RELAXED);
+  out->count_e1000_msi = __atomic_load_n(&s_irq_stats.count_e1000_msi, __ATOMIC_RELAXED);
+  out->count_spurious = __atomic_load_n(&s_irq_stats.count_spurious, __ATOMIC_RELAXED);
+}
+
+void smp_dump_irq_stats(void) {
+  irq_stats_t s;
+  smp_get_irq_stats(&s);
+  kprintf("  [  OK  ]  IRQ stats: PIT=%llu, LAPIC-timer=%llu, IPI-sched=%llu, IPI-TLB=%llu, e1000=%llu, Spurious=%llu\n",
+          (unsigned long long)s.count_pit,
+          (unsigned long long)s.count_lapic_timer,
+          (unsigned long long)s.count_ipi_sched,
+          (unsigned long long)s.count_ipi_tlb,
+          (unsigned long long)s.count_e1000_msi,
+          (unsigned long long)s.count_spurious);
+}
 
 static inline u64 rdtsc(void) {
   u32 low, high;
@@ -61,6 +91,10 @@ u64 timer_get_uptime_seconds(void) {
   if (now <= s_boot_tsc || s_tsc_hz == 0) return 0;
   return (now - s_boot_tsc) / s_tsc_hz;
 }
+
+// calibrated TSC frequency (0 = not calibrated yet); drivers use this to
+// build time-based device timeouts instead of unbounded spin counts
+u64 timer_tsc_hz(void) { return s_tsc_hz; }
 
 static struct idt_entry idt[256];
 static struct idtr idtr;
@@ -148,11 +182,17 @@ static u64 read_cr2(void) {
 }
 
 void interrupt_handler(struct interrupt_frame *frame) {
-  if (frame->int_no == 0xEE) { // vector_ipi_sched
+  if (frame->int_no == VECTOR_IPI_SCHED) {
+    __atomic_fetch_add(&s_irq_stats.count_ipi_sched, 1, __ATOMIC_RELAXED);
     lapic_eoi();
+    u32 cpu_id = smp_current_cpu_id();
+    if (cpu_id < CHIMERA_MAX_CPUS) {
+      atomic_store_explicit(&g_cpu_data[cpu_id].cpu_need_resched, 0, memory_order_release);
+    }
     scheduler_yield();
     return;
-  } else if (frame->int_no == 0xEF) { // vector_ipi_tlb
+  } else if (frame->int_no == VECTOR_IPI_TLB) {
+    __atomic_fetch_add(&s_irq_stats.count_ipi_tlb, 1, __ATOMIC_RELAXED);
     lapic_eoi();
     chimera_thread_t *th = current_thread();
     if (!th || th->th_state == THREAD_STATE_HALTED) {
@@ -164,23 +204,80 @@ void interrupt_handler(struct interrupt_frame *frame) {
       __asm__ volatile("mov %%cr3, %0; mov %0, %%cr3" : "=r"(cr3));
     }
     return;
-  } else if (frame->int_no == 0xFF) { // vector_spurious
+  } else if (frame->int_no == VECTOR_SPURIOUS) {
+    __atomic_fetch_add(&s_irq_stats.count_spurious, 1, __ATOMIC_RELAXED);
+    // Spurious interrupts do not receive EOI
     return;
-  } else if (frame->int_no == 32) { // irq 0: PIT timer / LAPIC timer
-    extern volatile u64 g_system_ticks;
-    g_system_ticks++;
+  } else if (frame->int_no == VECTOR_E1000_MSI) {
+    __atomic_fetch_add(&s_irq_stats.count_e1000_msi, 1, __ATOMIC_RELAXED);
+    extern void e1000_isr(void);
+    e1000_isr();
+    lapic_eoi();
+    return;
+  } else if (frame->int_no == VECTOR_LAPIC_TIMER) {
+    __atomic_fetch_add(&s_irq_stats.count_lapic_timer, 1, __ATOMIC_RELAXED);
+    // Strict EOI separation: LAPIC timer receives ONLY lapic_eoi, never PIC EOI
+    lapic_eoi();
+    u32 cpu_id = smp_current_cpu_id();
+    if (cpu_id < CHIMERA_MAX_CPUS && g_cpu_data[cpu_id].cpu_is_active) {
+      chimera_thread_t *th = current_thread();
+      if (th && th->th_state == THREAD_STATE_RUNNING) {
+        th->th_cpu_usage++;
+        if (th->th_sched_priority > th->th_base_priority / 2) {
+          th->th_sched_priority--;
+        }
+        th->th_priority = th->th_sched_priority;
+        atomic_store_explicit(&g_cpu_data[cpu_id].cpu_need_resched, 1, memory_order_release);
+      }
+      if (atomic_load_explicit(&g_cpu_data[cpu_id].cpu_need_resched, memory_order_acquire)) {
+        atomic_store_explicit(&g_cpu_data[cpu_id].cpu_need_resched, 0, memory_order_release);
+        scheduler_yield();
+      }
+    }
+    return;
+  } else if (frame->int_no == VECTOR_PIT_TIMER) {
+    __atomic_fetch_add(&s_irq_stats.count_pit, 1, __ATOMIC_RELAXED);
 
+    // Single-writer monotonic clock: BSP only
+    atomic_fetch_add_explicit(&s_monotonic_ticks, 1, memory_order_release);
+    g_system_ticks = atomic_load_explicit(&s_monotonic_ticks, memory_order_relaxed);
+
+    // release timer-based sleepers before anything else
+    extern void timer_wake_sleepers(void);
+    timer_wake_sleepers();
+
+    if (g_system_ticks == 100) {
+      smp_dump_irq_stats();
+    }
+
+    // Broadcast IPI storm eliminated: per-CPU need_resched replaces blind IPI broadcasts
     extern void chimerakit_hid_poll(void);
     chimerakit_hid_poll();
+
+    // Legacy PIC EOI
     outb(0x20, 0x20);
     lapic_eoi();
-    scheduler_yield();
-  } else if (frame->int_no == 44) {
+
+    // BSP local timeslice accounting
+    chimera_thread_t *th = current_thread();
+    if (th && th->th_state == THREAD_STATE_RUNNING) {
+      th->th_cpu_usage++;
+      if (th->th_sched_priority > th->th_base_priority / 2) {
+        th->th_sched_priority--;
+      }
+      th->th_priority = th->th_sched_priority;
+      atomic_store_explicit(&g_cpu_data[0].cpu_need_resched, 1, memory_order_release);
+    }
+    if (atomic_load_explicit(&g_cpu_data[0].cpu_need_resched, memory_order_acquire)) {
+      atomic_store_explicit(&g_cpu_data[0].cpu_need_resched, 0, memory_order_release);
+      scheduler_yield();
+    }
+  } else if (frame->int_no == VECTOR_MOUSE) {
     chimerakit_hid_irq_handler();
     outb(0xA0, 0x20);
     outb(0x20, 0x20);
     lapic_eoi();
-  } else if (frame->int_no == 33) {
+  } else if (frame->int_no == VECTOR_KEYBOARD) {
     chimerakit_hid_irq_handler();
     outb(0x20, 0x20);
     lapic_eoi();
@@ -211,14 +308,15 @@ void interrupt_handler(struct interrupt_frame *frame) {
       if (is_user && task && task->ta_vm_map && cr2 >= USER_STACK_MIN && cr2 <= USER_STACK_MAX) {
         extern chimera_paddr_t pmm_alloc_page(void);
         extern u64 pmap_map_user_page(u64 target_pml4_phys, u64 vaddr,
-                                      u64 paddr, u32 flags);
+                                      u64 paddr, u64 flags);
         u64 page_vaddr = cr2 & ~0xFFFULL;
         u64 new_phys = pmm_alloc_page();
         if (new_phys && new_phys != (u64)-1) {
           void *hhdm = (void *)(new_phys + g_hhdm_base);
           __builtin_memset(hhdm, 0, 4096);
+          // stack pages are data: W^X, never executable
           pmap_map_user_page((u64)task->ta_vm_map, page_vaddr, new_phys,
-                             0x01 | 0x02 | 0x04);
+                             0x01 | 0x02 | 0x04 | (1ULL << 63));
           __asm__ volatile("invlpg (%0)" ::"r"(cr2) : "memory");
           return;
         }

@@ -28,6 +28,10 @@ public:
     // configuration Space Access
     u32 configRead32(u8 offset);
     void configWrite32(u8 offset, u32 value);
+    u16 configRead16(u8 offset);
+    void configWrite16(u8 offset, u16 value);
+    u8  configRead8(u8 offset);
+    void configWrite8(u8 offset, u8 value);
 
     // resource Management
     chimera_paddr_t getBAR(u8 index);

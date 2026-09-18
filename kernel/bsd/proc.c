@@ -4,6 +4,7 @@
  * =============================================================================
  */
 
+#include <kernel/bsd_syscall_xnu.h>
 #include <kernel/fileproc.h>
 #include <kernel/ipc_port.h>
 #include <kernel/panic.h>
@@ -14,7 +15,7 @@ chimera_proc_t *proc_kernel = nullptr;
 chimera_proc_t *proc_launchd = nullptr;
 
 
-#define PROC_POOL_SIZE 64
+#define PROC_POOL_SIZE 256
 chimera_proc_t s_proc_pool[PROC_POOL_SIZE];
 static spinlock_t s_proc_pool_lock = SPINLOCK_INIT;
 static _Atomic(u32) s_pid_seq = 1;
@@ -267,6 +268,12 @@ void proc_mark_exited(chimera_proc_t *proc, u32 code) {
     proc->p_task->ta_threads = nullptr;
     proc->p_task->ta_thread_count = 0;
 
+    // release the task's shared-mapping records before the blanket PTE sweep:
+    // fb PTEs must be cleared without releasing their device pages, and
+    // shared-page map counts must drop while page-table refs still exist
+    extern void mmap_records_destroy(chimera_task_t *task);
+    mmap_records_destroy(proc->p_task);
+
     if (proc->p_task->ta_vm_map) {
       extern void pmap_destroy_user_space(u64 pml4_phys);
       pmap_destroy_user_space((u64)proc->p_task->ta_vm_map);
@@ -354,6 +361,7 @@ chimera_error_t proc_signal(chimera_proc_t *proc, int sig) {
   proc->p_sigpending |= (1U << sig);
   spinlock_unlock_irqrestore(&proc->p_lock, irq);
 
+
   if (proc->p_task && proc->p_task->ta_threads) {
     thread_wake(proc->p_task->ta_threads);
   }
@@ -367,13 +375,26 @@ typedef struct syscall_user_frame_alias {
   u64 rsp;
 } syscall_user_frame_alias_t;
 
-extern i64 sys_exit_internal(u64 code);
+extern void sys_exit_direct(u64 code);
+extern chimera_error_t copyout(const void *kaddr, void *uaddr, usize len);
 
-void proc_deliver_signals(void *frame_ptr) {
+/*
+ * proc_deliver_signals — run pending signals at the syscall-return boundary.
+ *
+ * With a handler installed the kernel builds, on the user stack below the
+ * interrupted rsp: a saved-context block (sigctx_t) and a self-contained
+ * trampoline that invokes handler(sig), then re-enters the kernel through
+ * SYS_sigreturn with rdi pointing at the context. The interrupted frame's
+ * rip/rsp are redirected to the trampoline; sigreturn restores everything
+ * (including the syscall's rax) when the handler returns.
+ */
+void proc_deliver_signals(void *frame_ptr, i64 syscall_ret) {
   chimera_task_t *task = current_task();
   chimera_proc_t *proc = task ? task->ta_proc : nullptr;
   if (!proc || proc->p_pid == 0 || !frame_ptr)
     return;
+
+  syscall_user_frame_alias_t *frame = (syscall_user_frame_alias_t *)frame_ptr;
 
   irq_flags_t irq = spinlock_lock_irqsave(&proc->p_lock);
   u32 deliverable = proc->p_sigpending & ~proc->p_sigmask;
@@ -383,24 +404,72 @@ void proc_deliver_signals(void *frame_ptr) {
   }
 
   for (int sig = 1; sig < 32; sig++) {
-    if (deliverable & (1U << sig)) {
-      proc->p_sigpending &= ~(1U << sig);
-      u64 handler = proc->p_sigacts[sig];
-      spinlock_unlock_irqrestore(&proc->p_lock, irq);
+    if (!(deliverable & (1U << sig)))
+      continue;
+    proc->p_sigpending &= ~(1U << sig);
+    u64 handler = proc->p_sigacts[sig];
+    u32 old_mask = proc->p_sigmask;
+    spinlock_unlock_irqrestore(&proc->p_lock, irq);
 
-      if (handler == 1 || sig == 20 || sig == 28 || sig == 16 || sig == 29) {
-        return;
-      }
+    if (handler == 1) {
+      return; // SIG_IGN
+    }
 
-      if (handler == 0) {
-        kprintf("[SIGNAL] Process '%s' (PID %u) terminated by signal %d\n",
-                proc->p_comm, proc->p_pid, sig);
-        extern void sys_exit_direct(u64 code);
-        sys_exit_direct(128 + sig);
-        return;
+    if (handler == 0) {
+      // default disposition: stop/ignore signals are simply noted for now,
+      // everything else terminates
+      if (sig == 20 || sig == 28 || sig == 16 || sig == 29) {
+        return; // SIGCHLD/SIGWINCH/SIGURG/SIGINFO: default ignore
       }
+      kprintf("[SIGNAL] Process '%s' (PID %u) terminated by signal %d\n",
+              proc->p_comm, proc->p_pid, sig);
+      sys_exit_direct(128 + sig);
       return;
     }
+
+    // ── deliver to the installed handler ──
+    // The executable stub lives on the shared RX trampoline page (the user
+    // stack is NX under W^X). Only DATA goes on the stack: three slots the
+    // stub reads through rsp, plus the saved context above them.
+    u64 rsp = frame->rsp;
+    u64 slots_va = (rsp - 512) & ~0xFULL; // 16-aligned stub entry frame
+    u64 ctx_va = slots_va + 32;           // above the slots, below old rsp
+
+    sigctx_t ctx;
+    __builtin_memset(&ctx, 0, sizeof(ctx));
+    ctx.magic = SIGCTX_MAGIC;
+    ctx.sig = sig;
+    ctx.old_mask = old_mask;
+    ctx.rax = (u64)syscall_ret;
+    ctx.regs[0] = frame->r15;
+    ctx.regs[1] = frame->r14;
+    ctx.regs[2] = frame->r13;
+    ctx.regs[3] = frame->r12;
+    ctx.regs[4] = frame->rbx;
+    ctx.regs[5] = frame->rbp;
+    ctx.regs[6] = frame->rip;
+    ctx.regs[7] = frame->rflags;
+    ctx.regs[8] = frame->rsp;
+
+    // stub slots: [rsp]=sig, [rsp+8]=handler, [rsp+16]=&ctx
+    u64 slots[3] = {(u64)sig, handler, ctx_va};
+
+    if (copyout(slots, (void *)slots_va, sizeof(slots)) != CHIMERA_SUCCESS ||
+        copyout(&ctx, (void *)ctx_va, sizeof(ctx)) != CHIMERA_SUCCESS) {
+      kprintf("[SIGNAL] PID %u: cannot build signal frame (stack fault)\n",
+              proc->p_pid);
+      sys_exit_direct(128 + sig);
+      return;
+    }
+
+    // block this signal while its handler runs; sigreturn restores old_mask
+    irq_flags_t irq2 = spinlock_lock_irqsave(&proc->p_lock);
+    proc->p_sigmask = old_mask | (1U << sig);
+    spinlock_unlock_irqrestore(&proc->p_lock, irq2);
+
+    frame->rip = SIGNAL_TRAMP_VA;
+    frame->rsp = slots_va;
+    return; // one signal per syscall return
   }
   spinlock_unlock_irqrestore(&proc->p_lock, irq);
 }
@@ -439,13 +508,13 @@ chimera_error_t task_create(chimera_task_t *parent, chimera_task_t **task_out) {
   CHIMERA_ASSERT(task_out != nullptr);
   (void)parent;
 
-  static chimera_task_t s_task_pool[64];
+  static chimera_task_t s_task_pool[256];
   static spinlock_t s_task_pool_lock = SPINLOCK_INIT;
 
   irq_flags_t irq = spinlock_lock_irqsave(&s_task_pool_lock);
   chimera_task_t *t = nullptr;
   u32 idx = 0;
-  for (u32 i = 1; i < 64; i++) {
+  for (u32 i = 1; i < 256; i++) {
     if (s_task_pool[i].ta_signature != CHIMERA_TASK_MAGIC) {
       t = &s_task_pool[i];
       idx = i;
@@ -475,7 +544,8 @@ chimera_error_t task_create(chimera_task_t *parent, chimera_task_t **task_out) {
   mach_port_name_t tp_name;
   err = ipc_port_alloc(t->ta_ipc_space, &tp_name, "task.self");
   if (CHIMERA_SUCCEEDED(err)) {
-    struct ipc_port *tp = t->ta_ipc_space->is_table[tp_name].ie_object;
+    struct ipc_port *tp =
+        t->ta_ipc_space->is_table[ipc_name_index(tp_name)].ie_object;
     if (tp) {
       tp->ip_kobject = t;
       tp->ip_kotype = 1;

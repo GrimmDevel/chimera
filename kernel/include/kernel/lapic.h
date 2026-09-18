@@ -53,18 +53,28 @@ extern "C" {
 #define ICR_EDGE_TRIGGER        (0x0 << 15)
 #define ICR_BUSY                (0x1 << 12)
 
+#define VECTOR_PIT_TIMER        32
+#define VECTOR_KEYBOARD         33
+#define VECTOR_MOUSE            44
+#define VECTOR_E1000_MSI        0x50
+#define VECTOR_LAPIC_TIMER      0xE0
 #define VECTOR_IPI_SCHED        0xEE
 #define VECTOR_IPI_TLB          0xEF
 #define VECTOR_IPI_PANIC        0xFE
 #define VECTOR_SPURIOUS         0xFF
 
 void lapic_init_bsp(void);
+void lapic_write(u32 reg, u32 val);
 void lapic_init_ap(void);
 void lapic_eoi(void);
 u32  lapic_get_id(void);
 void lapic_send_ipi(u32 lapic_id, u8 vector);
 void lapic_send_ipi_all_excluding_self(u8 vector);
 void lapic_timer_init(u32 ticks);
+void lapic_timer_calibrate(void);
+void lapic_timer_start_periodic(u32 ticks);
+void lapic_timer_stop(void);
+u32  lapic_timer_get_ticks_per_10ms(void);
 
 #ifdef __cplusplus
 }

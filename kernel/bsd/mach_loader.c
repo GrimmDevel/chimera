@@ -27,6 +27,7 @@ extern void pmm_release_page(chimera_paddr_t addr);
 #define PAGE_PRESENT (1ULL << 0)
 #define PAGE_WRITE   (1ULL << 1)
 #define PAGE_USER    (1ULL << 2)
+#define PAGE_NX      (1ULL << 63)
 
 extern u64 g_hhdm_base;
 
@@ -34,7 +35,7 @@ static inline u64 *get_table_ptr(u64 phys) {
     return (u64 *)(phys + g_hhdm_base);
 }
 
-extern u64 pmap_map_user_page(u64 target_pml4_phys, u64 vaddr, u64 paddr, u32 flags);
+extern u64 pmap_map_user_page(u64 target_pml4_phys, u64 vaddr, u64 paddr, u64 flags);
 extern u64 pmap_extract(u64 pml4_phys, u64 vaddr);
 
 static inline bool seg_name_is(const char *segname, const char *name) {
@@ -84,6 +85,12 @@ int mach_load_args(void *module_ptr, struct chimera_task *out_task,
         return -ENOEXEC;
     }
 
+    if (hdr->filetype != MH_EXECUTE) {
+        kprintf("[mach_load_args] ERROR: image is not an MH_EXECUTE Mach-O (type=%u)\n",
+                hdr->filetype);
+        return -ENOEXEC;
+    }
+
     if (hdr->ncmds > 256 || hdr->sizeofcmds > 65536) {
         kprintf("[mach_load_args] ERROR: Invalid command table size (ncmds=%u, size=%u)\n",
                 hdr->ncmds, hdr->sizeofcmds);
@@ -130,8 +137,12 @@ int mach_load_args(void *module_ptr, struct chimera_task *out_task,
                     return -ENOEXEC;
                 }
 
-                u32 page_flags = PAGE_USER;
+                // W^X: map according to the segment's declared initprot.
+                // NX is enabled in EFER, so pages without VM_PROT_EXECUTE
+                // are genuinely non-executable (data, bss, stack...).
+                u32 page_flags = PAGE_USER | PAGE_NX;
                 if (seg->initprot & VM_PROT_WRITE) page_flags |= PAGE_WRITE;
+                if (seg->initprot & VM_PROT_EXECUTE) page_flags &= ~PAGE_NX;
 
                 u64 start_vaddr = vaddr & ~0xFFFULL;
                 u64 end_vaddr = (vaddr + memsz + 4095) & ~0xFFFULL;
@@ -195,7 +206,7 @@ int mach_load_args(void *module_ptr, struct chimera_task *out_task,
         }
 
         u64 actual_phys = pmap_map_user_page((u64)out_task->ta_vm_map, vaddr, phys,
-                                             PAGE_USER | PAGE_WRITE);
+                                             PAGE_USER | PAGE_WRITE | PAGE_NX);
         if (!actual_phys) {
             pmm_release_page(phys);
             return -ENOMEM;
