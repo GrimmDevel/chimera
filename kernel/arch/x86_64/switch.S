@@ -29,12 +29,15 @@ _context_switch:
     xsave64 [rcx]
 1:
     mov [rdi], rsp
+    mov rsp, rsi
 
+    // ponytail: release old thread's running_cpu ONLY after RSP is safely on
+    // new stack, preventing another CPU from picking the old thread while this
+    // core is still running on its stack.
     test r9, r9
     jz 2f
     mov DWORD PTR [r9], 0xFFFFFFFF
 2:
-    mov rsp, rsi
 
     // restore new FP/SSE/AVX state if pointer provided
     test r8, r8

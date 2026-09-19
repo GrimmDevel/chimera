@@ -193,16 +193,9 @@ void interrupt_handler(struct interrupt_frame *frame) {
     return;
   } else if (frame->int_no == VECTOR_IPI_TLB) {
     __atomic_fetch_add(&s_irq_stats.count_ipi_tlb, 1, __ATOMIC_RELAXED);
+    extern void smp_tlb_ipi_handler(void);
+    smp_tlb_ipi_handler();
     lapic_eoi();
-    chimera_thread_t *th = current_thread();
-    if (!th || th->th_state == THREAD_STATE_HALTED) {
-      extern u64 pmap_kernel_pml4(void);
-      u64 kpml4 = pmap_kernel_pml4();
-      __asm__ volatile("mov %0, %%cr3" :: "r"(kpml4) : "memory");
-    } else {
-      u64 cr3;
-      __asm__ volatile("mov %%cr3, %0; mov %0, %%cr3" : "=r"(cr3));
-    }
     return;
   } else if (frame->int_no == VECTOR_SPURIOUS) {
     __atomic_fetch_add(&s_irq_stats.count_spurious, 1, __ATOMIC_RELAXED);
@@ -221,7 +214,7 @@ void interrupt_handler(struct interrupt_frame *frame) {
     u32 cpu_id = smp_current_cpu_id();
     if (cpu_id < CHIMERA_MAX_CPUS && g_cpu_data[cpu_id].cpu_is_active) {
       chimera_thread_t *th = current_thread();
-      if (th && th->th_state == THREAD_STATE_RUNNING) {
+      if (th && th != g_cpu_data[cpu_id].cpu_idle_thread && th->th_state == THREAD_STATE_RUNNING) {
         th->th_cpu_usage++;
         if (th->th_sched_priority > th->th_base_priority / 2) {
           th->th_sched_priority--;
@@ -246,9 +239,6 @@ void interrupt_handler(struct interrupt_frame *frame) {
     extern void timer_wake_sleepers(void);
     timer_wake_sleepers();
 
-    if (g_system_ticks == 100) {
-      smp_dump_irq_stats();
-    }
 
     // Broadcast IPI storm eliminated: per-CPU need_resched replaces blind IPI broadcasts
     extern void chimerakit_hid_poll(void);
@@ -260,7 +250,7 @@ void interrupt_handler(struct interrupt_frame *frame) {
 
     // BSP local timeslice accounting
     chimera_thread_t *th = current_thread();
-    if (th && th->th_state == THREAD_STATE_RUNNING) {
+    if (th && th != g_cpu_data[0].cpu_idle_thread && th->th_state == THREAD_STATE_RUNNING) {
       th->th_cpu_usage++;
       if (th->th_sched_priority > th->th_base_priority / 2) {
         th->th_sched_priority--;

@@ -35,6 +35,7 @@ typedef struct chimera_thread {
   u32 th_sched_priority;
   u32 th_cpu_usage;
   u32 th_running_cpu;
+  u32 th_assigned_cpu;
 
   u32 th_is_fork_child;
   u64 th_fork_return_value;
@@ -181,6 +182,7 @@ typedef struct cpu_local {
   void *cpu_gdt_ptr;                // offset 0x30
   void *cpu_tss_ptr;                // offset 0x38
   _Atomic(u32) cpu_need_resched;    // offset 0x40
+  _Atomic(u64) cpu_active_cr3;      // offset 0x48
 } cpu_local_t;
 
 #define CPU_LOCAL_CURRENT_THREAD 0x0

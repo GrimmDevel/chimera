@@ -12,6 +12,7 @@
 #include <kernel/proc.h>
 #include <kernel/syscall.h>
 #include <kernel/uio.h>
+#include <kernel/smp.h>
 
 #include <kernel/chimera_types.h>
 #include <kernel/fb.h>
@@ -156,6 +157,14 @@ CHIMERA_NORETURN void sys_exit_direct(u64 code) {
   extern u64 pmap_kernel_pml4(void);
   u64 kpml4 = pmap_kernel_pml4();
   __asm__ volatile("mov %0, %%cr3" ::"r"(kpml4) : "memory");
+  extern u32 smp_current_cpu_id(void);
+  extern cpu_local_t g_cpu_data[];
+  u32 my_cpu = smp_current_cpu_id();
+  if (my_cpu < CHIMERA_MAX_CPUS) {
+    atomic_store_explicit(&g_cpu_data[my_cpu].cpu_active_cr3,
+                          kpml4 & 0x000FFFFFFFFFF000ULL,
+                          memory_order_release);
+  }
 
   if (task && task->ta_proc)
     proc_mark_exited(task->ta_proc, (u32)code);
@@ -1181,13 +1190,11 @@ static i64 sys_execve(u64 path_ptr, u64 argv_ptr, u64 envp_ptr, u64 a4, u64 a5,
 
   // clean old user address space and allocate fresh PML4 for the new binary
   extern void pmap_destroy_user_space(u64 pml4_phys);
-  extern chimera_paddr_t pmm_alloc_page(void);
-#define get_table_ptr_exec(p) ((u64 *)((p) + g_hhdm_base))
+  extern u64 pmap_create(void);
 
   u64 old_pml4 = (u64)task->ta_vm_map;
-  u64 new_pml4 = pmm_alloc_page();
-  // OOM must fail the exec, not zero physical page 0 and load cr3=0
-  if (new_pml4 == 0 || new_pml4 == (chimera_paddr_t)-1) {
+  u64 new_pml4 = pmap_create();
+  if (new_pml4 == 0) {
     if (temp_pages > 0) {
       extern void pmm_free_contiguous(chimera_paddr_t base, usize count);
       pmm_free_contiguous(temp_phys, temp_pages);
@@ -1195,20 +1202,22 @@ static i64 sys_execve(u64 path_ptr, u64 argv_ptr, u64 envp_ptr, u64 a4, u64 a5,
     kprintf("[sys_execve] ERROR: out of memory for new PML4\n");
     return -12; // -ENOMEM
   }
-  __builtin_memset(get_table_ptr_exec(new_pml4), 0, 4096);
-
-  // copy kernel mappings
-  u64 *new_pml4_v = get_table_ptr_exec(new_pml4);
-  u64 *old_pml4_v = get_table_ptr_exec(old_pml4);
-  for (int i = 256; i < 512; i++) {
-    new_pml4_v[i] = old_pml4_v[i];
-  }
 
   pmap_destroy_user_space(old_pml4);
 
   // assign fresh PML4 to task and flush TLB
   task->ta_vm_map = (void *)new_pml4;
   __asm__ volatile("mov %0, %%cr3" ::"r"(new_pml4) : "memory");
+  {
+    extern u32 smp_current_cpu_id(void);
+    extern cpu_local_t g_cpu_data[];
+    u32 cur_cpu = smp_current_cpu_id();
+    if (cur_cpu < CHIMERA_MAX_CPUS) {
+      atomic_store_explicit(&g_cpu_data[cur_cpu].cpu_active_cr3,
+                            new_pml4 & 0x000FFFFFFFFFF000ULL,
+                            memory_order_release);
+    }
+  }
 
   // reset mmap base for the new process
   task->ta_mmap_next = 0;

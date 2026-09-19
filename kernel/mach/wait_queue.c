@@ -128,7 +128,6 @@ void wait_queue_wakeup_one(wait_queue_t *wq) {
     wq->tail = nullptr;
   }
   th->th_wait_next = nullptr;
-  th->th_state = THREAD_STATE_READY;
   th->th_wait_result = CHIMERA_SUCCESS;
 
   spinlock_unlock_irqrestore(&wq->wq_lock, wq_flags);
@@ -149,7 +148,6 @@ void wait_queue_wakeup_all(wait_queue_t *wq) {
   while (list) {
     chimera_thread_t *next = list->th_wait_next;
     list->th_wait_next = nullptr;
-    list->th_state = THREAD_STATE_READY;
     list->th_wait_result = CHIMERA_SUCCESS;
     thread_wake(list);
     list = next;

@@ -51,6 +51,9 @@ void smp_send_reschedule(u32 cpu_id);
 void smp_tlb_shootdown(void);
 void smp_tlb_flush_range(u64 start_va, usize size);
 void smp_tlb_flush_page(u64 va);
+void smp_tlb_shootdown_pml4(u64 pml4_phys);
+void smp_tlb_flush_range_pml4(u64 pml4_phys, u64 start_va, usize size);
+void smp_tlb_flush_page_pml4(u64 pml4_phys, u64 va);
 
 #ifdef __cplusplus
 }

@@ -54,12 +54,13 @@ else
     QEMU_BIOS="-drive if=pflash,format=raw,readonly=on,file=$OVMF_PATH"
 fi
 
-# The SMP scheduler is still under bring-up; one vCPU avoids concurrent
-# context switches while preserving deterministic interactive boot.
+ACCEL_OPTS=("-accel" "tcg,tb-size=512,thread=multi")
+
 qemu-system-x86_64 \
     -no-reboot \
     -m 2G -smp "$CHIMERA_VCPUS" \
-    -M q35 -cpu max \
+    -M q35,vmport=off -cpu max \
+    "${ACCEL_OPTS[@]}" \
     $QEMU_BIOS \
     -drive format=raw,file=build/disk.img \
     -serial stdio \
@@ -68,3 +69,4 @@ qemu-system-x86_64 \
     -device qemu-xhci,id=xhci \
     -device usb-kbd,bus=xhci.0 \
     -device usb-mouse,bus=xhci.0
+

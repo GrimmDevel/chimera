@@ -69,11 +69,6 @@ smp_cpu_state_t smp_get_cpu_state(u32 cpu_id) {
                                                   memory_order_acquire);
 }
 
-static CHIMERA_NORETURN void smp_ap_idle_loop(void) {
-    for (;;) {
-        __asm__ volatile("sti; hlt" ::: "memory");
-    }
-}
 
 static inline u64 smp_read_msr(u32 msr) {
     u32 lo, hi;
@@ -99,9 +94,29 @@ static void smp_capture_boot_diag(u32 cpu_id) {
 
 // 64-bit AP entry — called from the trampoline with RDI = cpu_local_t*
 void smp_ap_entry_64(cpu_local_t *cpu) {
-    // 0. Restore the BSP's full CR4 (the trampoline only set PAE; the AP
-    //    needs OSXSAVE for xsave, OSFXSR for SSE, SMEP, SMAP — all missing)
-    { u64 cr4v = s_bsp_cr4; __asm__ volatile("mov %0, %%cr4" :: "r"(cr4v) : "memory"); }
+    // 0. Restore the BSP's full CR0, CR4, and XCR0 (the trampoline only set
+    //    minimal state; the AP needs OSXSAVE + XCR0 programmed for xsave/xrstor,
+    //    OSFXSR for SSE, SMEP, SMAP)
+    {
+        u64 cr0;
+        __asm__ volatile("mov %%cr0, %0" : "=r"(cr0));
+        cr0 &= ~(1ULL << 2); // clear EM
+        cr0 |= (1ULL << 1);  // set MP
+        __asm__ volatile("mov %0, %%cr0" :: "r"(cr0) : "memory");
+
+        u64 cr4v = s_bsp_cr4;
+        __asm__ volatile("mov %0, %%cr4" :: "r"(cr4v) : "memory");
+
+        __asm__ volatile("fninit");
+
+        if (cr4v & (1ULL << 18)) {
+            extern u32 g_fpu_mask_lo;
+            extern u32 g_fpu_mask_hi;
+            u32 lo = g_fpu_mask_lo;
+            u32 hi = g_fpu_mask_hi;
+            __asm__ volatile("xsetbv" :: "c"(0), "a"(lo), "d"(hi) : "memory");
+        }
+    }
 
     // 1. Per-CPU GDT/TSS (already allocated by the BSP)
     gdt_init_ap(cpu->cpu_gdt_ptr, (struct tss_entry *)cpu->cpu_tss_ptr, cpu->cpu_id);
@@ -119,23 +134,35 @@ void smp_ap_entry_64(cpu_local_t *cpu) {
     // 3. Per-CPU LAPIC
     lapic_init_ap();
 
-    // Stage 1 deliberately leaves APs out of scheduling and timer delivery.
-    // There is no per-CPU run queue or acknowledged TLB shootdown yet.
-    cpu->cpu_is_active = 0;
     smp_capture_boot_diag(cpu->cpu_id);
     smp_set_cpu_state(cpu->cpu_id, SMP_CPU_ONLINE_IDLE);
 
-    kprintf("  [  OK  ]  SMP: Core %u online-idle (LAPIC ID=%u, "
-            "scheduler disabled)\n",
+    kprintf("  [  OK  ]  SMP: Core %u online (LAPIC ID=%u, awaiting scheduler)\n",
             cpu->cpu_id, cpu->cpu_lapic_id);
     kprintf("        ap%u: GS=0x%016llx CR3=0x%016llx RSP=0x%016llx\n",
             cpu->cpu_id, (unsigned long long)s_boot_diag[cpu->cpu_id].gs_base,
             (unsigned long long)s_boot_diag[cpu->cpu_id].cr3,
             (unsigned long long)s_boot_diag[cpu->cpu_id].rsp);
 
-    // ponytail: in Stage 1 APs do not participate in scheduling; halt immediately
-    // so they do not spin-burn host CPU cycles during bring-up.
-    smp_ap_idle_loop();
+    u64 cr3_ap;
+    __asm__ volatile("mov %%cr3, %0" : "=r"(cr3_ap));
+    atomic_store_explicit(&cpu->cpu_active_cr3, cr3_ap & 0x000FFFFFFFFFF000ULL, memory_order_release);
+
+    // Spin-wait until BSP completes kernel initialization and sets g_smp_ready
+    while (!__atomic_load_n(&g_smp_ready, __ATOMIC_ACQUIRE)) {
+        __asm__ volatile("pause");
+    }
+
+    cpu->cpu_is_active = 1;
+    smp_set_cpu_state(cpu->cpu_id, SMP_CPU_SCHEDULABLE);
+    __atomic_fetch_add(&g_active_cpus, 1, __ATOMIC_RELEASE);
+
+    // Start local LAPIC periodic timer for timeslices (10ms)
+    extern u32 lapic_timer_get_ticks_per_10ms(void);
+    lapic_timer_start_periodic(lapic_timer_get_ticks_per_10ms());
+
+    // Enter per-CPU scheduler
+    scheduler_ap_run();
 }
 
 // write a qword to a physical address via HHDM
@@ -249,6 +276,11 @@ void smp_init(void) {
     g_cpu_data[0].cpu_is_bsp = 1;
     g_cpu_data[0].cpu_is_active = 1;
     smp_set_cpu_state(0, SMP_CPU_SCHEDULABLE);
+    {
+        u64 bsp_cr3;
+        __asm__ volatile("mov %%cr3, %0" : "=r"(bsp_cr3));
+        atomic_store_explicit(&g_cpu_data[0].cpu_active_cr3, bsp_cr3 & 0x000FFFFFFFFFF000ULL, memory_order_release);
+    }
 
     // BSP kernel stack
     chimera_paddr_t bsp_stack_phys = pmm_alloc_pages(4);
@@ -382,33 +414,114 @@ void smp_send_reschedule(u32 cpu_id) {
     }
 }
 
-void smp_tlb_flush_page(u64 va) {
-    __asm__ volatile("invlpg (%0)" :: "r"(va) : "memory");
-    if (g_active_cpus > 1) {
-        lapic_send_ipi_all_excluding_self(VECTOR_IPI_TLB);
+
+static spinlock_t s_tlb_lock = SPINLOCK_INIT;
+static volatile u64 s_tlb_req_cr3 = 0;
+static volatile u64 s_tlb_req_va = 0;
+static volatile usize s_tlb_req_size = 0;
+static _Atomic(u32) s_tlb_ack_mask = 0;
+
+void smp_tlb_ipi_handler(void) {
+    u32 my_cpu = smp_current_cpu_id();
+    u64 req_cr3 = s_tlb_req_cr3;
+    u64 req_va = s_tlb_req_va;
+    usize req_size = s_tlb_req_size;
+
+    u64 my_cr3;
+    __asm__ volatile("mov %%cr3, %0" : "=r"(my_cr3));
+
+    if (req_cr3 == 0 || (my_cr3 & 0x000FFFFFFFFFF000ULL) == (req_cr3 & 0x000FFFFFFFFFF000ULL)) {
+        if (req_va == 0 || req_size == 0 || req_size >= (2 * 1024 * 1024)) {
+            __asm__ volatile("mov %0, %%cr3" :: "r"(my_cr3) : "memory");
+        } else {
+            u64 end_va = req_va + req_size;
+            for (u64 va = (req_va & ~0xFFFULL); va < end_va; va += 4096) {
+                __asm__ volatile("invlpg (%0)" :: "r"(va) : "memory");
+            }
+        }
     }
+
+    if (my_cpu < CHIMERA_MAX_CPUS) {
+        atomic_fetch_and_explicit(&s_tlb_ack_mask, ~(1u << my_cpu), memory_order_release);
+    }
+}
+
+void smp_tlb_flush_range_pml4(u64 pml4_phys, u64 start_va, usize size) {
+    u64 my_cr3;
+    __asm__ volatile("mov %%cr3, %0" : "=r"(my_cr3));
+    bool is_my_cr3 = (pml4_phys == 0 || (my_cr3 & 0x000FFFFFFFFFF000ULL) == (pml4_phys & 0x000FFFFFFFFFF000ULL));
+    if (is_my_cr3) {
+        if (start_va == 0 || size == 0 || size >= (2 * 1024 * 1024)) {
+            __asm__ volatile("mov %0, %%cr3" :: "r"(my_cr3) : "memory");
+        } else {
+            u64 end_va = start_va + size;
+            for (u64 va = (start_va & ~0xFFFULL); va < end_va; va += 4096) {
+                __asm__ volatile("invlpg (%0)" :: "r"(va) : "memory");
+            }
+        }
+    }
+
+    u32 my_cpu = smp_current_cpu_id();
+    u32 total = smp_get_cpu_count();
+    if (total <= 1 || g_active_cpus <= 1) return;
+
+    u32 target_mask = 0;
+    for (u32 i = 0; i < total && i < CHIMERA_MAX_CPUS; i++) {
+        if (i == my_cpu || !g_cpu_data[i].cpu_is_active) continue;
+        if (pml4_phys == 0) {
+            target_mask |= (1u << i);
+        } else {
+            u64 c_cr3 = atomic_load_explicit(&g_cpu_data[i].cpu_active_cr3, memory_order_acquire);
+            if ((c_cr3 & 0x000FFFFFFFFFF000ULL) == (pml4_phys & 0x000FFFFFFFFFF000ULL)) {
+                target_mask |= (1u << i);
+            }
+        }
+    }
+
+    if (target_mask == 0) {
+        return;
+    }
+
+    irq_flags_t flags = spinlock_lock_irqsave(&s_tlb_lock);
+
+    s_tlb_req_cr3 = pml4_phys;
+    s_tlb_req_va = start_va;
+    s_tlb_req_size = size;
+    atomic_store_explicit(&s_tlb_ack_mask, target_mask, memory_order_release);
+
+    for (u32 i = 0; i < total && i < CHIMERA_MAX_CPUS; i++) {
+        if (target_mask & (1u << i)) {
+            lapic_send_ipi(g_cpu_data[i].cpu_lapic_id, VECTOR_IPI_TLB);
+        }
+    }
+
+    u32 timeout = 2000000;
+    while (atomic_load_explicit(&s_tlb_ack_mask, memory_order_acquire) != 0) {
+        __asm__ volatile("pause");
+        if (--timeout == 0) {
+            break;
+        }
+    }
+
+    spinlock_unlock_irqrestore(&s_tlb_lock, flags);
+}
+
+void smp_tlb_flush_page_pml4(u64 pml4_phys, u64 va) {
+    smp_tlb_flush_range_pml4(pml4_phys, va, 4096);
+}
+
+void smp_tlb_shootdown_pml4(u64 pml4_phys) {
+    smp_tlb_flush_range_pml4(pml4_phys, 0, 0);
+}
+
+void smp_tlb_flush_page(u64 va) {
+    smp_tlb_flush_page_pml4(0, va);
 }
 
 void smp_tlb_flush_range(u64 start_va, usize size) {
-    if (size == 0) return;
-    if (start_va == 0 || size >= (2 * 1024 * 1024)) {
-        u64 cr3;
-        __asm__ volatile("mov %%cr3, %0; mov %0, %%cr3" : "=r"(cr3) :: "memory");
-    } else {
-        u64 end_va = start_va + size;
-        for (u64 va = (start_va & ~0xFFFULL); va < end_va; va += 4096) {
-            __asm__ volatile("invlpg (%0)" :: "r"(va) : "memory");
-        }
-    }
-    if (g_active_cpus > 1) {
-        lapic_send_ipi_all_excluding_self(VECTOR_IPI_TLB);
-    }
+    smp_tlb_flush_range_pml4(0, start_va, size);
 }
 
 void smp_tlb_shootdown(void) {
-    u64 cr3;
-    __asm__ volatile("mov %%cr3, %0; mov %0, %%cr3" : "=r"(cr3) :: "memory");
-    if (g_active_cpus > 1) {
-        lapic_send_ipi_all_excluding_self(VECTOR_IPI_TLB);
-    }
+    smp_tlb_shootdown_pml4(0);
 }
